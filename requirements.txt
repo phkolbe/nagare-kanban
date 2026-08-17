@@ -1,0 +1,11 @@
+# Nagare Kanban — runtime + dev dependencies.
+# Deliberately minimal: the database (sqlite3), the auth crypto (hmac/hashlib),
+# and the whole frontend are stdlib / hand-written. No ORM, no bundler, no CDN.
+fastapi>=0.111
+uvicorn>=0.30
+pydantic>=2.7
+
+# Dev / QA only
+pytest>=8.0
+httpx>=0.27
+playwright>=1.44

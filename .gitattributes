@@ -1,0 +1,10 @@
+# Normalise line endings in the repository to LF, regardless of the OS a contributor
+# works on. Without this, committing from Windows stores CRLF and every file shows up as
+# fully rewritten the first time someone edits it on Linux or macOS.
+* text=auto eol=lf
+
+# Binary assets: never touch these.
+*.png binary
+*.jpg binary
+*.ico binary
+*.db  binary

@@ -1,0 +1,1518 @@
+/* ============================================================================
+   Nagare — VIEWS
+   ----------------------------------------------------------------------------
+   Projects & the sealed envelope (SPEC 9.4), the simulator laboratory
+   (SPEC 9.5) and the admin surfaces: users, role matrix, feature-flag
+   switchboard, plans (SPEC 9.6).
+
+   Depends on tokens.css / base.css / components.css and adds nothing that
+   those own. Local tokens are declared three times — bare :root, the
+   prefers-color-scheme fallback, and the explicit [data-theme="dark"] — so no
+   colour is ever defined only inside a media query.
+   ========================================================================== */
+
+:root {
+  /* -- envelope (Req. 8) ---------------------------------------------------
+     A sealed demand must read as *paper*, not as a card: warmer, flatter,
+     deliberately withholding. The wax hue is its own thing — it is not
+     `danger`, and must never be mistaken for one. */
+  --envelope-paper: #F5F1E9;
+  --envelope-line: #D8CFBE;
+  --envelope-ink: #6B6154;
+  --envelope-flap: #EDE6D8;
+  --wax: #8C3B2E;
+  --wax-rim: #6E2C22;
+  --wax-fg: #FFF6F2;
+
+  /* -- simulator laboratory ------------------------------------------------
+     A second, cooler accent used ONLY inside the sandbox, so a simulated
+     number can never be mistaken for an operational one. */
+  --lab: #5B4BB8;
+  --lab-soft: #EAE6FA;
+  --lab-strong: #47399A;
+  --lab-fg: #FFFFFF;
+  --lab-grid: rgba(91, 75, 184, 0.16);
+
+  /* -- forecast confidence ramp (50 / 70 / 85 / 95) ------------------------
+     Monotonic in luminance so the markers order themselves. */
+  --p50: #96C7C4;
+  --p70: #61ABAD;
+  --p85: #0B6B78;
+  --p95: #08323A;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --envelope-paper: #211E1A;
+    --envelope-line: #3A342C;
+    --envelope-ink: #B4AB9C;
+    --envelope-flap: #2A251F;
+    --wax: #C86A59;
+    --wax-rim: #E08D7C;
+    --wax-fg: #23100C;
+
+    --lab: #A99BF5;
+    --lab-soft: #221D3D;
+    --lab-strong: #C3B8FF;
+    --lab-fg: #16112E;
+    --lab-grid: rgba(169, 155, 245, 0.2);
+
+    --p50: #1D8090;
+    --p70: #2FA3B0;
+    --p85: #5BC2CB;
+    --p95: #C4EDEF;
+  }
+}
+
+:root[data-theme="dark"] {
+  --envelope-paper: #211E1A;
+  --envelope-line: #3A342C;
+  --envelope-ink: #B4AB9C;
+  --envelope-flap: #2A251F;
+  --wax: #C86A59;
+  --wax-rim: #E08D7C;
+  --wax-fg: #23100C;
+
+  --lab: #A99BF5;
+  --lab-soft: #221D3D;
+  --lab-strong: #C3B8FF;
+  --lab-fg: #16112E;
+  --lab-grid: rgba(169, 155, 245, 0.2);
+
+  --p50: #1D8090;
+  --p70: #2FA3B0;
+  --p85: #5BC2CB;
+  --p95: #C4EDEF;
+}
+
+/* ============================================================================
+   SHARED VIEW SCAFFOLDING
+   ========================================================================== */
+
+.view-title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.view-title-row h1 {
+  font-size: var(--text-2xl);
+  line-height: var(--leading-2xl);
+}
+
+.view-lede {
+  max-width: 68ch;
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-base);
+}
+
+.view-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-5);
+}
+
+.view-toolbar .input-group { width: min(260px, 100%); }
+
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-3);
+}
+
+/* Key/value list used by project detail and run parameters. */
+.deflist {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+  gap: var(--space-2) var(--space-4);
+  font-size: var(--text-sm);
+  align-items: baseline;
+}
+.deflist dt { color: var(--fg-subtle); white-space: nowrap; }
+.deflist dd { color: var(--fg); margin: 0; min-width: 0; overflow-wrap: anywhere; }
+
+/* A one-line explanation directly under a control it belongs to. */
+.control-note {
+  font-size: var(--text-xs);
+  line-height: var(--leading-xs);
+  color: var(--fg-subtle);
+  max-width: 62ch;
+}
+
+/* A soft callout that is not an error. */
+.note-strip {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  font-size: var(--text-xs);
+  line-height: var(--leading-base);
+  color: var(--fg-muted);
+}
+.note-strip > svg { width: 15px; height: 15px; color: var(--fg-subtle); margin-top: 1px; }
+
+/* ============================================================================
+   PROJECTS INDEX (SPEC 9.4, Req. 8)
+   ========================================================================== */
+
+.projects-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--space-4);
+}
+
+.project-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  padding-left: calc(var(--space-4) + 3px);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  text-align: left;
+  color: inherit;
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+/* The project's own colour as a spine, not a wash — one hue per card, and it
+   never touches text, so it cannot affect contrast. */
+.project-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--project-color, var(--accent));
+}
+
+a.project-card:hover,
+.project-card.is-interactive:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-md);
+  text-decoration: none;
+  transform: translateY(-1px);
+}
+
+a.project-card:focus-visible { outline-offset: 2px; }
+
+.project-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.project-key {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--project-color, var(--accent));
+  color: #FFFFFF;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: var(--tracking-wide);
+}
+
+.project-name {
+  font-size: var(--text-lg);
+  line-height: var(--leading-lg);
+  font-weight: 600;
+  letter-spacing: var(--tracking-tight);
+  color: var(--fg);
+}
+
+.project-desc {
+  font-size: var(--text-sm);
+  line-height: var(--leading-base);
+  color: var(--fg-muted);
+}
+
+.project-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+}
+.project-meta .row { gap: var(--space-1); }
+.project-meta svg { width: 13px; height: 13px; }
+
+/* Demand counts: sealed / upstream / downstream / delivered. */
+.project-counts {
+  display: grid;
+  /* Not an even split: "Downstream" is the longest of the four labels at this
+     type scale and was losing a fight an equal-fr grid can't win — it needs
+     roughly a quarter more room than "Sealed" gets, which has slack to spare. */
+  grid-template-columns: 0.8fr 1fr 1.25fr 0.95fr;
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.count-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-2) var(--space-1);
+  background: var(--bg-raised);
+  min-width: 0;
+}
+
+.count-value {
+  font-size: var(--text-lg);
+  line-height: var(--leading-lg);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+}
+
+.count-label {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  font-size: 10px;
+  line-height: 14px;
+  /* Tighter than --tracking-caps: at 10px, caps tracking (0.06em) is what was
+     pushing "DOWNSTREAM" past the column width in the first place. */
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--fg-subtle);
+  white-space: nowrap;
+}
+.count-label::before {
+  content: "";
+  flex: none;
+  width: 6px; height: 6px;
+  border-radius: 2px;
+  background: var(--dot, var(--fg-subtle));
+}
+/* The truncation lives on this inline child, not on `.count-label` itself —
+   text-overflow has no effect on a flex container, which is why "Downstream"
+   was hard-clipping to "DOWNSTRE" with no ellipsis. */
+.count-label-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.count-cell[data-kind="sealed"]     { --dot: var(--wax); }
+.count-cell[data-kind="upstream"]   { --dot: var(--sc-intangible); }
+.count-cell[data-kind="downstream"] { --dot: var(--accent); }
+.count-cell[data-kind="delivered"]  { --dot: var(--success); }
+
+.count-cell[data-zero="true"] .count-value { color: var(--fg-subtle); font-weight: 500; }
+
+/* Mini throughput sparkline slot. */
+.project-spark {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-top: var(--space-1);
+  border-top: 1px solid var(--border);
+}
+.project-spark-chart { flex: 1 1 auto; min-width: 0; height: 30px; overflow: hidden; }
+.project-spark-chart svg { width: 100%; height: 100%; }
+.project-spark-label {
+  flex: none;
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+  text-align: right;
+  white-space: nowrap;
+}
+.project-spark-label b { color: var(--fg); font-weight: 600; }
+
+/* Status pill — its own scale, distinct from the WIP badge palette. */
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 18px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--bg-sunken);
+  color: var(--fg-muted);
+  border: 1px solid var(--border);
+}
+.status-pill::before {
+  content: "";
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.status-pill[data-status="discovery"] { background: var(--sc-intangible-soft); color: var(--sc-intangible); border-color: transparent; }
+.status-pill[data-status="active"]    { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+.status-pill[data-status="on_hold"]   { background: var(--warning-soft); color: var(--warning); border-color: transparent; }
+.status-pill[data-status="done"]      { background: var(--success-soft); color: var(--success); border-color: transparent; }
+.status-pill[data-status="cancelled"] { background: var(--bg-sunken); color: var(--fg-subtle); }
+
+/* Target date turns amber when it is close and red once it has passed. */
+.target-date[data-due="soon"] { color: var(--warning); font-weight: 600; }
+.target-date[data-due="late"] { color: var(--danger); font-weight: 600; }
+
+/* ============================================================================
+   PROJECT DETAIL
+   ========================================================================== */
+
+.project-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-5);
+  flex-wrap: wrap;
+  padding: var(--space-5);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--project-color, var(--accent));
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+  margin-bottom: var(--space-5);
+}
+
+.project-hero-main { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; flex: 1 1 380px; }
+.project-hero h1 { font-size: var(--text-2xl); line-height: var(--leading-2xl); }
+.project-hero-side { display: flex; flex-direction: column; gap: var(--space-3); align-items: flex-end; }
+
+.demand-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-3);
+}
+
+.demand-list { display: flex; flex-direction: column; gap: var(--space-2); }
+
+.demand-row {
+  display: grid;
+  grid-template-columns: 3px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  padding-left: 0;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  transition: border-color var(--dur-fast) var(--ease-out), background-color var(--dur-base) var(--ease-out);
+}
+.demand-row:hover { border-color: var(--border-strong); }
+
+.demand-stripe { align-self: stretch; background: var(--sc, var(--sc-standard)); }
+.demand-row[data-sc="expedite"]   { --sc: var(--sc-expedite); }
+.demand-row[data-sc="standard"]   { --sc: var(--sc-standard); }
+.demand-row[data-sc="fixed_date"] { --sc: var(--sc-fixed-date); }
+.demand-row[data-sc="intangible"] { --sc: var(--sc-intangible); }
+
+.demand-main { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
+.demand-title { font-size: var(--text-sm); font-weight: 500; color: var(--fg); }
+.demand-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+}
+.demand-key { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--fg-subtle); }
+.demand-side { display: flex; align-items: center; gap: var(--space-2); padding-right: var(--space-1); }
+
+/* A demand that has just left the envelope — a single, calm confirmation. */
+.demand-row.is-arriving {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .demand-row.is-arriving { animation: nagare-arrive 1400ms var(--ease-out) 1; }
+}
+@keyframes nagare-arrive {
+  0%   { transform: translateX(-10px); opacity: 0.4; }
+  22%  { transform: translateX(0); opacity: 1; }
+  100% { background: var(--bg-raised); border-color: var(--border); }
+}
+
+/* ============================================================================
+   THE SEALED ENVELOPE (Req. 8)
+   ----------------------------------------------------------------------------
+   Deliberately not a card. Paper stock, a folded flap, a wax seal, and
+   content that is *withheld*: the title is legible, everything else is
+   replaced by a "sealed" strip. No assignee is ever shown on a sealed demand,
+   because nothing has been committed to anyone yet.
+   ========================================================================== */
+
+.envelope-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: var(--space-3);
+}
+
+.envelope {
+  --flap-h: 34px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: calc(var(--flap-h) + var(--space-3)) var(--space-4) var(--space-4);
+  background: var(--envelope-paper);
+  border: 1px solid var(--envelope-line);
+  border-radius: var(--radius-md);
+  color: var(--envelope-ink);
+  overflow: hidden;
+  isolation: isolate;
+}
+
+/* The flap: a folded triangle across the top, drawn with a clip-path so it
+   stays crisp at any width and costs no extra element. */
+.envelope-flap {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: var(--flap-h);
+  background: var(--envelope-flap);
+  border-bottom: 1px solid var(--envelope-line);
+  clip-path: polygon(0 0, 100% 0, 100% 30%, 50% 100%, 0 30%);
+  transform-origin: top center;
+  transition: transform var(--dur-slow) var(--ease-out), opacity var(--dur-slow) var(--ease-out);
+  z-index: 1;
+}
+
+/* Hairline fold guides — the diagonals of the flap, continued. */
+.envelope-flap::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(to bottom right, transparent calc(50% - 0.5px), var(--envelope-line) 50%, transparent calc(50% + 0.5px)),
+    linear-gradient(to bottom left,  transparent calc(50% - 0.5px), var(--envelope-line) 50%, transparent calc(50% + 0.5px));
+  opacity: 0.55;
+}
+
+/* The wax seal sits on the fold, half on the flap and half on the body. */
+.envelope-seal {
+  position: absolute;
+  top: calc(var(--flap-h) - 13px);
+  left: 50%;
+  width: 26px; height: 26px;
+  margin-left: -13px;
+  border-radius: 50%;
+  background: var(--wax);
+  border: 1px solid var(--wax-rim);
+  box-shadow: inset 0 -2px 3px rgba(0, 0, 0, 0.22), var(--shadow-sm);
+  display: grid;
+  place-items: center;
+  color: var(--wax-fg);
+  font-family: var(--font-jp);
+  font-size: 13px;
+  line-height: 1;
+  font-weight: 700;
+  z-index: 2;
+  transition: transform var(--dur-slow) var(--ease-spring), opacity var(--dur-base) var(--ease-out);
+}
+
+.envelope-title {
+  font-size: var(--text-sm);
+  line-height: var(--leading-base);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.envelope-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--envelope-ink);
+}
+
+/* The withheld block. Ruled lines, no content — the point is that the detail
+   exists and has not been read yet. */
+.envelope-withheld {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px dashed var(--envelope-line);
+  border-radius: var(--radius-sm);
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      transparent 0,
+      transparent 9px,
+      var(--envelope-line) 9px,
+      var(--envelope-line) 10px
+    );
+  min-height: 46px;
+}
+
+.envelope-withheld-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  align-self: flex-start;
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--envelope-paper);
+  color: var(--envelope-ink);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+.envelope-withheld-label svg { width: 11px; height: 11px; }
+
+.envelope-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.envelope-age { font-size: var(--text-xs); color: var(--envelope-ink); }
+
+/* The open action gets the wax hue so it is unmistakably tied to the seal. */
+.btn-wax {
+  background: var(--wax);
+  color: var(--wax-fg);
+  border: 1px solid var(--wax-rim);
+}
+.btn-wax:hover { background: var(--wax-rim); }
+.btn-wax:focus-visible { outline-color: var(--wax); }
+
+/* ---- unsealing -------------------------------------------------------------
+   Three beats, ~900ms total: the seal cracks and falls, the flap lifts, the
+   contents lift out. Anyone who asked for reduced motion gets none of it —
+   the JS skips straight to the result, so the animation is never load-bearing.
+   ========================================================================== */
+
+.envelope.is-opening { pointer-events: none; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .envelope.is-opening .envelope-seal {
+    animation: nagare-seal-break 640ms var(--ease-out) forwards;
+  }
+  .envelope.is-opening .envelope-flap {
+    animation: nagare-flap-open 680ms var(--ease-out) 180ms forwards;
+  }
+  .envelope.is-opening .envelope-withheld {
+    animation: nagare-contents-out 620ms var(--ease-out) 300ms forwards;
+  }
+  .envelope.is-opening {
+    animation: nagare-envelope-settle 900ms var(--ease-out) forwards;
+  }
+}
+
+@keyframes nagare-seal-break {
+  0%   { transform: scale(1) rotate(0deg); opacity: 1; }
+  26%  { transform: scale(1.22) rotate(-7deg); opacity: 1; }
+  40%  { transform: scale(1.05) rotate(4deg); opacity: 1; }
+  100% { transform: translateY(26px) scale(0.7) rotate(24deg); opacity: 0; }
+}
+
+@keyframes nagare-flap-open {
+  0%   { transform: rotateX(0deg); }
+  100% { transform: rotateX(-168deg); opacity: 0.9; }
+}
+
+@keyframes nagare-contents-out {
+  0%   { transform: translateY(0); opacity: 1; }
+  55%  { transform: translateY(-10px); opacity: 1; }
+  100% { transform: translateY(-4px); opacity: 0; }
+}
+
+@keyframes nagare-envelope-settle {
+  0%   { background: var(--envelope-paper); border-color: var(--envelope-line); }
+  70%  { background: var(--envelope-paper); }
+  100% { background: var(--bg-raised); border-color: var(--accent); opacity: 0.35; }
+}
+
+/* The state the envelope holds while the API call is in flight. */
+.envelope.is-opening .envelope-foot { opacity: 0; transition: opacity var(--dur-fast) var(--ease-out); }
+
+/* ---- the envelope-metrics policy toggle ---------------------------------- */
+
+.envelope-policy {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--envelope-line);
+  border-radius: var(--radius-md);
+  background: var(--envelope-paper);
+}
+.envelope-policy .switch-row { flex: 1 1 auto; align-items: flex-start; }
+.envelope-policy-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px; height: 28px;
+  border-radius: var(--radius-md);
+  background: var(--wax);
+  color: var(--wax-fg);
+}
+.envelope-policy-icon svg { width: 15px; height: 15px; }
+.envelope-policy-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.envelope-policy-title { font-size: var(--text-sm); font-weight: 600; color: var(--fg); }
+.envelope-policy-note { font-size: var(--text-xs); line-height: var(--leading-base); color: var(--fg-muted); max-width: 74ch; }
+
+/* ============================================================================
+   SIMULATOR — the laboratory (SPEC 9.5, Req. 13)
+   ----------------------------------------------------------------------------
+   Everything inside `.lab` is sandboxed. It carries its own accent so a
+   simulated figure can never be read as an operational one.
+   ========================================================================== */
+
+.lab { --accent: var(--lab); --accent-soft: var(--lab-soft); --focus-ring: var(--lab); }
+
+.lab-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-lg);
+  background: var(--lab-soft);
+  border: 1px solid transparent;
+  color: var(--lab-strong);
+  margin-bottom: var(--space-5);
+  /* Graph paper: the sandbox literally reads as a lab bench. */
+  background-image:
+    linear-gradient(var(--lab-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--lab-grid) 1px, transparent 1px);
+  background-size: 22px 22px, 22px 22px;
+  background-position: -1px -1px, -1px -1px;
+}
+
+.lab-banner-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px; height: 32px;
+  border-radius: var(--radius-md);
+  background: var(--lab);
+  color: var(--lab-fg);
+}
+.lab-banner-icon svg { width: 18px; height: 18px; }
+.lab-banner-title { font-size: var(--text-sm); font-weight: 700; letter-spacing: var(--tracking-tight); }
+.lab-banner-note { font-size: var(--text-xs); line-height: var(--leading-base); color: var(--lab-strong); opacity: 0.88; }
+
+.lab-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 20px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--lab-soft);
+  color: var(--lab-strong);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.lab-chip svg { width: 12px; height: 12px; }
+
+/* Two columns: the bench on the left, the results on the right. */
+.lab-grid {
+  display: grid;
+  grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.lab-bench { position: sticky; top: var(--space-1); display: flex; flex-direction: column; gap: var(--space-4); }
+.lab-results { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
+
+@media (max-width: 1180px) {
+  .lab-grid { grid-template-columns: minmax(0, 1fr); }
+  .lab-bench { position: static; }
+}
+
+/* ---- simulator board index ---------------------------------------------- */
+
+.sim-board-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: var(--space-4);
+}
+
+.sim-board-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  border-top: 2px solid var(--lab);
+  color: inherit;
+  text-align: left;
+  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+a.sim-board-card:hover { box-shadow: var(--shadow-md); text-decoration: none; border-color: var(--border-strong); border-top-color: var(--lab); }
+
+/* ---- the bench: parameter controls --------------------------------------- */
+
+.lab-panel {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.lab-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-sunken);
+}
+.lab-panel-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.lab-panel-title svg { width: 14px; height: 14px; color: var(--lab); }
+.lab-panel-body { padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-4); }
+
+/* Slider + numeric readout on one row. */
+.slider-field { display: flex; flex-direction: column; gap: var(--space-2); }
+
+.slider-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.slider-label { font-size: var(--text-sm); font-weight: 500; color: var(--fg); }
+.slider-value {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--lab-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+/* One consistent range control across engines.
+   `--range-fill` is the thumb/progress colour (set per-control, e.g. by
+   class of service); `--range-pct` is the live value position (0%-100%),
+   kept in sync from JS on render and on `input` so the track visibly fills
+   instead of reading as a flat bar with no indication of its value. */
+.range {
+  --range-fill: var(--lab);
+  --range-pct: 0%;
+  width: 100%;
+  height: 18px;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+.range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: var(--radius-full);
+  /* WebKit has no native fill pseudo-element, so paint it as a two-stop
+     gradient split at the current value. */
+  background: linear-gradient(
+    to right,
+    var(--range-fill) var(--range-pct),
+    var(--bg-sunken) var(--range-pct)
+  );
+  border: 1px solid var(--border);
+}
+.range::-moz-range-track {
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+}
+/* Firefox does this natively: the portion of the track before the thumb. */
+.range::-moz-range-progress {
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: var(--range-fill);
+}
+.range::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px; height: 14px;
+  margin-top: -6px;
+  border-radius: 50%;
+  background: var(--range-fill);
+  border: 2px solid var(--bg-raised);
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.range::-moz-range-thumb {
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: var(--range-fill);
+  border: 2px solid var(--bg-raised);
+  box-shadow: var(--shadow-sm);
+}
+.range:hover::-webkit-slider-thumb { transform: scale(1.12); }
+.range:focus-visible { outline: none; }
+.range:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px var(--lab-soft); }
+.range:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 4px var(--lab-soft); }
+.range:disabled { cursor: not-allowed; opacity: 0.5; }
+
+.range-scale {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--fg-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- class-of-service mix ------------------------------------------------ */
+
+.mix-bar {
+  display: flex;
+  height: 10px;
+  border-radius: var(--radius-full);
+  overflow: hidden;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+}
+.mix-bar-seg { transition: flex-basis var(--dur-base) var(--ease-out); min-width: 0; }
+.mix-bar-seg[data-sc="expedite"]   { background: var(--sc-expedite); }
+.mix-bar-seg[data-sc="standard"]   { background: var(--sc-standard); }
+.mix-bar-seg[data-sc="fixed_date"] { background: var(--sc-fixed-date); }
+.mix-bar-seg[data-sc="intangible"] { background: var(--sc-intangible); }
+
+.mix-row { display: grid; grid-template-columns: 96px minmax(0, 1fr) 44px; align-items: center; gap: var(--space-2); }
+.mix-row .range[data-sc="expedite"]   { --range-fill: var(--sc-expedite); }
+.mix-row .range[data-sc="standard"]   { --range-fill: var(--sc-standard); }
+.mix-row .range[data-sc="fixed_date"] { --range-fill: var(--sc-fixed-date); }
+.mix-row .range[data-sc="intangible"] { --range-fill: var(--sc-intangible); }
+
+.mix-name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.mix-name::before {
+  content: "";
+  width: 8px; height: 8px;
+  border-radius: 2px;
+  background: var(--sc-dot, var(--fg-subtle));
+}
+.mix-row[data-sc="expedite"]   { --sc-dot: var(--sc-expedite); }
+.mix-row[data-sc="standard"]   { --sc-dot: var(--sc-standard); }
+.mix-row[data-sc="fixed_date"] { --sc-dot: var(--sc-fixed-date); }
+.mix-row[data-sc="intangible"] { --sc-dot: var(--sc-intangible); }
+
+.mix-pct {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--fg);
+}
+
+.mix-total {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+}
+.mix-total b { color: var(--success); font-variant-numeric: tabular-nums; }
+
+/* ---- per-column WIP limits ----------------------------------------------- */
+
+.wip-grid { display: flex; flex-direction: column; gap: var(--space-2); }
+
+.wip-limit-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 72px;
+  align-items: center;
+  gap: var(--space-2);
+}
+.wip-limit-name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  min-width: 0;
+}
+.wip-limit-name svg { width: 12px; height: 12px; color: var(--fg-subtle); }
+.wip-limit-row .input { height: 26px; font-size: var(--text-xs); text-align: center; }
+
+/* ---- run-kind picker ----------------------------------------------------- */
+
+.kind-picker { display: flex; flex-direction: column; gap: var(--space-2); }
+
+.kind-option {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: start;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out);
+}
+.kind-option:hover { border-color: var(--border-strong); background: var(--bg-hover); }
+.kind-option:has(.radio:checked) { border-color: var(--lab); background: var(--lab-soft); }
+.kind-option:has(.radio:focus-visible) { outline: 2px solid var(--lab); outline-offset: 2px; }
+.kind-option .radio { margin-top: 2px; accent-color: var(--lab); }
+.kind-option .radio:checked { background: var(--lab); border-color: var(--lab); }
+.kind-option-title { font-size: var(--text-sm); font-weight: 600; color: var(--fg); }
+.kind-option-note { font-size: var(--text-xs); line-height: var(--leading-base); color: var(--fg-muted); }
+
+/* ---- live parameter summary ---------------------------------------------- */
+
+.param-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--bg-sunken);
+  border: 1px dashed var(--border-strong);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 18px;
+  color: var(--fg-muted);
+}
+.param-summary b { color: var(--fg); font-weight: 600; }
+.param-summary .sep { color: var(--fg-subtle); }
+
+/* ---- results ------------------------------------------------------------- */
+
+.result-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.chart-frame {
+  width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+.chart-frame svg { max-width: 100%; height: auto; }
+
+/* Percentile legend under the forecast distribution. */
+.pct-legend {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.pct-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-3);
+  background: var(--bg-raised);
+  border-top: 3px solid var(--pct, var(--accent));
+}
+.pct-cell[data-p="50"] { --pct: var(--p50); }
+.pct-cell[data-p="70"] { --pct: var(--p70); }
+.pct-cell[data-p="85"] { --pct: var(--p85); }
+.pct-cell[data-p="95"] { --pct: var(--p95); }
+.pct-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--fg-subtle);
+}
+.pct-value {
+  font-size: var(--text-xl);
+  line-height: var(--leading-xl);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+}
+.pct-note { font-size: var(--text-xs); color: var(--fg-muted); }
+/* 85% is the planning number Kanban actually commits on — say so. */
+.pct-cell[data-recommended="true"] { background: var(--accent-soft); }
+
+/* The plain-language sentence. This is the deliverable, not the chart. */
+.confidence-sentence {
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--lab-soft);
+  border-left: 3px solid var(--lab);
+  font-size: var(--text-lg);
+  line-height: var(--leading-lg);
+  color: var(--fg);
+}
+.confidence-sentence b { color: var(--lab-strong); font-weight: 700; }
+
+.verdict {
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+}
+.verdict-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 26px; height: 26px;
+  border-radius: var(--radius-sm);
+  background: var(--success-soft);
+  color: var(--success);
+}
+.verdict-icon svg { width: 15px; height: 15px; }
+.verdict-body { font-size: var(--text-sm); line-height: var(--leading-base); color: var(--fg); }
+.verdict-body b { font-weight: 600; }
+
+/* Best/worst configuration emphasis in the experiment table. */
+.table tbody tr[data-best="true"] td { background: var(--success-soft); }
+.table tbody tr[data-best="true"] td:first-child { box-shadow: inset 2px 0 0 var(--success); }
+.delta { font-variant-numeric: tabular-nums; font-weight: 600; }
+.delta[data-dir="better"] { color: var(--success); }
+.delta[data-dir="worse"]  { color: var(--danger); }
+.delta[data-dir="flat"]   { color: var(--fg-subtle); font-weight: 500; }
+
+/* ---- run history & compare ----------------------------------------------- */
+
+.run-list { display: flex; flex-direction: column; }
+
+.run-item {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+.run-item:last-child { border-bottom: none; }
+.run-item:hover { background: var(--bg-hover); }
+.run-item[data-selected="true"] { background: var(--lab-soft); }
+.run-item[data-current="true"] { box-shadow: inset 3px 0 0 var(--lab); }
+
+.run-open {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  text-align: left;
+  color: inherit;
+}
+.run-open:hover { text-decoration: none; }
+.run-name { font-size: var(--text-sm); font-weight: 500; color: var(--fg); }
+.run-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+}
+.run-item .checkbox { accent-color: var(--lab); }
+.run-item .checkbox:checked { background: var(--lab); border-color: var(--lab); }
+
+.compare-bar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-raised);
+  border-top: 1px solid var(--border);
+}
+
+.compare-table th.metric-col { width: 190px; }
+.compare-table td { font-variant-numeric: tabular-nums; }
+
+/* ============================================================================
+   ADMIN (SPEC 9.6, Req. 10 & 11)
+   ========================================================================== */
+
+.admin-tabs { margin-bottom: var(--space-5); }
+
+/* The card drawer's tab strip sits on the drawer body, not the page — its
+   edge-fade (components.css `.tabs`) must dissolve into `--bg-raised`. */
+.cd-tabs { --tabs-fade-bg: var(--bg-raised); }
+
+.tab[aria-disabled="true"] {
+  color: var(--fg-subtle);
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+.tab[aria-disabled="true"]:hover { color: var(--fg-subtle); }
+.tab .tab-lock { width: 12px; height: 12px; }
+
+/* ---- users --------------------------------------------------------------- */
+
+.table-wrap {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: auto;
+  background: var(--bg-raised);
+  max-width: 100%;
+}
+
+.user-cell { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
+.user-cell-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.user-name { font-weight: 500; color: var(--fg); }
+.user-email { font-size: var(--text-xs); color: var(--fg-subtle); }
+
+.row-inactive td { opacity: 0.6; }
+.row-inactive .user-name { text-decoration: line-through; text-decoration-thickness: 1px; }
+
+.role-select { min-width: 140px; }
+
+.self-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+
+/* ---- role x capability matrix -------------------------------------------- */
+
+.role-matrix { width: 100%; font-size: var(--text-sm); }
+
+.role-matrix th, .role-matrix td { border-bottom: 1px solid var(--border); }
+
+.role-matrix thead th {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  background: var(--bg-raised);
+  padding: var(--space-3) var(--space-2);
+  text-align: center;
+  vertical-align: bottom;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--fg);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.role-matrix thead th:first-child {
+  text-align: left;
+  min-width: 200px;
+  color: var(--fg-subtle);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+}
+
+.role-matrix tbody th {
+  position: static;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  font-weight: 500;
+  font-size: var(--text-sm);
+  color: var(--fg);
+  text-transform: none;
+  letter-spacing: 0;
+  background: transparent;
+  white-space: normal;
+}
+
+.role-matrix td { text-align: center; padding: var(--space-2); }
+.role-matrix tbody tr:hover { background: var(--bg-hover); }
+.role-matrix tbody tr:last-child th, .role-matrix tbody tr:last-child td { border-bottom: none; }
+
+.matrix-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 22px; height: 22px;
+  border-radius: var(--radius-sm);
+}
+.matrix-mark svg { width: 14px; height: 14px; }
+.matrix-mark[data-on="true"]  { background: var(--success-soft); color: var(--success); }
+.matrix-mark[data-on="false"] { background: var(--bg-sunken); color: var(--fg-subtle); }
+
+/* The column belonging to the signed-in user's own role. */
+.role-matrix th[data-mine="true"], .role-matrix td[data-mine="true"] { background: var(--accent-soft); }
+.role-matrix thead th[data-mine="true"] { background: var(--accent-soft); }
+
+.role-legend {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: var(--space-3);
+}
+.role-legend-item { display: flex; flex-direction: column; gap: 2px; }
+.role-legend-name { font-size: var(--text-sm); font-weight: 600; color: var(--fg); }
+.role-legend-desc { font-size: var(--text-xs); line-height: var(--leading-base); color: var(--fg-muted); }
+
+/* ---- feature-flag switchboard -------------------------------------------- */
+
+.flag-groups { display: flex; flex-direction: column; gap: var(--space-5); }
+
+.flag-group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+.flag-group-name {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--fg-subtle);
+}
+.flag-group-rule { flex: 1 1 auto; height: 1px; background: var(--border); }
+
+.flag-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+.flag-row:last-child { border-bottom: none; }
+.flag-row:hover { background: var(--bg-hover); }
+
+.flag-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.flag-name { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); font-weight: 600; color: var(--fg); }
+.flag-key { font-family: var(--font-mono); font-size: 10px; color: var(--fg-subtle); }
+.flag-desc { font-size: var(--text-xs); line-height: var(--leading-base); color: var(--fg-muted); max-width: 72ch; }
+.flag-locked-note { font-size: var(--text-xs); color: var(--warning); display: flex; align-items: center; gap: var(--space-1); }
+.flag-locked-note svg { width: 12px; height: 12px; }
+
+.flag-controls { display: flex; align-items: center; gap: var(--space-3); flex: none; }
+
+/* Effective-state lamp: the single source of truth for "is it on right now". */
+.flag-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 20px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.flag-state::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.flag-state[data-state="on"]      { background: var(--success-soft); color: var(--success); }
+.flag-state[data-state="off"]     { background: var(--bg-sunken); color: var(--fg-subtle); }
+.flag-state[data-state="locked"]  { background: var(--warning-soft); color: var(--warning); }
+
+.plan-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  background: var(--bg-sunken);
+  color: var(--fg-muted);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+.plan-chip[data-plan="free"]       { background: var(--bg-sunken); color: var(--fg-muted); }
+.plan-chip[data-plan="team"]       { background: var(--info-soft); color: var(--info); border-color: transparent; }
+.plan-chip[data-plan="business"]   { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+.plan-chip[data-plan="enterprise"] { background: var(--lab-soft); color: var(--lab-strong); border-color: transparent; }
+
+@media (max-width: 860px) {
+  .flag-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .flag-row .flag-controls { grid-column: 1 / -1; justify-content: flex-start; }
+}
+
+/* ---- plans --------------------------------------------------------------- */
+
+.plan-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: var(--space-4);
+  align-items: stretch;
+}
+
+.plan-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  min-width: 0;
+}
+.plan-card[data-active="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.plan-active-flag {
+  position: absolute;
+  top: 0; right: var(--space-4);
+  transform: translateY(-50%);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+
+.plan-tier {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--fg-subtle);
+}
+.plan-name { font-size: var(--text-xl); line-height: var(--leading-xl); font-weight: 600; letter-spacing: var(--tracking-tight); }
+
+.plan-price { display: flex; align-items: baseline; gap: var(--space-1); }
+.plan-price-value {
+  font-size: var(--text-3xl);
+  line-height: var(--leading-3xl);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--tracking-tight);
+}
+.plan-price-unit { font-size: var(--text-sm); color: var(--fg-subtle); }
+.plan-price-year { font-size: var(--text-xs); color: var(--fg-subtle); }
+
+.plan-desc { font-size: var(--text-sm); line-height: var(--leading-base); color: var(--fg-muted); }
+
+.plan-flags { display: flex; flex-direction: column; gap: var(--space-2); }
+.plan-flag-count {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--fg-muted);
+}
+/* No cap, no internal scroll: these are pricing cards laid out in a grid
+   (`.plan-grid`, `align-items: stretch`), every card renders the identical
+   `allFlags` list in the identical order, and a 19-flag plan is exactly the
+   case where seeing the whole list *is* the comparison. Letting each card
+   size to its natural (equal) height makes the flag rows land on the same
+   row across all four cards for free — a real comparison grid, not a table. */
+.plan-flag-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.plan-flag-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+.plan-flag-item svg { width: 12px; height: 12px; flex: none; }
+.plan-flag-item[data-on="true"] svg { color: var(--success); }
+/* Dim the whole row, not just its 12px glyph, so included vs. not-included scans
+   instantly instead of requiring a close look at the icon.
+
+   The dimming is carried by the colour token ALONE. Stacking `opacity: 0.6` on top of
+   an already-quiet `--fg-subtle` blended these 11px labels down to ~2.3:1 against the
+   card — below AA, and below the 3:1 floor even for large text. Excluded still has to be
+   readable: it is half the information on a pricing card. The strikethrough adds a
+   colour-independent channel so the on/off split survives greyscale too. */
+.plan-flag-item[data-on="false"] { color: var(--fg-subtle); }
+.plan-flag-item[data-on="false"] .plan-flag-name {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+  text-decoration-color: var(--border-strong);
+}
+.plan-flag-item[data-on="false"] svg { color: var(--fg-subtle); }
+
+.plan-actions { margin-top: auto; display: flex; flex-direction: column; gap: var(--space-2); }
+
+/* Flag picker inside the plan editor. */
+.flag-picker { display: flex; flex-direction: column; gap: var(--space-4); max-height: 52vh; overflow-y: auto; }
+.flag-picker-group { display: flex; flex-direction: column; gap: var(--space-2); }
+.flag-picker-row {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.flag-picker-row .flag-desc { grid-column: 2 / -1; }
+
+/* ============================================================================
+   RESPONSIVE
+   ========================================================================== */
+
+@media (max-width: 900px) {
+  .projects-grid { grid-template-columns: minmax(0, 1fr); }
+  .project-hero { flex-direction: column; }
+  .project-hero-side { align-items: flex-start; }
+  .demand-row { grid-template-columns: 3px minmax(0, 1fr); }
+  .demand-side { grid-column: 2; padding-bottom: var(--space-1); }
+  .mix-row { grid-template-columns: 84px minmax(0, 1fr) 40px; }
+}
+
+@media (max-width: 768px) {
+  .project-counts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .envelope-grid { grid-template-columns: minmax(0, 1fr); }
+  .sim-board-grid { grid-template-columns: minmax(0, 1fr); }
+  .plan-grid { grid-template-columns: minmax(0, 1fr); }
+  .lab-banner { flex-wrap: wrap; }
+}
+
+/* ============================================================================
+   PRINT — a project or a forecast is something people paste into a review deck.
+   ========================================================================== */
+
+@media print {
+  .view-toolbar, .compare-bar, .lab-bench { display: none !important; }
+  .lab-grid { grid-template-columns: minmax(0, 1fr); }
+  .project-card, .lab-panel, .plan-card, .table-wrap { break-inside: avoid; }
+}
