@@ -57,6 +57,18 @@ python run.py --seed-only      # migrate + seed, print a summary, exit
 python run.py --reload         # uvicorn auto-reload for development
 ```
 
+> [!WARNING]
+> **This ships configured as a demo, not as a deployment.** Every seeded account shares
+> a published password, and `NAGARE_JWT_SECRET` falls back to a well-known development
+> value that anyone reading this repository can see — meaning anyone could mint a valid
+> token for any role. Before running this anywhere reachable by other people:
+>
+> ```bash
+> export NAGARE_JWT_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+> ```
+>
+> then change every seeded password (or seed your own users), and serve it behind TLS.
+
 ### Sign in
 
 All demo accounts share the password **`nagare123`**.
