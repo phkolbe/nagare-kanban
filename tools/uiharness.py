@@ -64,6 +64,11 @@ def routes_for(ids: dict[str, str]) -> list[dict]:
         {"slug": "board-downstream", "hash": f"#/board/{b}?segment=downstream", "settle": ".board-column"},
         {"slug": "card-drawer", "hash": f"#/board/{b}?segment=unified", "settle": ".board-column",
          "open_card": True},
+        # Increment 2 surfaces.
+        {"slug": "board-lanes", "hash": f"#/board/{b}?segment=unified&lanes=sc",
+         "settle": "[data-lane]"},
+        {"slug": "structure-editor", "hash": f"#/board/{b}?segment=unified",
+         "settle": ".board-column", "open_structure": True},
         {"slug": "projects", "hash": "#/projects", "settle": "main"},
         {"slug": "project-detail", "hash": f"#/projects/{p}", "settle": "main"},
         {"slug": "metrics", "hash": f"#/metrics/{b}", "settle": "main"},
@@ -99,8 +104,29 @@ def prime(ctx, token: str, theme: str) -> None:
     )
 
 
+def dismiss_overlays(page) -> None:
+    """Close any drawer/modal left open by a previous route.
+
+    Overlays live in a portal outside the routed view, so a hash change does not remove
+    them. One route that opens the structure drawer would otherwise leave it covering the
+    page and swallowing every later click as "element intercepts pointer events".
+    """
+    try:
+        for _ in range(3):
+            open_overlays = page.evaluate(
+                "() => document.querySelectorAll('.drawer, .modal, [role=\"dialog\"]').length"
+            )
+            if not open_overlays:
+                return
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(250)
+    except Exception:
+        pass
+
+
 def goto_route(page, route: dict, timeout: int = 25_000) -> None:
     """Navigate and wait until the view is genuinely painted."""
+    dismiss_overlays(page)
     page.goto(f"{BASE}/{route['hash']}", wait_until="domcontentloaded", timeout=timeout)
     page.wait_for_timeout(400)
     # A hash change on an already-loaded document does not re-fire load events, so
@@ -120,6 +146,11 @@ def goto_route(page, route: dict, timeout: int = 25_000) -> None:
         page.wait_for_timeout(250)
     page.wait_for_timeout(700)
 
+    if route.get("open_structure"):
+        trigger = page.locator(".board-toolbar button:has-text('Edit columns')").first
+        if trigger.count():
+            trigger.click(timeout=5000)
+            page.wait_for_timeout(1400)
     if route.get("open_card"):
         card = page.locator(".board-card, .card-tile, [data-card-id]").first
         if card.count():

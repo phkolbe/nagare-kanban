@@ -1,0 +1,677 @@
+/* ============================================================================
+   Nagare — board structure editor (SPEC-v2 §R2.1).
+
+   The drawer where a board's flow is designed: every column in unified order,
+   grouped under its column group, split by the commitment point, with a live
+   chip strip pinned to the top that redraws as edits are made.
+
+   Everything here is token-driven — no raw colour values, no new greys. Two
+   local custom properties carry data-driven colour:
+
+     --col-color    a column's own colour, set inline from the API row
+     --group-color  a column group's colour, likewise
+
+   ...and one attribute carries semantic colour:
+
+     data-col-kind="queue|activity|envelope|done"  ->  --kind-tone / --kind-soft
+
+   `data-col-kind` is deliberately narrower than board.css's `data-kind`: only
+   the elements that should actually be tinted by column kind carry it, so a row
+   never tints the neutral form controls nested inside it.
+   ========================================================================== */
+
+/* ---- kind tone mapping -----------------------------------------------------
+   Wait is cool and idle; touch is the product's one accent, because touch time
+   is the thing a flow manager is trying to increase. Envelope is deliberately
+   colourless (sealed demand is unexamined), done is the success terminal. */
+
+[data-col-kind="queue"]    { --kind-tone: var(--info);     --kind-soft: var(--info-soft); }
+[data-col-kind="activity"] { --kind-tone: var(--accent);   --kind-soft: var(--accent-soft); }
+[data-col-kind="envelope"] { --kind-tone: var(--fg-muted); --kind-soft: var(--bg-sunken); }
+[data-col-kind="done"]     { --kind-tone: var(--success);  --kind-soft: var(--success-soft); }
+
+/* ============================================================================
+   Drawer frame
+   ========================================================================== */
+
+/* A structure editor is a two-column form plus a full column list; the card
+   drawer's 600px measure would force every field onto its own row. */
+.drawer.structure-drawer { --drawer-w: 780px; }
+
+.structure-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+/* The drawer body is BOTH the flex container and the scrollport, so its
+   children default to `flex-shrink: 1` and get squeezed by the column list
+   instead of overflowing into the scroll. That silently collapsed the teaching
+   panel — the one thing on this surface that must never be the first casualty
+   of a tall board. */
+.structure-body > * { flex: 0 0 auto; }
+
+/* While a mutation is in flight the list is inert but stays legible — a
+   spinner over the whole panel would hide the very row being changed. */
+.structure-body[data-busy="true"] {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.structure-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.structure-section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.structure-section-title {
+  font-size: var(--text-sm);
+  line-height: var(--leading-sm);
+  font-weight: 600;
+  letter-spacing: var(--tracking-tight);
+}
+
+.structure-note {
+  font-size: var(--text-xs);
+  line-height: var(--leading-sm);
+  color: var(--fg-subtle);
+  max-width: 62ch;
+}
+
+.structure-readonly { align-items: flex-start; }
+
+/* ============================================================================
+   Live flow preview
+   --------------------------------------------------------------------------
+   Sticky, and bled out to the drawer's edges so nothing scrolls through the
+   gap above it: the whole point of the strip is that the commitment point stays
+   visible while you are editing the column that moves it.
+   ========================================================================== */
+
+.structure-preview {
+  position: sticky;
+  top: calc(-1 * var(--space-4));
+  z-index: 2;
+  margin: calc(-1 * var(--space-4)) calc(-1 * var(--space-4)) 0;
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+}
+
+.structure-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.structure-preview-strip {
+  /* `relative` so a chip's offsetLeft is measured against the strip: that is
+     what lets the add-column form scroll its draft chip into view. */
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  padding-bottom: var(--space-1);
+  list-style: none;
+  margin: 0;
+}
+
+.structure-preview-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  max-width: 160px;
+  height: 24px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--col-color, var(--kind-tone, var(--border-strong)));
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+  line-height: 1;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.structure-preview-chip svg { width: 12px; height: 12px; color: var(--kind-tone, var(--fg-subtle)); }
+.structure-preview-chip[data-segment="upstream"] { background: var(--upstream-tint); }
+.structure-preview-chip[data-segment="downstream"] { background: var(--downstream-tint); }
+
+/* The pending column in the "resulting flow" preview: ringed, not merely
+   tinted, so it survives being read at a glance next to eleven siblings. */
+.structure-preview-chip[data-draft="true"] {
+  border-color: var(--accent);
+  color: var(--fg);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.structure-preview-new {
+  padding: 0 4px;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+
+.structure-preview-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  height: 24px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--commitment-line);
+  border-radius: var(--radius-full);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--text-xs);
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.structure-preview-mark svg { width: 12px; height: 12px; }
+
+.structure-preview-summary {
+  margin-top: var(--space-1);
+  font-size: var(--text-xs);
+  line-height: var(--leading-xs);
+  color: var(--fg-subtle);
+}
+
+/* The copy inside the add-column modal reuses the strip but must not stick. */
+.structure-preview-inline {
+  position: static;
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-sunken);
+}
+
+/* ============================================================================
+   Teaching panel — queue vs activity
+   ========================================================================== */
+
+.structure-teach {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-sunken);
+  overflow: hidden;
+}
+
+.structure-teach-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  letter-spacing: var(--tracking-tight);
+  color: var(--fg);
+  list-style: none;
+}
+.structure-teach-summary::-webkit-details-marker { display: none; }
+.structure-teach-summary svg { width: 16px; height: 16px; color: var(--fg-subtle); flex: none; }
+.structure-teach-summary:hover { background: var(--bg-hover); }
+
+.structure-teach-caret {
+  margin-left: auto;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.structure-teach[open] .structure-teach-caret { transform: rotate(180deg); }
+
+.structure-teach-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: 0 var(--space-3) var(--space-3);
+  font-size: var(--text-sm);
+  line-height: var(--leading-base);
+  color: var(--fg-muted);
+  max-width: 74ch;
+}
+.structure-teach-body strong { color: var(--fg); font-weight: 600; }
+
+.structure-teach-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.structure-teach-item {
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  border-left: 3px solid var(--kind-tone, var(--border-strong));
+  background: var(--kind-soft, var(--bg-raised));
+  font-size: var(--text-xs);
+  line-height: var(--leading-sm);
+}
+
+.structure-teach-item-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-1);
+  color: var(--kind-tone, var(--fg));
+}
+.structure-teach-item-head svg { width: 14px; height: 14px; flex: none; }
+.structure-teach-item-head strong { color: inherit; }
+
+.structure-teach-formula {
+  align-self: flex-start;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-raised);
+}
+.structure-teach-formula code {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--fg);
+}
+
+.structure-teach-aside {
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+  font-size: var(--text-xs);
+  line-height: var(--leading-sm);
+}
+
+/* ============================================================================
+   The column list
+   ========================================================================== */
+
+.structure-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.structure-row {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+  transition: border-color var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out);
+}
+.structure-row[data-segment="upstream"] { background: var(--upstream-tint); }
+.structure-row[data-segment="downstream"] { background: var(--downstream-tint); }
+.structure-row:hover { border-color: var(--border-strong); }
+.structure-row[data-expanded="true"] { border-color: var(--border-strong); }
+
+/* Grouped rows sit under their header with a coloured rail, which is how the
+   board itself shows a group spanning several columns. */
+.structure-row[data-grouped="true"] { margin-left: var(--space-4); }
+.structure-row[data-grouped="true"]::before {
+  content: "";
+  position: absolute;
+  left: calc(-1 * var(--space-3));
+  top: -1px;
+  bottom: -1px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--group-color, var(--border-strong));
+  opacity: 0.55;
+}
+
+.structure-row-main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+}
+
+.structure-grip {
+  display: flex;
+  flex: none;
+  color: var(--fg-subtle);
+  cursor: grab;
+}
+.structure-grip svg { width: 16px; height: 16px; }
+.structure-grip[data-locked="true"] { cursor: not-allowed; opacity: 0.4; }
+
+.structure-pos {
+  flex: none;
+  width: 20px;
+  text-align: right;
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+}
+
+.structure-swatch {
+  flex: none;
+  width: 4px;
+  min-height: 26px;
+  align-self: stretch;
+  border-radius: var(--radius-full);
+  background: var(--col-color, var(--border));
+}
+
+.structure-row-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.structure-row-name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  font-size: var(--text-sm);
+  line-height: var(--leading-sm);
+  font-weight: 600;
+  letter-spacing: var(--tracking-tight);
+  color: var(--fg);
+}
+
+.structure-point-icon { flex: none; width: 14px; height: 14px; color: var(--commitment-line); }
+
+.structure-row-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+}
+
+.structure-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+
+/* Kind chip: the one place in a row that carries the wait/touch colour. */
+.chip[data-col-kind] {
+  background: var(--kind-soft);
+  color: var(--kind-tone);
+  border-color: transparent;
+}
+.chip[data-col-kind] svg { color: currentColor; }
+
+/* ---- drag feedback -------------------------------------------------------- */
+
+.structure-row.is-dragging { opacity: 0.45; }
+
+.structure-row[data-drop]::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  z-index: 1;
+}
+.structure-row[data-drop="before"]::after { top: -3px; }
+.structure-row[data-drop="after"]::after { bottom: -3px; }
+
+/* ---- commitment divider ---------------------------------------------------- */
+
+.structure-divider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 var(--space-2);
+}
+.structure-divider::before,
+.structure-divider::after {
+  content: "";
+  height: 2px;
+  border-radius: 1px;
+  background: var(--commitment-line);
+}
+.structure-divider::before { flex: none; width: var(--space-4); }
+.structure-divider::after { flex: 1 1 auto; }
+
+.structure-divider-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: none;
+  padding: 2px var(--space-2);
+  border: 1px solid var(--commitment-line);
+  border-radius: var(--radius-full);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  font-weight: 700;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+.structure-divider-mark svg { width: 12px; height: 12px; }
+
+.structure-divider-note {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+}
+
+/* ---- group header ---------------------------------------------------------- */
+
+.structure-group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-md);
+  border-left: 3px solid var(--group-color, var(--border-strong));
+  background: var(--bg-sunken);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--fg-muted);
+}
+.structure-group-head:first-child { margin-top: 0; }
+
+.structure-group-swatch {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--group-color, var(--border-strong));
+}
+
+.structure-group-name { color: var(--fg); }
+
+.structure-group-form-row { margin: var(--space-2) 0 var(--space-1) var(--space-4); }
+
+.structure-group-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-sunken);
+}
+
+/* ============================================================================
+   The per-row editor
+   ========================================================================== */
+
+.structure-row-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-3);
+  border-top: 1px dashed var(--border);
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  background: var(--bg-raised);
+}
+
+.structure-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3) var(--space-4);
+  align-items: start;
+}
+
+.structure-field[data-span="2"] { grid-column: 1 / -1; }
+
+.structure-form-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  padding-top: var(--space-3);
+  border-top: 1px dashed var(--border);
+}
+
+/* The consequence line under a kind / segment selector. This is the teaching
+   copy R2.1 asks for, so it is a panel, not a whisper: tinted by the kind it
+   describes, and always present rather than hover-only. */
+.structure-consequence {
+  padding: var(--space-2);
+  border-left: 2px solid var(--kind-tone);
+  border-radius: var(--radius-sm);
+  background: var(--kind-soft);
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+  line-height: var(--leading-sm);
+}
+/* A segment consequence carries no kind, so it stays neutral. `:not()` rather
+   than source order, so this cannot break if the file is ever reordered. */
+.structure-consequence:not([data-col-kind]) {
+  --kind-tone: var(--border-strong);
+  --kind-soft: var(--bg-sunken);
+}
+
+/* ---- WIP stepper pair ------------------------------------------------------ */
+
+.structure-wip-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.structure-wip-row .input { width: 72px; flex: none; }
+.structure-wip-sep { color: var(--fg-subtle); }
+
+/* ---- colour picker --------------------------------------------------------- */
+
+.structure-colors {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+}
+
+.structure-swatch-btn {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-full);
+  background: var(--swatch, var(--bg-raised));
+  cursor: pointer;
+  transition: transform var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+.structure-swatch-btn:hover { transform: scale(1.12); }
+.structure-swatch-btn[aria-pressed="true"] {
+  box-shadow: 0 0 0 2px var(--bg-raised), 0 0 0 4px var(--accent);
+}
+.structure-swatch-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* "No colour": a struck-through empty swatch, so the absence of a colour is a
+   visible choice rather than a missing button. */
+.structure-swatch-none { position: relative; background: var(--bg-raised); }
+.structure-swatch-none::after {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  background: linear-gradient(
+    to bottom right,
+    transparent calc(50% - 1px),
+    var(--fg-subtle) calc(50% - 1px),
+    var(--fg-subtle) calc(50% + 1px),
+    transparent calc(50% + 1px)
+  );
+}
+
+.structure-color-input {
+  flex: none;
+  width: 30px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  cursor: pointer;
+}
+.structure-color-input::-webkit-color-swatch-wrapper { padding: 2px; }
+.structure-color-input::-webkit-color-swatch { border: none; border-radius: 2px; }
+.structure-color-input::-moz-color-swatch { border: none; border-radius: 2px; }
+.structure-color-input:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ---- group span picker ------------------------------------------------------ */
+
+.structure-span-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 210px;
+  overflow-y: auto;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-sunken);
+}
+
+.structure-span-item {
+  justify-content: flex-start;
+  gap: var(--space-2);
+  padding: 3px var(--space-1);
+  border-radius: var(--radius-sm);
+}
+.structure-span-item:hover { background: var(--bg-hover); }
+
+/* ============================================================================
+   Responsive & motion
+   ========================================================================== */
+
+/* Below ~700px of drawer the two-column form pinches the selects; one column
+   reads better than two truncated ones. */
+@media (max-width: 700px) {
+  .structure-form-grid,
+  .structure-teach-grid { grid-template-columns: minmax(0, 1fr); }
+  .structure-row[data-grouped="true"] { margin-left: var(--space-3); }
+  .structure-group-form-row { margin-left: var(--space-3); }
+  .structure-divider-note { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .structure-swatch-btn:hover { transform: none; }
+  .structure-teach[open] .structure-teach-caret { transform: rotate(180deg); }
+}

@@ -39,6 +39,7 @@ from ..deps import (
     is_flag_effective,
     require_capability,
     require_flag,
+    require_roles,
 )
 from ..errors import BadRequest, Conflict, Forbidden, NotFound
 from ..schemas import (
@@ -56,6 +57,7 @@ from ..schemas import (
     GroupUpdate,
     ListResponse,
     OkResponse,
+    Schema,
     SegmentQuery,
     WipStatusOut,
 )
@@ -73,6 +75,7 @@ __all__ = [
     "decorate_card",
     "KeyAllocator",
     "next_card_key",
+    "require_structure_role",
     "require_structure_write",
 ]
 
@@ -229,12 +232,57 @@ class GroupPatchRequest(GroupUpdate):
     column_ids: list[str] | None = Field(default=None)
 
 
+class ColumnDrainRequest(Schema):
+    """``POST /columns/{id}/drain`` — where the emptied column's cards go."""
+
+    to_column_id: str = Field(min_length=1)
+
+
+class ColumnDrainOut(Schema):
+    """What a drain did: the count is what the UI reports before retrying a delete."""
+
+    ok: bool = True
+    moved: int = 0
+    from_column_id: str
+    to_column_id: str
+    is_backward: bool = False
+    committed: int = 0
+    delivered: int = 0
+    opened_envelopes: int = 0
+    message: str
+
+
 # ---------------------------------------------------------------------------
 # structural helpers
 # ---------------------------------------------------------------------------
 
 SEGMENT_RANK: dict[str, int] = {"upstream": 0, "downstream": 1}
 STRUCTURE_ROLES: frozenset[str] = frozenset({"master", "administrator"})
+
+#: The coarse gate every structure-mutating route **declares**.
+#:
+#: It is deliberately wider than :data:`STRUCTURE_ROLES` because ``simulator``
+#: shapes boards with ``kind='simulator'`` (SPEC §4) — a decision that needs the
+#: board row and therefore stays in :func:`require_structure_write`. Declaring it
+#: here keeps the OpenAPI document honest: these routes are writes, and
+#: advertising ``read_boards_metrics`` on them told every reader (and every
+#: generated client) the opposite.
+require_structure_role = require_roles("master", "administrator", "simulator")
+
+
+def _quote(value: Any) -> str:
+    """Render a name the way every error message in this product does."""
+    return "—" if value in (None, "") else f"“{value}”"
+
+
+def _name_list(columns: Sequence[dict[str, Any]]) -> str:
+    """``“A”, “B” and “C”`` — readable in an error message."""
+    names = [_quote(column.get("name")) for column in columns]
+    if not names:
+        return "—"
+    if len(names) == 1:
+        return names[0]
+    return f"{', '.join(names[:-1])} and {names[-1]}"
 
 
 def require_structure_write(user: dict[str, Any], board: dict[str, Any]) -> None:
@@ -298,17 +346,23 @@ def _assert_order_valid(ordered: Sequence[dict[str, Any]]) -> None:
                 )
 
 
-def _sync_group_positions(db: Database, board_id: str, ordered: Sequence[dict[str, Any]]) -> None:
+def _sync_group_positions(
+    db: Database,
+    board_id: str,
+    ordered: Sequence[dict[str, Any]],
+    groups: Sequence[dict[str, Any]] | None = None,
+) -> None:
     """Order group headers by the first column each one spans."""
     first_index: dict[str, int] = {}
     for index, column in enumerate(ordered):
         group_id = column.get("group_id")
         if group_id and group_id not in first_index:
             first_index[group_id] = index
-    groups = db.q(
-        "SELECT id, position FROM column_groups WHERE board_id = ? ORDER BY position, rowid",
-        board_id,
-    )
+    if groups is None:
+        groups = db.q(
+            "SELECT id, position FROM column_groups WHERE board_id = ? ORDER BY position, rowid",
+            board_id,
+        )
     # Groups that currently span no column keep their relative order at the end.
     ranked = sorted(
         groups,
@@ -319,25 +373,50 @@ def _sync_group_positions(db: Database, board_id: str, ordered: Sequence[dict[st
             db.ex("UPDATE column_groups SET position = ? WHERE id = ?", position, group["id"])
 
 
-def assert_groups_contiguous(board_id: str, ordered: Sequence[dict[str, Any]]) -> None:
-    """A group must span **consecutive** columns (SPEC §9.2 group headers)."""
+def assert_groups_contiguous(
+    board_id: str,
+    ordered: Sequence[dict[str, Any]],
+    group_names: dict[str, str] | None = None,
+) -> None:
+    """A group must span **consecutive** columns (SPEC §9.2 group headers).
+
+    The 409 names the columns on both sides of the argument — the ones the group
+    claims and the ones sitting in between — because "not contiguous" on its own
+    leaves the reader to diff two lists of uuids by hand.
+    """
     runs: dict[str, list[int]] = {}
     for index, column in enumerate(ordered):
         group_id = column.get("group_id")
         if group_id:
             runs.setdefault(group_id, []).append(index)
     for group_id, indexes in runs.items():
-        if indexes[-1] - indexes[0] != len(indexes) - 1:
-            raise Conflict(
-                "group_not_contiguous",
-                "A column group must span consecutive columns in the flow.",
-                {
-                    "board_id": board_id,
-                    "group_id": group_id,
-                    "positions": indexes,
-                    "column_ids": [ordered[i]["id"] for i in indexes],
-                },
-            )
+        if indexes[-1] - indexes[0] == len(indexes) - 1:
+            continue
+        members = [ordered[i] for i in indexes]
+        held = set(indexes)
+        intruders = [ordered[i] for i in range(indexes[0], indexes[-1] + 1) if i not in held]
+        name = (group_names or {}).get(group_id)
+        label = _quote(name) if name else "That column group"
+        raise Conflict(
+            "group_not_contiguous",
+            f"{label} must span consecutive columns: {_name_list(members)} "
+            f"{'is' if len(members) == 1 else 'are'} separated by {_name_list(intruders)}.",
+            {
+                "board_id": board_id,
+                "group_id": group_id,
+                "group_name": name,
+                "positions": indexes,
+                "column_ids": [column["id"] for column in members],
+                "columns": [
+                    {"id": column["id"], "name": column["name"], "position": index}
+                    for index, column in zip(indexes, members)
+                ],
+                "separated_by": [
+                    {"id": column["id"], "name": column["name"], "position": column["position"]}
+                    for column in intruders
+                ],
+            },
+        )
 
 
 def recompute_points(
@@ -422,8 +501,14 @@ def normalize_structure(
             column["position"] = position
 
     recompute_points(db, board_id, ordered)
-    assert_groups_contiguous(board_id, ordered)
-    _sync_group_positions(db, board_id, ordered)
+    groups = db.q(
+        "SELECT id, name, position FROM column_groups WHERE board_id = ? ORDER BY position, rowid",
+        board_id,
+    )
+    assert_groups_contiguous(
+        board_id, ordered, {group["id"]: group["name"] for group in groups}
+    )
+    _sync_group_positions(db, board_id, ordered, groups)
     return ordered
 
 
@@ -452,6 +537,73 @@ def _placement_order(
     ids = [c["id"] for c in others]
     ids.insert(index, column["id"])
     return ids
+
+
+def _assert_position_in_range(position: int | None, highest: int, *, action: str) -> None:
+    """Reject an insertion index no ordering could ever produce.
+
+    ``position`` is an index into the board's **unified** flow, which is how the
+    board renders and how the structure editor counts. Inside that range the
+    index is clamped into the column's own segment by :func:`_placement_order`
+    (asking for a downstream column "at the front" legitimately means "first
+    downstream"); outside it, the caller is confused and silently clamping would
+    hide the bug behind a column that quietly landed somewhere else.
+    """
+    if position is None:
+        return
+    if not 0 <= int(position) <= highest:
+        raise BadRequest(
+            f"Position {int(position)} is outside this board's flow: a column can "
+            f"be {action} 0…{highest}.",
+            code="invalid_position",
+            details={"position": int(position), "min": 0, "max": highest},
+        )
+
+
+def _assert_envelope_placement(kind: str, position: int | None) -> None:
+    """An envelope column is the first column or it is nothing (SPEC §2.4)."""
+    if kind == "envelope" and position is not None and int(position) != 0:
+        raise Conflict(
+            "envelope_must_be_first",
+            "An envelope column may only be the first upstream column, so it "
+            "cannot be placed anywhere else in the flow.",
+            {"requested_position": int(position), "allowed_position": 0},
+        )
+
+
+def _assert_delivery_point_survives(
+    db: Database, board_id: str, column: dict[str, Any], kind: str
+) -> None:
+    """Refuse a re-kind that would leave the board with nowhere to deliver.
+
+    The delivery point is the last ``done`` column, and every delivered-count,
+    lead-time and throughput figure is measured against it. Re-kinding the only
+    ``done`` column would not fail loudly — it would quietly stop the board from
+    ever delivering anything again, so it is refused here instead.
+    """
+    if column["kind"] != "done" or kind == "done":
+        return
+    survivor = db.q1(
+        "SELECT id, name FROM columns WHERE board_id = ? AND kind = 'done' AND id != ?",
+        board_id,
+        column["id"],
+    )
+    if survivor is not None:
+        return
+    raise Conflict(
+        "invalid_structure",
+        f"{_quote(column['name'])} is this board's only ‘done’ column, so it is the "
+        "delivery point. Add another ‘done’ column before changing this one, or the "
+        "board would have nowhere to deliver work to.",
+        {
+            "reason": "delivery_point_required",
+            "column_id": column["id"],
+            "column": column["name"],
+            "board_id": board_id,
+            "from_kind": "done",
+            "to_kind": kind,
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1381,12 +1533,17 @@ def create_column(
     id: str,
     payload: ColumnCreate,
     db: Database = Depends(get_db),
-    user: CurrentUser = Depends(require_capability("read_boards_metrics")),
+    user: CurrentUser = Depends(require_structure_role),
 ) -> dict[str, Any]:
-    """Insert a column at ``position`` inside its own segment, then re-derive the points."""
+    """Insert a column at ``position`` inside its own segment, then re-derive the points.
+
+    ``position`` is optional: omitting it appends the column to the end of its own
+    segment, which is what "add a column" means without a chosen insertion point.
+    """
     board = get_board_or_404(db, id)
     require_structure_write(user, board)
     _validate_column_shape(payload.segment, payload.kind)
+    _assert_envelope_placement(payload.kind, payload.position)
     if payload.wip_min is not None and payload.wip_max is not None and payload.wip_min > payload.wip_max:
         raise BadRequest(
             "The column WIP minimum cannot exceed its maximum.",
@@ -1400,6 +1557,9 @@ def create_column(
             _assert_single_envelope(db, board["id"])
         _assert_group_on_board(db, board["id"], payload.group_id)
         existing = canonical_columns(db, board["id"])
+        # A new column may be inserted anywhere from the front to just past the
+        # last existing one, so the range is one wider than the board.
+        _assert_position_in_range(payload.position, len(existing), action="inserted at")
         db.ex(
             "INSERT INTO columns (id, board_id, group_id, name, position, segment, kind, "
             "wip_min, wip_max, is_commitment_point, is_delivery_point, color, description) "
@@ -1437,13 +1597,16 @@ def update_column(
     id: str,
     payload: ColumnUpdate,
     db: Database = Depends(get_db),
-    user: CurrentUser = Depends(require_capability("read_boards_metrics")),
+    user: CurrentUser = Depends(require_structure_role),
 ) -> dict[str, Any]:
     """Rename, re-limit, re-group, re-segment or move a column.
 
     A segment change is a structural event: it can hand the commitment point to a
     different column, which is why every path ends in
-    :func:`normalize_structure` rather than trusting the caller.
+    :func:`normalize_structure` rather than trusting the caller. Changing
+    ``kind`` or ``group_id`` goes through the same funnel, so the delivery point
+    and the group headers follow a re-kind exactly as the commitment point
+    follows a re-segment.
     """
     column = _get_column_or_404(db, id)
     board = get_board_or_404(db, column["board_id"])
@@ -1457,6 +1620,8 @@ def update_column(
     segment = fields.get("segment", column["segment"])
     kind = fields.get("kind", column["kind"])
     _validate_column_shape(segment, kind)
+    _assert_envelope_placement(kind, target_position)
+    _assert_delivery_point_survives(db, board["id"], column, kind)
 
     wip_min = fields.get("wip_min", column["wip_min"])
     wip_max = fields.get("wip_max", column["wip_max"])
@@ -1479,7 +1644,12 @@ def update_column(
                 list(fields.values()) + [column["id"]],
             )
         existing = canonical_columns(db, board["id"])
-        fresh = next(c for c in existing if c["id"] == column["id"])
+        _assert_position_in_range(
+            target_position, max(len(existing) - 1, 0), action="moved to"
+        )
+        fresh = next((c for c in existing if c["id"] == column["id"]), None)
+        if fresh is None:  # pragma: no cover - deleted between the two reads
+            raise NotFound("Column", column["id"], code="column_not_found")
         if target_position is not None or fields.get("segment") or kind == "envelope":
             order = _placement_order(existing, fresh, target_position)
             normalize_structure(db, board["id"], order)
@@ -1495,9 +1665,20 @@ def update_column(
 def delete_column(
     id: str,
     db: Database = Depends(get_db),
-    user: CurrentUser = Depends(require_capability("read_boards_metrics")),
+    user: CurrentUser = Depends(require_structure_role),
 ) -> dict[str, Any]:
-    """Remove an **empty** column and re-derive the board's points."""
+    """Remove an **empty** column and re-derive the board's points.
+
+    The 409 carries the card count so the caller can offer the real remedy —
+    ``POST /columns/{id}/drain`` — instead of a dead end.
+
+    Deleting a column is not free even once it is empty: ``card_movements``
+    declares ``to_column_id ... ON DELETE CASCADE``, so every movement that ever
+    *ended* in this column goes with it, and the cards that passed through lose
+    that interval from their dwell history. The count of rows about to be
+    removed is reported back in the message rather than left to be discovered
+    later in a chart that quietly changed shape.
+    """
     column = _get_column_or_404(db, id)
     board = get_board_or_404(db, column["board_id"])
     require_structure_write(user, board)
@@ -1508,13 +1689,33 @@ def delete_column(
     if occupancy:
         raise Conflict(
             "column_not_empty",
-            "Move the cards out of this column before deleting it.",
-            {"column_id": column["id"], "card_count": occupancy},
+            f"{_quote(column['name'])} still holds {occupancy} "
+            f"card{'s' if occupancy != 1 else ''}. Move them to another column "
+            "before deleting it.",
+            {
+                "column_id": column["id"],
+                "column": column["name"],
+                "board_id": board["id"],
+                "card_count": occupancy,
+                "drain_endpoint": f"/api/v1/columns/{column['id']}/drain",
+            },
         )
+    history = int(
+        db.scalar(
+            "SELECT COUNT(*) FROM card_movements WHERE to_column_id = ?", column["id"]
+        )
+        or 0
+    )
     with db.tx():
         db.ex("DELETE FROM columns WHERE id = ?", column["id"])
         normalize_structure(db, board["id"])
-    return {"ok": True, "id": column["id"], "message": "Column deleted."}
+    message = f"Column {_quote(column['name'])} deleted."
+    if history:
+        message += (
+            f" {history} movement record{'s' if history != 1 else ''} that ended in it "
+            "went with it."
+        )
+    return {"ok": True, "id": column["id"], "message": message}
 
 
 @router.post(
@@ -1526,14 +1727,260 @@ def reorder_columns(
     id: str,
     payload: ColumnReorderRequest,
     db: Database = Depends(get_db),
-    user: CurrentUser = Depends(require_capability("read_boards_metrics")),
+    user: CurrentUser = Depends(require_structure_role),
 ) -> dict[str, Any]:
-    """Apply an explicit column order, keeping ``position`` dense and legal."""
+    """Apply an explicit column order, keeping ``position`` dense and legal.
+
+    ``ordered_ids`` must name **every** column on the board. A partial list is
+    refused rather than completed with a guess: the omitted columns would be
+    swept to the end of their segment, so a caller that forgot half the board
+    would silently re-shuffle work it never meant to touch — and, because
+    ``position`` is dense, would have no way to tell afterwards.
+    """
     board = get_board_or_404(db, id)
     require_structure_write(user, board)
+
+    columns = canonical_columns(db, board["id"])
+    known = {column["id"]: column for column in columns}
+    requested = list(payload.ordered_ids)
+    unknown = [column_id for column_id in requested if column_id not in known]
+    if unknown:
+        raise BadRequest(
+            "Those columns do not belong to this board.",
+            code="column_not_on_board",
+            details={"board_id": board["id"], "column_ids": unknown},
+        )
+    missing = [column for column in columns if column["id"] not in set(requested)]
+    if missing:
+        raise BadRequest(
+            f"A reorder must list every column on this board. Missing: "
+            f"{_name_list(missing)}.",
+            code="incomplete_column_order",
+            details={
+                "board_id": board["id"],
+                "expected": len(columns),
+                "received": len(requested),
+                "missing": [
+                    {"id": column["id"], "name": column["name"]} for column in missing
+                ],
+            },
+        )
+
     with db.tx():
-        ordered = normalize_structure(db, board["id"], payload.ordered_ids)
+        ordered = normalize_structure(db, board["id"], requested)
     return {"items": ordered, "total": len(ordered)}
+
+
+@router.post(
+    "/columns/{id}/drain",
+    response_model=ColumnDrainOut,
+    summary="Move every card out of a column so it can be deleted",
+)
+def drain_column(
+    id: str,
+    payload: ColumnDrainRequest,
+    db: Database = Depends(get_db),
+    user: CurrentUser = Depends(require_structure_role),
+) -> dict[str, Any]:
+    """Empty a column into another column of the same board, in one transaction.
+
+    This is the remedy behind ``409 column_not_empty``: the user chose "move the
+    cards, then delete". Every card gets a real ``card_movements`` row and a
+    ``moved`` ``card_event``, because a card that changes column without one
+    would leave a hole in the history that every metric replays — CFD, dwell,
+    flow efficiency and the simulator all rebuild themselves from those rows.
+
+    Three deliberate departures from :func:`~backend.app.routers.movements.move_card`:
+
+    * **backward is allowed.** A column created by mistake sits wherever it was
+      created; if draining could only go forward, that column could never be
+      removed. Backward drains are recorded with ``is_backward = 1`` and an
+      audit event, exactly like a forced move, so nothing is hidden.
+    * **WIP maxima do not block it.** This is structural repair, not
+      replenishment; refusing to empty a column because the destination is full
+      would trap the board in the broken shape the user is trying to fix.
+    * **sealed demands are opened.** A sealed card outside an envelope column
+      can neither move nor be opened, so leaving it sealed would strand it.
+
+    Crossing the commitment point or landing on the delivery point stamps
+    ``committed_at`` / ``delivered_at`` the same way a move does — otherwise the
+    board would show work downstream that the flow metrics cannot see.
+    """
+    column = _get_column_or_404(db, id)
+    board = get_board_or_404(db, column["board_id"])
+    require_structure_write(user, board)
+
+    target = _get_column_or_404(db, payload.to_column_id)
+    if target["board_id"] != board["id"]:
+        raise BadRequest(
+            "That column belongs to a different board.",
+            code="column_board_mismatch",
+            details={"board_id": board["id"], "column_id": target["id"]},
+        )
+    if target["id"] == column["id"]:
+        raise Conflict(
+            "same_column_move",
+            f"{_quote(column['name'])} cannot be drained into itself — choose "
+            "another column to hold its cards.",
+            {"column_id": column["id"]},
+        )
+
+    columns = canonical_columns(db, board["id"])
+    order = {c["id"]: index for index, c in enumerate(columns)}
+    is_backward = order[target["id"]] < order[column["id"]]
+    commitment_index = next(
+        (index for index, c in enumerate(columns) if c["segment"] == "downstream"), None
+    )
+    delivery_id = next((c["id"] for c in reversed(columns) if c["kind"] == "done"), None)
+    crosses_commitment = (
+        commitment_index is not None and order[target["id"]] >= commitment_index
+    )
+    reaches_delivery = delivery_id is not None and target["id"] == delivery_id
+    opens_envelope = column["kind"] == "envelope"
+
+    now = utcnow()
+    note = f"Column {_quote(column['name'])} drained into {_quote(target['name'])}."
+    committed = delivered = opened = 0
+
+    with db.tx():
+        cards = db.q(
+            "SELECT * FROM cards WHERE column_id = ? ORDER BY position, created_at",
+            column["id"],
+        )
+        if cards:
+            placeholders = ", ".join("?" for _ in cards)
+            last_moved = {
+                row["card_id"]: row["moved_at"]
+                for row in db.q(
+                    "SELECT card_id, MAX(moved_at) AS moved_at FROM card_movements "
+                    f"WHERE card_id IN ({placeholders}) GROUP BY card_id",
+                    [card["id"] for card in cards],
+                )
+            }
+            position = int(
+                db.scalar(
+                    "SELECT COALESCE(MAX(position), -1) FROM cards WHERE column_id = ?",
+                    target["id"],
+                )
+                or -1
+            )
+            movements: list[tuple[Any, ...]] = []
+            events: list[tuple[Any, ...]] = []
+
+            for card in cards:
+                position += 1
+                elapsed = seconds_between(
+                    last_moved.get(card["id"]) or card["created_at"], now
+                )
+                movements.append(
+                    (
+                        new_id(),
+                        card["id"],
+                        board["id"],
+                        column["id"],
+                        target["id"],
+                        column["segment"],
+                        target["segment"],
+                        now,
+                        user["id"],
+                        None if elapsed is None else int(round(max(0.0, elapsed))),
+                        note,
+                        1 if is_backward else 0,
+                        "ui",
+                    )
+                )
+                events.append(
+                    (
+                        new_id(), card["id"], board["id"], user["id"],
+                        "moved", "column", column["name"], target["name"], now,
+                    )
+                )
+                if is_backward:
+                    # Same field the forced-move path writes, so the card's
+                    # history reads "Backward move forced from X to Y".
+                    events.append(
+                        (
+                            new_id(), card["id"], board["id"], user["id"],
+                            "moved", "backward_override", column["name"],
+                            target["name"], now,
+                        )
+                    )
+
+                will_commit = crosses_commitment and not card["committed_at"]
+                will_deliver = reaches_delivery and not card["delivered_at"]
+                will_open = opens_envelope and card["envelope_state"] == "sealed"
+                if will_commit:
+                    committed += 1
+                    events.append(
+                        (
+                            new_id(), card["id"], board["id"], user["id"],
+                            "updated", "committed_at", None, now, now,
+                        )
+                    )
+                if will_deliver:
+                    delivered += 1
+                    events.append(
+                        (
+                            new_id(), card["id"], board["id"], user["id"],
+                            "updated", "delivered_at", None, now, now,
+                        )
+                    )
+                if will_open:
+                    opened += 1
+                    events.append(
+                        (
+                            new_id(), card["id"], board["id"], user["id"],
+                            "opened_envelope", "envelope_state", "sealed", "opened", now,
+                        )
+                    )
+
+                db.ex(
+                    "UPDATE cards SET column_id = ?, position = ?, "
+                    "envelope_state = ?, opened_at = COALESCE(opened_at, ?), "
+                    "committed_at = COALESCE(committed_at, ?), "
+                    "delivered_at = COALESCE(delivered_at, ?) WHERE id = ?",
+                    target["id"],
+                    position,
+                    "opened" if will_open else card["envelope_state"],
+                    now if will_open else None,
+                    now if will_commit else None,
+                    now if will_deliver else None,
+                    card["id"],
+                )
+
+            db.exmany(
+                "INSERT INTO card_movements (id, card_id, board_id, from_column_id, "
+                "to_column_id, from_segment, to_segment, moved_at, moved_by, "
+                "seconds_in_from_column, note, is_backward, source) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                movements,
+            )
+            db.exmany(
+                "INSERT INTO card_events (id, card_id, board_id, actor_id, event_type, "
+                "field, old_value, new_value, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                events,
+            )
+
+    moved = len(cards)
+    if moved:
+        message = (
+            f"Moved {moved} card{'s' if moved != 1 else ''} from "
+            f"{_quote(column['name'])} to {_quote(target['name'])}"
+            f"{' against the flow' if is_backward else ''}."
+        )
+    else:
+        message = f"{_quote(column['name'])} was already empty."
+    return {
+        "ok": True,
+        "moved": moved,
+        "from_column_id": column["id"],
+        "to_column_id": target["id"],
+        "is_backward": is_backward,
+        "committed": committed,
+        "delivered": delivered,
+        "opened_envelopes": opened,
+        "message": message,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1575,7 +2022,7 @@ def create_group(
     id: str,
     payload: GroupWriteRequest,
     db: Database = Depends(get_db),
-    user: CurrentUser = Depends(require_capability("read_boards_metrics")),
+    user: CurrentUser = Depends(require_structure_role),
 ) -> dict[str, Any]:
     """Group consecutive columns under one header with its own WIP limits."""
     board = get_board_or_404(db, id)
@@ -1619,7 +2066,7 @@ def update_group(
     id: str,
     payload: GroupPatchRequest,
     db: Database = Depends(get_db),
-    user: CurrentUser = Depends(require_capability("read_boards_metrics")),
+    user: CurrentUser = Depends(require_structure_role),
     _: None = Depends(require_flag("wip_group")),
 ) -> dict[str, Any]:
     """Rename a group, change its limits, or replace the columns it spans."""
@@ -1655,7 +2102,7 @@ def update_group(
 def delete_group(
     id: str,
     db: Database = Depends(get_db),
-    user: CurrentUser = Depends(require_capability("read_boards_metrics")),
+    user: CurrentUser = Depends(require_structure_role),
     _: None = Depends(require_flag("wip_group")),
 ) -> dict[str, Any]:
     """Drop the header; its columns stay on the board, ungrouped."""

@@ -5,23 +5,29 @@
    Layout model, so the next reader does not have to reverse-engineer it:
 
    .board-view                    flex column, fills #view
-     .board-toolbar                slim meta row (whole-flow WIP, SLE, collapse-all)
-     .board-scroll                 overflow-x:auto, overflow-y:hidden — the ONLY
-                                    horizontal scroller. Houses .board-edge shadows.
-       .board-grid                 CSS grid, 3 explicit rows x N column tracks:
+     .board-toolbar                slim meta row (whole-flow WIP, SLE, lanes,
+                                    edit columns, collapse-all)
+     .board-scroll-wrap            position:relative; owns the .board-edge shadows
+       .board-scroll               overflow-x:auto, overflow-y:hidden — the ONLY
+                                    horizontal scroller
+         .board-grid               CSS grid, 3 explicit rows x N column tracks:
                                     row 1 segment ribbon, row 2 group headers,
                                     row 3 the column itself (header+body, internal
                                     flex, own vertical scroll).
-         .board-ribbon              row 1 cell, spans a segment's contiguous tracks
-         .board-rail                spans rows 1-3, the commitment-point divider
-         .board-group               row 2 cell, spans a group's contiguous tracks
-         .board-col                 row 3 cell — ONE flex-column per column:
+           .board-ribbon            row 1 cell, spans a segment's contiguous tracks
+           .board-rail              spans rows 1-3, the commitment-point divider
+           .board-group             row 2 cell, spans a group's contiguous tracks
+           .board-col               row 3 cell — ONE flex-column per column:
                                     header (static) + body (scrolls internally)
 
    Column bodies scroll independently, so "sticky column headers" falls out of
    the layout for free: the header is structurally outside the scrolling region,
    never needing position:sticky. Only .board-scroll scrolls horizontally, and
    the header/group/ribbon rows travel with their columns as they should.
+
+   Swimlane mode (SPEC-v2 §R2.3) replaces the row axis only — same tracks, same
+   toolbar, same cards. See the SWIMLANES block further down for how it works
+   and why it needs a different scroll and sticky model.
    ========================================================================== */
 
 :root {
@@ -67,15 +73,72 @@
 .board-meta-pill svg { width: 13px; height: 13px; }
 .board-meta-pill[data-wip] { background: var(--tone-soft); color: var(--tone); }
 
-/* ---- horizontal scroller + edge shadows ------------------------------------ */
+/* The whole-flow pill is also the whole-flow WIP editor (SPEC-v2 §R2.2). */
+button.board-wip-pill {
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out);
+}
+button.board-wip-pill:hover { border-color: var(--tone, var(--border-strong)); }
+button.board-wip-pill:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 
-.board-scroll {
+/* Lanes: off / class of service (SPEC-v2 §R2.3). */
+.board-lane-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+}
+.board-lane-switch-label {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--fg-subtle);
+}
+.board-lane-switch .segmented > button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+
+@media (max-width: 1100px) {
+  /* The control still reads as a lane switch from its icons alone. */
+  .board-lane-switch-label { display: none; }
+}
+
+/* The way into the structure editor is offered to every role that can read the
+   board (SPEC-v2 §R2.1) — the shape of the flow explains every number on the
+   screen. For a role that cannot change it, this lock says so before the click
+   rather than after it; structure.js then opens read-only and explains why. */
+.board-structure-readonly .board-structure-lock {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  color: var(--fg-subtle);
+}
+
+/* ---- horizontal scroller + edge shadows ------------------------------------
+   The edges live in the wrapper, not in the scroller: in lane mode the
+   scroller also scrolls vertically, and an absolutely positioned child of a
+   scroll container travels with its content instead of hugging the viewport. */
+
+.board-scroll-wrap {
   position: relative;
   flex: 1 1 auto;
   min-height: 0;
+  min-width: 0;
+}
+
+.board-scroll {
+  position: relative;
+  height: 100%;
   overflow-x: auto;
   overflow-y: hidden;
   overscroll-behavior-x: contain;
+}
+
+/* Lane mode turns this into the board's single scrollport, in both axes, so
+   the sticky ribbon/group/column/lane headers have something to stick to. */
+.board-scroll.has-lanes {
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
 }
 
 .board-edge {
@@ -354,6 +417,372 @@
 }
 
 .board-col-skeleton { padding: var(--space-2); display: flex; flex-direction: column; gap: var(--space-2); }
+
+/* ============================================================================
+   EDITABLE WIP LIMITS (SPEC-v2 §R2.2)
+
+   The badge stays a badge — same size, same four states, same grammar — and
+   only gains an affordance. A control that changed shape when it became
+   editable would make the same policy look like two different things to two
+   people sitting side by side.
+   ========================================================================== */
+
+button.board-wip-badge {
+  cursor: pointer;
+  transition: box-shadow var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out);
+}
+button.board-wip-badge:hover { box-shadow: 0 0 0 1px var(--tone, var(--border-strong)); }
+button.board-wip-badge:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+/* -- the popover, rendered inside a ui.js `menu()` overlay ------------------- */
+
+.wip-pop {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: 300px;
+  max-width: calc(100vw - var(--space-6));
+  padding: var(--space-1);
+}
+
+.wip-pop-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.wip-pop-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.wip-field { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
+
+.wip-stepper {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.wip-stepper .btn { flex: none; }
+.wip-stepper .input {
+  min-width: 0;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  /* The steppers are the affordance; the native spinners duplicate them and
+     eat half the field's width at this size. */
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+.wip-stepper .input::-webkit-outer-spin-button,
+.wip-stepper .input::-webkit-inner-spin-button { appearance: none; margin: 0; }
+
+.wip-none { font-size: var(--text-xs); color: var(--fg-muted); }
+.wip-none .checkbox { width: 14px; height: 14px; }
+
+/* Live consequence of what is currently typed, before it is saved. */
+.wip-pop-preview {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--bg-sunken);
+}
+.wip-pop-preview .badge { flex: none; margin-top: 1px; }
+.wip-preview-text {
+  font-size: var(--text-xs);
+  line-height: var(--leading-xs);
+  color: var(--fg-muted);
+}
+
+.wip-pop-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+.wip-pop-actions .hint { margin-right: auto; }
+
+.wip-pop .field-error[hidden] { display: none; }
+
+/* ============================================================================
+   SWIMLANES BY CLASS OF SERVICE (SPEC-v2 §R2.3)
+   ----------------------------------------------------------------------------
+   The lane grid reuses the flat board's column tracks and replaces its three
+   rows with:
+
+     [ribbon] [groups] [column headers]
+     then per lane:  [lane header] (+ [lane body] only when the lane has cards)
+     then one 1fr filler, so the column tint and hairlines reach the bottom.
+
+   Three things make this hold together:
+
+   1. `.board-col` becomes `display: contents`. Its header, backdrop and lane
+      cells are laid out by `.board-grid` itself — which is the only way lanes
+      can stay in step across every column, since a lane band is a real grid
+      row and its height is the tallest cell in it. The wrapper still exists in
+      the DOM, so dnd.js keeps one element per column to mark, and one class on
+      it repaints every cell of that column.
+
+   2. The ribbon, group and column headers span from their own row to the end
+      of the grid with `align-self: start`. They are meant to stay put for the
+      entire scroll, so being clipped to the grid is what they want, and their
+      rows are fixed-height custom properties measured from the real content by
+      board.js's syncLaneMetrics() right after paint.
+
+   3. A LANE header is the opposite: it belongs to one band and has to leave
+      with it. So it is not a grid item — `.board-lane` is, spanning that
+      lane's rows, and the sticky `.board-lane-head` sits inside it. Sticky is
+      bounded by its containing block, so the header now travels its own band
+      and is pushed out at the bottom of it. As a grid item it was bounded by
+      the grid instead: every header that stuck stayed stuck, and they stacked
+      up at the top of the viewport labelling lanes that had scrolled away.
+
+   Lanes are a VIEW. There is no per-lane WIP limit here, because the system
+   does not enforce one; the lane tally is informational and says so.
+   ========================================================================== */
+
+.board-grid.has-lanes {
+  /* Defaults; board.js measures and corrects them within the paint frame. */
+  --board-group-h: 30px;
+  --board-colhead-h: 62px;
+  --board-lane-head-h: 32px;
+  /* Band height is per lane, not per board: board.js measures each lane's own
+     cards and shares out the visible height between the lanes by volume,
+     publishing the result as `--board-lane-h-<class>` for the clamp below. A
+     sparse expedite lane is then visibly shorter than a dense standard one and
+     more lanes fit on screen — the comparison BETWEEN classes is the entire
+     information swimlanes carry, and one shared height erases it while padding
+     the quiet lanes with empty cells.
+     The floor keeps a one-card lane a band rather than a sliver; the cap stops
+     one dense column pushing the lanes below it off the screen (those cells
+     scroll inside themselves, exactly as the flat board's columns do).
+     `--board-lane-card-h` is only the first-frame estimate, replaced by real
+     measurement in the same frame. */
+  --board-lane-card-h: 99px;
+  --board-lane-cell-pad: 16px;
+  /* The floor is one whole card plus a slice of the next: a band that cuts its
+     first card in half reads as broken, and a band with nothing peeking below
+     hides the fact that the cell scrolls at all. */
+  --board-lane-min-h: clamp(112px, 14vh, 148px);
+  --board-lane-max-h: clamp(180px, 34vh, 380px);
+  --board-lane-top: calc(var(--board-ribbon-h) + var(--board-group-h) + var(--board-colhead-h));
+
+  height: auto;
+  min-height: 100%;
+  align-items: stretch;
+}
+
+/* -- sticky bands ----------------------------------------------------------- */
+
+.board-grid.has-lanes .board-ribbon {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  align-self: start;
+  /* The flat board's ribbon is a translucent tint over the page — fine when it
+     sits above a column that scrolls inside itself. Here it is a sticky overlay
+     the whole board slides beneath, so it needs a floor of its own or cards
+     read straight through the segment label. Same treatment as the column
+     header below: opaque base, tint layered on top, so it still reads as
+     upstream or downstream in both themes. */
+  background-color: var(--bg);
+}
+.board-grid.has-lanes .board-ribbon[data-segment="upstream"] {
+  background-image: linear-gradient(var(--upstream-tint), var(--upstream-tint));
+}
+.board-grid.has-lanes .board-ribbon[data-segment="downstream"] {
+  background-image: linear-gradient(var(--downstream-tint), var(--downstream-tint));
+}
+
+.board-grid.has-lanes .board-group {
+  position: sticky;
+  top: var(--board-ribbon-h);
+  z-index: 4;
+  align-self: start;
+  background: var(--bg-sunken);
+}
+
+.board-grid.has-lanes .board-col-header {
+  position: sticky;
+  top: calc(var(--board-ribbon-h) + var(--board-group-h));
+  z-index: 3;
+  align-self: start;
+  /* Opaque, or cards would scroll through it. The segment wash is layered as
+     an image so it still reads as upstream or downstream. */
+  background-color: var(--bg);
+  border-right: 1px solid var(--border);
+}
+.board-grid.has-lanes .board-col-header[data-segment="upstream"] {
+  background-image: linear-gradient(var(--upstream-tint), var(--upstream-tint));
+}
+.board-grid.has-lanes .board-col-header[data-segment="downstream"] {
+  background-image: linear-gradient(var(--downstream-tint), var(--downstream-tint));
+}
+
+/* -- the column, as a full-height surface behind its lane cells -------------- */
+
+.board-grid.has-lanes .board-col {
+  display: contents;
+}
+
+.board-col-backdrop {
+  min-width: 0;
+  background-color: var(--bg);
+  border-right: 1px solid var(--border);
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+.board-col-backdrop[data-segment="upstream"] {
+  background-image: linear-gradient(var(--upstream-tint), var(--upstream-tint));
+}
+.board-col-backdrop[data-segment="downstream"] {
+  background-image: linear-gradient(var(--downstream-tint), var(--downstream-tint));
+}
+
+/* A collapsed column keeps its name, written down the spine — there is room
+   for it here, and a 52px stripe with no name is a puzzle, not a column. */
+.board-col-spine {
+  position: sticky;
+  top: calc(var(--board-lane-top) + var(--space-3));
+  display: block;
+  padding: var(--space-3) 0;
+  writing-mode: vertical-rl;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-height: 40vh;
+}
+
+.board-lane-cell {
+  min-width: 0;
+  min-height: 0;
+  /* Scrolls only once the band hits --board-lane-max-h. A scrollable item also
+     has an automatic minimum size of zero, which is what lets the row's
+     minmax() cap actually bind instead of being overruled by its content. */
+  overflow-y: auto;
+  background: transparent;
+  border-right: 1px solid var(--border);
+  padding: var(--space-2);
+}
+.board-lane-cell:empty { padding: 0; }
+
+/* A collapsed column in lane mode: `height: 100%` from the flat layout would
+   resolve against a grid area that now runs the whole height of the board. */
+.board-grid.has-lanes .board-col.is-collapsed .board-col-header {
+  height: auto;
+  min-height: var(--board-colhead-h);
+  padding: var(--space-2) var(--space-1);
+}
+.board-grid.has-lanes .board-col.is-collapsed .board-col-title-row { gap: var(--space-1); }
+
+/* -- the lane band: the box its own header sticks inside ---------------------
+   Spans the lane's rows and paints nothing. Its only jobs are to bound the
+   sticky header's travel to this lane (see note 3 at the top of this section)
+   and to stay out of the way of the cells it overlaps — hence pointer-events,
+   which the header takes back for itself. */
+
+.board-lane {
+  position: relative;
+  z-index: 2;
+  min-width: 0;
+  pointer-events: none;
+}
+
+/* -- lane header: full grid width, label pinned to the viewport's left edge -- */
+
+.board-lane-head {
+  display: flex;
+  align-items: stretch;
+  position: sticky;
+  top: var(--board-lane-top);
+  width: 100%;
+  height: var(--board-lane-head-h);
+  background: var(--bg-sunken);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  box-sizing: border-box;
+  pointer-events: auto;
+}
+
+/* An empty lane is not hidden: no expedite work in flight is worth seeing.
+   It just loses its body row, which is what makes the strip slim, and it
+   recedes so the lanes that do carry work read first. */
+.board-lane-head.is-empty {
+  background: var(--bg);
+  border-top-color: transparent;
+}
+
+.board-lane-label {
+  position: sticky;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  max-width: calc(100vw - var(--rail-w) - var(--space-8));
+  padding: 0 var(--space-3) 0 var(--space-2);
+  border-left: 3px solid var(--tone, var(--border-strong));
+  background: inherit;
+  white-space: nowrap;
+}
+
+.board-lane-name {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--fg);
+}
+.board-lane-head.is-empty .board-lane-name { color: var(--fg-muted); }
+
+.board-lane-count { flex: none; }
+
+.board-lane-note {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+}
+
+.board-lane-toggle { flex: none; }
+.board-lane-toggle svg { width: 14px; height: 14px; }
+
+/* -- drag states, redrawn for a column that has no box of its own ------------ */
+
+.board-grid.has-lanes .board-col.is-drop-valid > .board-col-backdrop { background-color: var(--accent-soft); }
+.board-grid.has-lanes .board-col.is-drop-warn > .board-col-backdrop { background-color: var(--warning-soft); }
+.board-grid.has-lanes .board-col.is-drop-current > .board-col-backdrop {
+  outline: 1px dashed var(--border-strong);
+  outline-offset: -1px;
+}
+.board-grid.has-lanes .board-col.is-drop-invalid > * { opacity: 0.42; }
+
+/* Crossing a lane never reclassifies a card — it lands back in its own lane.
+   Marking that lane during the drag says so before the drop, not after it. */
+.board-grid.has-lanes[data-drag-lane="expedite"] .board-col.is-drop-valid > .board-lane-cell[data-lane="expedite"],
+.board-grid.has-lanes[data-drag-lane="fixed_date"] .board-col.is-drop-valid > .board-lane-cell[data-lane="fixed_date"],
+.board-grid.has-lanes[data-drag-lane="standard"] .board-col.is-drop-valid > .board-lane-cell[data-lane="standard"],
+.board-grid.has-lanes[data-drag-lane="intangible"] .board-col.is-drop-valid > .board-lane-cell[data-lane="intangible"] {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* -- the commitment rail runs unbroken through every lane band -------------- */
+
+.board-grid.has-lanes .board-rail {
+  z-index: 3;
+  align-items: flex-start;
+}
+.board-grid.has-lanes .board-rail-marker {
+  position: sticky;
+  top: calc(var(--board-lane-top) + var(--space-4));
+  padding-top: var(--space-3);
+}
 
 /* ============================================================================
    CARDS — compact by construction (Req. 5)
