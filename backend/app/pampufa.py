@@ -48,6 +48,8 @@ __all__ = [
 #: Events the Nagare sends to the Pampufa.
 EVENT_DELIVERED = "cartao.entregue"
 EVENT_ARCHIVED = "cartao.arquivado"
+#: A swap of flow (NG14) recreated the card on the new board: new key and link.
+EVENT_MOVED = "cartao.movido"
 
 _MAX_BACKOFF = timedelta(minutes=10)
 

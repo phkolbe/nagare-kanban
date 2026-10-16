@@ -22,7 +22,7 @@ from typing import Any
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .config import SERVICE_CLASSES
+from .config import SERVICE_CLASSES, settings
 from .db import new_id, utcnow
 from .errors import BadRequest, Conflict, NotFound
 from .models import (
@@ -38,13 +38,14 @@ from .models import (
     User,
     as_dict,
 )
-from .pampufa import EVENT_ARCHIVED, EVENT_DELIVERED, enqueue_webhook
+from .pampufa import EVENT_ARCHIVED, EVENT_DELIVERED, EVENT_MOVED, enqueue_webhook
 from .routers.boards import canonical_columns, create_board_from_template, next_card_key
 from .tenancy import project_key_for
 
 __all__ = [
     "TAG_RESOLVED_AT_ORIGIN",
     "card_for_providencia",
+    "card_url",
     "close_card",
     "ensure_product_link",
     "find_ref",
@@ -56,6 +57,11 @@ SOURCE = "pampufa"
 TEMPLATE = "providencias"
 TAG_PROVIDENCIA = "providencia"
 TAG_RESOLVED_AT_ORIGIN = "resolvido-na-origem"
+
+
+def card_url(card: dict[str, Any]) -> str:
+    """Where a person opens the card (the board, until the React screen of N2)."""
+    return f"{settings.public_url}/#/board/{card['board_id']}"
 
 
 # ---------------------------------------------------------------------------
@@ -529,11 +535,27 @@ async def swap_product_project(
                 new_card["key"],
                 now,
             )
-            await s.execute(
-                update(ExternalRef)
-                .where(ExternalRef.card_id == data["id"])
-                .values(card_id=new_card["id"])
-            )
+            ref = await s.scalar(select(ExternalRef).where(ExternalRef.card_id == data["id"]))
+            if ref is not None:
+                await s.execute(
+                    update(ExternalRef)
+                    .where(ExternalRef.id == ref.id)
+                    .values(card_id=new_card["id"])
+                )
+                # The Pampufa keeps the card's key and link: tell it where the card went.
+                enqueue_webhook(
+                    s,
+                    EVENT_MOVED,
+                    product_id,
+                    {
+                        "providencia_id": ref.external_id,
+                        "cartao_id": new_card["id"],
+                        "cartao_chave": new_card["key"],
+                        "cartao_url": card_url(new_card),
+                        "cartao_anterior_chave": data["key"],
+                        "em": now,
+                    },
+                )
             body = f"Movido para {new_card['key']} (novo fluxo do produto): {reason}"
             s.add(
                 Comment(

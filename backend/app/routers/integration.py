@@ -26,11 +26,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..config import settings
 from ..deps import CurrentUser, get_session, require_capability, require_roles
 from ..errors import NotFound
 from ..integration import (
     card_for_providencia,
+    card_url,
     find_ref,
     resolve_at_origin,
     swap_product_project,
@@ -83,11 +83,6 @@ class LinkIn(BaseModel):
     project_id: str
     board_id: str
     motivo: str = Field(min_length=3, max_length=500)
-
-
-def card_url(card: dict[str, Any]) -> str:
-    """Where a person opens the card (the board, until the React screen of N2)."""
-    return f"{settings.public_url}/#/board/{card['board_id']}"
 
 
 async def _summary(s: AsyncSession, card: dict[str, Any]) -> dict[str, Any]:

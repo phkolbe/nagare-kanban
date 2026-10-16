@@ -10,6 +10,7 @@ receives (and can be told to fail). Webhooks are delivered by hand with
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 import uuid
 from collections.abc import Iterator
@@ -452,6 +453,11 @@ def test_standalone_boards_keep_free_structure(client, auth, board_id: str) -> N
     client.delete(f"{API}/boards/{added['id']}?hard=true", headers=master)
 
 
+def _payload(raw: Any) -> dict[str, Any]:
+    """JSONB comes back decoded on Postgres, as text on SQLite."""
+    return raw if isinstance(raw, dict) else json.loads(raw)
+
+
 def test_a_new_flow_is_a_new_project_and_open_cards_move(client, pampufa, db: Database) -> None:
     service = pampufa.service()
     body = providencia()
@@ -492,6 +498,19 @@ def test_a_new_flow_is_a_new_project_and_open_cards_move(client, pampufa, db: Da
     assert moved["id"] != open_card["id"]
     assert db.scalar("SELECT archived FROM cards WHERE id = ?", open_card["id"])
     assert db.scalar("SELECT read_only FROM boards WHERE id = ?", old_link["board"]["id"])
+    # The Pampufa learns the new key and link; archiving the old card discards nothing.
+    rows = db.q(
+        "SELECT event, payload FROM webhook_outbox WHERE product_id = ? ORDER BY created_at",
+        PRODUCT,
+    )
+    decoded = [(r["event"], _payload(r["payload"])) for r in rows]
+    [(event, payload)] = [
+        (e, p) for e, p in decoded if p["providencia_id"] == body["providencia_id"]
+    ]
+    assert event == "cartao.movido"
+    assert payload["cartao_id"] == moved["id"] and payload["cartao_chave"] == moved["key"]
+    assert payload["cartao_url"].endswith(f"/#/board/{board.json()['id']}")
+    assert payload["cartao_anterior_chave"] == open_card["key"]
 
     old_columns = db.q(
         "SELECT id FROM columns WHERE board_id = ? ORDER BY position", old_link["board"]["id"]
