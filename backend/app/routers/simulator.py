@@ -59,6 +59,7 @@ from ..schemas import (
     SimRunCreate,
     SimRunOut,
 )
+from ..tenancy import in_product
 from .boards import (
     BoardCreateRequest,
     KeyAllocator,
@@ -119,8 +120,12 @@ def _as_json(value: Any) -> Any:
 
 
 def _run_select() -> Any:
-    return select(SimulationRun, User.name.label("created_by_name")).outerjoin(
-        User, User.id == SimulationRun.created_by
+    """Runs of the current product's boards, with the author's name."""
+    return (
+        select(SimulationRun, User.name.label("created_by_name"))
+        .join(Board, Board.id == SimulationRun.board_id)
+        .outerjoin(User, User.id == SimulationRun.created_by)
+        .where(*in_product(Board))
     )
 
 
@@ -157,7 +162,11 @@ async def list_simulator_boards(
     user: CurrentUser = Depends(require_capability("simulator_boards")),
 ) -> dict[str, Any]:
     """Every ``kind='simulator'`` board, newest first, with a live card count."""
-    conditions: list[Any] = [Board.kind == "simulator", Board.archived.is_(bool(archived))]
+    conditions: list[Any] = [
+        Board.kind == "simulator",
+        Board.archived.is_(bool(archived)),
+        *in_product(Board),
+    ]
     if q:
         needle = f"%{q.strip()}%"
         conditions.append(or_(Board.name.ilike(needle), Board.slug.ilike(needle)))
@@ -610,10 +619,9 @@ async def compare_runs(
     """Align 2–8 saved runs into one table (SPEC §8.6): metrics, deltas, verdict."""
     runs: list[dict[str, Any]] = []
     for run_id in payload.run_ids:
-        row = as_dict(await s.get(SimulationRun, run_id))
-        if row is None:
-            raise NotFound("Simulation run", run_id, code="run_not_found")
-        runs.append(row)
+        run = await _get_run_or_404(s, run_id)
+        run.pop("created_by_name", None)
+        runs.append(run)
 
     try:
         comparison = forecast.compare_runs(runs)

@@ -776,7 +776,8 @@ def test_flags_are_returned_raw_and_grouped_by_category(client, master) -> None:
     keys = {flag["key"] for flag in body["items"]}
     assert keys >= set(FREE_FLAGS) | set(TEAM_ONLY_FLAGS) | set(BUSINESS_ONLY_FLAGS)
     assert body["total"] == len(body["items"])
-    assert body["plan"]["slug"] == "business"
+    # NG15: the workspace runs on Enterprise, with everything on.
+    assert body["plan"]["slug"] == "enterprise"
 
     grouped = {flag["key"] for group in body["categories"] for flag in group["flags"]}
     assert grouped == keys, "every flag must appear in exactly one category group"
@@ -816,7 +817,15 @@ def test_disabling_a_flag_makes_it_ineffective_and_re_enabling_restores_it(
     assert restored.json()["effective"] is True
 
 
-def test_raising_a_flags_minimum_plan_locks_it(client, master, restore_workspace) -> None:
+def test_raising_a_flags_minimum_plan_locks_it(
+    client, master, db: Database, restore_workspace
+) -> None:
+    # Enterprise is the top tier, so step the workspace down to Business first.
+    business = db.q1("SELECT id FROM plans WHERE slug = 'business'")
+    switched = client.patch(
+        f"{API}/workspace", json={"active_plan_id": business["id"]}, headers=master
+    )
+    assert switched.status_code == 200, switched.text
     response = client.patch(
         f"{API}/flags/metrics_basic", json={"min_plan": "enterprise"}, headers=master
     )
@@ -884,7 +893,7 @@ def test_workspace_reports_its_plan_and_only_a_master_may_switch_it(
     workspace = client.get(f"{API}/workspace", headers=auth("viewer"))
     assert workspace.status_code == 200, workspace.text
     assert workspace.json()["name"] == "Nagare"
-    assert workspace.json()["plan"]["slug"] == "business"
+    assert workspace.json()["plan"]["slug"] == "enterprise"
 
     team = db.q1("SELECT id FROM plans WHERE slug = 'team'")
     denied = client.patch(

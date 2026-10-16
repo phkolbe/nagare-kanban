@@ -16,6 +16,13 @@ from typing import Any
 BASE_DIR: Path = Path(__file__).resolve().parents[2]
 APP_DIR: Path = Path(__file__).resolve().parent
 
+# The environment wins over the file; the file only fills in what is not set, like
+# the Pampufa services (``.env`` is environment only, never business settings).
+if (BASE_DIR / ".env").is_file() and not os.environ.get("NAGARE_IGNORE_DOTENV"):
+    from dotenv import load_dotenv
+
+    load_dotenv(BASE_DIR / ".env", override=False)
+
 
 def _env_bool(key: str, default: bool) -> bool:
     raw = os.environ.get(key)
@@ -72,6 +79,44 @@ class Settings:
 
     # --- frontend ----------------------------------------------------------
     frontend_dir: Path = field(default_factory=lambda: BASE_DIR / "frontend")
+
+    # --- Pampufa integration (NG1-NG17) ---------------------------------------
+    #: Base URL of the ``pampufa`` service. Empty: the Nagare runs standalone and
+    #: refuses Pampufa tokens.
+    pampufa_url: str = field(
+        default_factory=lambda: os.environ.get("NAGARE_PAMPUFA_URL", "").rstrip("/")
+    )
+    pampufa_issuer: str = field(
+        default_factory=lambda: os.environ.get("NAGARE_PAMPUFA_EMISSOR", "pampufa")
+    )
+    #: The audience Pampufa tokens must carry for the Nagare to accept them.
+    pampufa_audience: str = "nagare"
+    #: Service credential the Nagare uses to call the Pampufa (webhook of delivery).
+    pampufa_client_id: str = field(
+        default_factory=lambda: os.environ.get("NAGARE_PAMPUFA_CLIENTE_ID", "nagare")
+    )
+    pampufa_client_secret: str = field(
+        default_factory=lambda: os.environ.get("NAGARE_PAMPUFA_CLIENTE_SEGREDO", "")
+    )
+    #: Seconds between webhook delivery rounds.
+    webhook_interval_s: int = field(default_factory=lambda: _env_int("NAGARE_WEBHOOK_INTERVALO", 5))
+    #: Where people open a card (the link the Pampufa shows). The React screen of N2
+    #: will live under the platform's gateway; until then it is this server.
+    public_url: str = field(
+        default_factory=lambda: os.environ.get(
+            "NAGARE_URL_PUBLICA", "http://127.0.0.1:8770"
+        ).rstrip("/")
+    )
+
+    @property
+    def pampufa_enabled(self) -> bool:
+        return bool(self.pampufa_url)
+
+    @property
+    def pampufa_jwks_url(self) -> str:
+        return os.environ.get(
+            "NAGARE_PAMPUFA_JWKS_URL", f"{self.pampufa_url}/.well-known/jwks.json"
+        )
 
     # --- demo --------------------------------------------------------------
     demo_password: str = "nagare123"

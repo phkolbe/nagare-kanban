@@ -18,6 +18,7 @@ ROUTER_MODULES: tuple[str, ...] = (
     "movements",
     "metrics",
     "simulator",
+    "integration",
 )
 
 __all__ = ["ROUTER_MODULES"]

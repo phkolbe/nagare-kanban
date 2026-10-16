@@ -368,7 +368,7 @@ def test_feature_flags_and_plans_are_complete(db: Database) -> None:
     workspace = db.q1("SELECT * FROM workspace WHERE id = 'workspace'")
     assert workspace is not None
     assert workspace["name"] == "Nagare"
-    assert workspace["active_plan_id"] == plans["business"]["id"]
+    assert workspace["active_plan_id"] == plans["enterprise"]["id"]  # NG15
 
 
 def test_card_keys_follow_the_project_prefix(db: Database) -> None:

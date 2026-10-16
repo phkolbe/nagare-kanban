@@ -38,16 +38,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..db import new_id, seconds_between, utcnow
 from ..deps import (
     CurrentUser,
+    assert_board_writable,
     get_board_or_404,
     get_session,
     is_flag_effective,
+    is_product_board,
     require_capability,
     require_flag,
     require_roles,
 )
 from ..errors import BadRequest, Conflict, Forbidden, NotFound
 from ..models import (
-    PRODUCT_STANDALONE,
     Blocker,
     Board,
     BoardColumn,
@@ -79,6 +80,7 @@ from ..schemas import (
     SegmentQuery,
     WipStatusOut,
 )
+from ..tenancy import in_product, product_for_new_rows
 
 router = APIRouter(tags=["boards"])
 
@@ -316,6 +318,56 @@ TEMPLATES: dict[str, dict[str, Any]] = {
             ),
         ],
     },
+    # The board every Pampufa product gets for its providências (NG12). Editable
+    # until the first card arrives; locked afterwards (NG13).
+    "providencias": {
+        "label": "Providências (Pampufa)",
+        "description": (
+            "Providências da plataforma Pampufa: cada uma chega como cartão na Entrada e "
+            "a sua entrega conclui a providência na plataforma."
+        ),
+        "board": {"wip_min": None, "wip_max": None, "sle_days": 14, "sle_percentile": 85},
+        "groups": [],
+        "columns": [
+            (
+                "Entrada",
+                "upstream",
+                "queue",
+                None,
+                None,
+                None,
+                "Providências que chegaram da plataforma e ainda não foram assumidas.",
+            ),
+            (
+                "A fazer",
+                "downstream",
+                "queue",
+                None,
+                None,
+                None,
+                "O ponto de compromisso: daqui em diante alguém deve uma resposta.",
+            ),
+            ("Fazendo", "downstream", "activity", None, 3, None, "Em tratamento agora."),
+            (
+                "Aguardando terceiro",
+                "downstream",
+                "queue",
+                None,
+                None,
+                None,
+                "Depende de alguém de fora: cliente, contador, fornecedor, banco.",
+            ),
+            (
+                "Entregue",
+                "downstream",
+                "done",
+                None,
+                None,
+                None,
+                "Resolvida. Entregar o cartão conclui a providência na Pampufa.",
+            ),
+        ],
+    },
     "blank": {
         "label": "Blank",
         "description": "No columns. Build the flow by hand.",
@@ -447,6 +499,39 @@ def require_structure_write(user: dict[str, Any], board: dict[str, Any]) -> None
             "required": ["master", "administrator"],
         },
     )
+
+
+#: Column and group fields that are *policy*, not structure: they stay editable after
+#: a product board received its first card (NG13, decision of 15/10/2026).
+_COLUMN_POLICY_FIELDS = frozenset({"name", "color", "description", "wip_min", "wip_max"})
+_GROUP_POLICY_FIELDS = frozenset({"name", "color", "wip_min", "wip_max"})
+
+
+async def flow_locked(s: AsyncSession, board: dict[str, Any]) -> bool:
+    """A product board's flow is fixed once it holds (or held) a card."""
+    if not is_product_board(board):
+        return False
+    first = await s.scalar(select(Card.id).where(Card.board_id == board["id"]).limit(1))
+    return first is not None
+
+
+async def assert_structure_unlocked(s: AsyncSession, board: dict[str, Any], change: str) -> None:
+    """Refuse a structural change on a locked product board (NG13).
+
+    Locked: creating, deleting or reordering columns and groups, changing a
+    column's segment or kind, and therefore the commitment and delivery points.
+    Still free: WIP limits, the SLE and column names and colours. A new flow is a
+    new project linked to the product (NG14).
+    """
+    assert_board_writable(board)
+    if await flow_locked(s, board):
+        raise Conflict(
+            "flow_locked",
+            "This board's flow is locked: it already holds work. WIP limits, the SLE and "
+            "column names and colours can still change; for a different flow, link a new "
+            "project to the product.",
+            {"board_id": board["id"], "product_id": board.get("product_id"), "change": change},
+        )
 
 
 def _column_sort_key(column: dict[str, Any]) -> tuple[int, int, int, str]:
@@ -1283,7 +1368,7 @@ async def list_boards(
     user: CurrentUser = Depends(require_capability("read_boards_metrics")),
 ) -> dict[str, Any]:
     """Every board the workspace has, newest first, with a live card count."""
-    conditions: list[Any] = [Board.archived.is_(bool(archived))]
+    conditions: list[Any] = [Board.archived.is_(bool(archived)), *in_product(Board)]
     if kind:
         conditions.append(Board.kind == kind)
     if q:
@@ -1317,27 +1402,60 @@ async def create_board(
 ) -> dict[str, Any]:
     """Create a board and lay out the chosen template's groups and columns."""
     await _assert_may_create(s, user, payload.kind)
-    product_id = PRODUCT_STANDALONE
+    board_id = await create_board_from_template(
+        s,
+        product_id=product_for_new_rows(),
+        name=payload.name,
+        template=payload.template or "blank",
+        kind=payload.kind,
+        description=payload.description,
+        count_envelope_in_metrics=bool(payload.count_envelope_in_metrics),
+        confirm_moves=bool(payload.confirm_moves),
+        wip_min=payload.wip_min,
+        wip_max=payload.wip_max,
+        sle_days=payload.sle_days,
+        sle_percentile=payload.sle_percentile,
+    )
+    await s.commit()
 
-    template = payload.template or "blank"
+    board = await get_board_or_404(s, board_id)
+    return await _board_out(s, board)
+
+
+async def create_board_from_template(
+    s: AsyncSession,
+    *,
+    product_id: str,
+    name: str,
+    template: str,
+    kind: str = "operational",
+    description: str | None = None,
+    count_envelope_in_metrics: bool = False,
+    confirm_moves: bool = True,
+    wip_min: int | None = None,
+    wip_max: int | None = None,
+    sle_days: int | None = None,
+    sle_percentile: int | None = None,
+) -> str:
+    """Write a board and its template's structure in the caller's transaction."""
     defaults = TEMPLATES[template]["board"]
     board_id = new_id()
     s.add(
         Board(
             id=board_id,
             product_id=product_id,
-            name=payload.name,
-            slug=await _unique_slug(s, payload.name, product_id),
-            description=payload.description or TEMPLATES[template]["description"],
-            kind=payload.kind,
+            name=name,
+            slug=await _unique_slug(s, name, product_id),
+            description=description or TEMPLATES[template]["description"],
+            kind=kind,
             source_board_id=None,
-            count_envelope_in_metrics=bool(payload.count_envelope_in_metrics),
-            confirm_moves=bool(payload.confirm_moves),
-            wip_min=payload.wip_min if payload.wip_min is not None else defaults["wip_min"],
-            wip_max=payload.wip_max if payload.wip_max is not None else defaults["wip_max"],
-            sle_days=payload.sle_days if payload.sle_days is not None else defaults["sle_days"],
-            sle_percentile=payload.sle_percentile
-            if payload.sle_percentile is not None
+            count_envelope_in_metrics=count_envelope_in_metrics,
+            confirm_moves=confirm_moves,
+            wip_min=wip_min if wip_min is not None else defaults["wip_min"],
+            wip_max=wip_max if wip_max is not None else defaults["wip_max"],
+            sle_days=sle_days if sle_days is not None else defaults["sle_days"],
+            sle_percentile=sle_percentile
+            if sle_percentile is not None
             else defaults["sle_percentile"],
             created_at=utcnow(),
             archived=False,
@@ -1346,10 +1464,7 @@ async def create_board(
     await s.flush()
     await _apply_template(s, board_id, template)
     await normalize_structure(s, board_id)
-    await s.commit()
-
-    board = await get_board_or_404(s, board_id)
-    return await _board_out(s, board)
+    return board_id
 
 
 @router.get("/boards/templates", summary="Board templates available to POST /boards")
@@ -1391,6 +1506,7 @@ async def update_board(
     """Rename a board or change its WIP, SLE, envelope and confirmation policies."""
     board = await get_board_or_404(s, id)
     require_structure_write(user, board)
+    assert_board_writable(board)
 
     fields = payload.model_dump(exclude_unset=True)
     if not fields:
@@ -1744,6 +1860,7 @@ async def create_column(
     """
     board = await get_board_or_404(s, id)
     require_structure_write(user, board)
+    await assert_structure_unlocked(s, board, "create_column")
     _validate_column_shape(payload.segment, payload.kind)
     _assert_envelope_placement(payload.kind, payload.position)
     if (
@@ -1821,6 +1938,16 @@ async def update_column(
     wants_commitment = fields.pop("is_commitment_point", None)
     wants_delivery = fields.pop("is_delivery_point", None)
     target_position = fields.pop("position", None)
+    structural = (
+        bool(set(fields) - _COLUMN_POLICY_FIELDS)
+        or target_position is not None
+        or wants_commitment is not None
+        or wants_delivery is not None
+    )
+    if structural:
+        await assert_structure_unlocked(s, board, "update_column")
+    else:
+        assert_board_writable(board)
 
     segment = fields.get("segment", column["segment"])
     kind = fields.get("kind", column["kind"])
@@ -1881,6 +2008,7 @@ async def delete_column(
     column = await _get_column_or_404(s, id)
     board = await get_board_or_404(s, column["board_id"])
     require_structure_write(user, board)
+    await assert_structure_unlocked(s, board, "delete_column")
 
     occupancy = int(await s.scalar(select(func.count()).where(Card.column_id == column["id"])) or 0)
     if occupancy:
@@ -1933,6 +2061,7 @@ async def reorder_columns(
     """
     board = await get_board_or_404(s, id)
     require_structure_write(user, board)
+    await assert_structure_unlocked(s, board, "reorder_columns")
 
     columns = await canonical_columns(s, board["id"])
     known = {column["id"]: column for column in columns}
@@ -2000,6 +2129,7 @@ async def drain_column(
     column = await _get_column_or_404(s, id)
     board = await get_board_or_404(s, column["board_id"])
     require_structure_write(user, board)
+    await assert_structure_unlocked(s, board, "drain_column")
 
     target = await _get_column_or_404(s, payload.to_column_id)
     if target["board_id"] != board["id"]:
@@ -2192,6 +2322,7 @@ async def create_group(
     """Group consecutive columns under one header with its own WIP limits."""
     board = await get_board_or_404(s, id)
     require_structure_write(user, board)
+    await assert_structure_unlocked(s, board, "create_group")
     if (
         payload.wip_min is not None
         and payload.wip_max is not None
@@ -2243,6 +2374,10 @@ async def update_group(
 
     fields = payload.model_dump(exclude_unset=True)
     column_ids = fields.pop("column_ids", None)
+    if column_ids is not None or set(fields) - _GROUP_POLICY_FIELDS:
+        await assert_structure_unlocked(s, board, "update_group")
+    else:
+        assert_board_writable(board)
     wip_min = fields.get("wip_min", group["wip_min"])
     wip_max = fields.get("wip_max", group["wip_max"])
     if wip_min is not None and wip_max is not None and wip_min > wip_max:
@@ -2272,6 +2407,7 @@ async def delete_group(
     group = await _get_group_or_404(s, id)
     board = await get_board_or_404(s, group["board_id"])
     require_structure_write(user, board)
+    await assert_structure_unlocked(s, board, "delete_group")
     await s.execute(
         update(BoardColumn).where(BoardColumn.group_id == group["id"]).values(group_id=None)
     )

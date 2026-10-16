@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..db import new_id, seconds_between, utcnow
 from ..deps import (
     CurrentUser,
+    assert_board_writable,
     get_board_or_404,
     get_session,
     require_capability,
@@ -30,7 +31,6 @@ from ..deps import (
 )
 from ..errors import BadRequest, Conflict, Forbidden, NotFound
 from ..models import (
-    PRODUCT_STANDALONE,
     Board,
     BoardColumn,
     Card,
@@ -51,6 +51,7 @@ from ..schemas import (
     ProjectOut,
     ProjectUpdate,
 )
+from ..tenancy import in_product, product_for_new_rows, same_product
 from .boards import (
     board_wip_status,
     canonical_columns,
@@ -94,7 +95,7 @@ async def _project_counts(s: AsyncSession) -> dict[str, dict[str, int]]:
                 "in_flight_count"
             ),
         )
-        .where(Card.archived.is_(False), Card.project_id.is_not(None))
+        .where(Card.archived.is_(False), Card.project_id.is_not(None), *in_product(Card))
         .group_by(Card.project_id)
     )
     return {
@@ -104,10 +105,14 @@ async def _project_counts(s: AsyncSession) -> dict[str, dict[str, int]]:
 
 async def _get_project_or_404(s: AsyncSession, project_id: str) -> dict[str, Any]:
     """Fetch a project by id or by its human key (``NGR``)."""
-    row = as_dict(await s.get(Project, project_id))
+    row = same_product(as_dict(await s.get(Project, project_id)))
     if row is None:
         row = as_dict(
-            await s.scalar(select(Project).where(Project.key == str(project_id).upper()).limit(1))
+            await s.scalar(
+                select(Project)
+                .where(Project.key == str(project_id).upper(), *in_product(Project))
+                .limit(1)
+            )
         )
     if row is None:
         raise NotFound("Project", project_id, code="project_not_found")
@@ -131,7 +136,7 @@ async def _resolve_demand_board(s: AsyncSession, board_id: str | None) -> dict[s
     rows = (
         await s.scalars(
             select(Board)
-            .where(Board.kind == "operational", Board.archived.is_(False))
+            .where(Board.kind == "operational", Board.archived.is_(False), *in_product(Board))
             .order_by(Board.created_at)
             .limit(2)
         )
@@ -236,7 +241,7 @@ async def list_projects(
     user: CurrentUser = Depends(require_capability("read_boards_metrics")),
 ) -> dict[str, Any]:
     """Projects with their demand roll-up, in two queries regardless of size."""
-    conditions: list[Any] = [Project.archived.is_(bool(archived))]
+    conditions: list[Any] = [Project.archived.is_(bool(archived)), *in_product(Project)]
     if status_filter:
         conditions.append(Project.status == status_filter)
     if q:
@@ -273,7 +278,7 @@ async def create_project(
 ) -> dict[str, Any]:
     """Create a project. The key becomes the prefix of every card key it owns."""
     _require_project_write(user)
-    product_id = PRODUCT_STANDALONE
+    product_id = product_for_new_rows()
     if await s.scalar(
         select(Project.id).where(Project.key == payload.key, Project.product_id == product_id)
     ):
@@ -428,6 +433,7 @@ async def create_demand(
     """
     project = await _get_project_or_404(s, id)
     board = await _resolve_demand_board(s, payload.board_id)
+    assert_board_writable(board)
     columns = await canonical_columns(s, board["id"])
     if not columns:
         raise Conflict(
@@ -546,9 +552,13 @@ async def open_envelope(
     the seconds the demand spent sealed, which is exactly the interval the
     envelope toggle in SPEC §7 includes or excludes from customer lead time.
     """
-    card = as_dict(await s.get(Card, id))
+    card = same_product(as_dict(await s.get(Card, id)))
     if card is None:
-        card = as_dict(await s.scalar(select(Card).where(Card.key == str(id).upper()).limit(1)))
+        card = as_dict(
+            await s.scalar(
+                select(Card).where(Card.key == str(id).upper(), *in_product(Card)).limit(1)
+            )
+        )
     if card is None:
         raise NotFound("Card", id, code="card_not_found")
     if card["envelope_state"] != "sealed":
@@ -559,6 +569,7 @@ async def open_envelope(
         )
 
     board = await get_board_or_404(s, card["board_id"])
+    assert_board_writable(board)
     columns = await canonical_columns(s, board["id"])
     source = next((c for c in columns if c["id"] == card["column_id"]), None)
     target = _first_open_column(columns)

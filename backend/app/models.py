@@ -33,6 +33,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -50,11 +51,15 @@ __all__ = [
     "CardTask",
     "ColumnGroup",
     "Comment",
+    "ExternalRef",
     "FeatureFlag",
     "Plan",
+    "ProductLink",
+    "ProductLinkHistory",
     "Project",
     "SimulationRun",
     "User",
+    "WebhookOutbox",
     "Workspace",
     "as_dict",
     "json_dumps",
@@ -129,6 +134,9 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[str] = mapped_column(Instant, nullable=False)
     last_login_at: Mapped[str | None] = mapped_column(Instant)
+    #: The Pampufa ``sub`` this user signs in with (NG5). A local user with the same
+    #: e-mail is linked on the first Pampufa sign-in (NG decision of 16/10/2026).
+    external_subject: Mapped[str | None] = mapped_column(String(80), unique=True)
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +176,11 @@ class Board(Base):
     sle_percentile: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[str] = mapped_column(Instant, nullable=False)
     archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    #: A product board whose project was swapped out (NG14): history and metrics stay
+    #: readable, nothing on it can change any more.
+    read_only: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
 
 
 class ColumnGroup(Base):
@@ -483,6 +496,90 @@ class SimulationRun(Base):
     results: Mapped[dict[str, Any]] = mapped_column(Json, nullable=False, default=dict)
     created_at: Mapped[str] = mapped_column(Instant, nullable=False)
     created_by: Mapped[str | None] = _fk("users.id", "SET NULL")
+
+
+# ---------------------------------------------------------------------------
+# Pampufa integration (NG8-NG14)
+# ---------------------------------------------------------------------------
+
+
+class ProductLink(Base):
+    """The project — and its board — that receives a product's providências (NG14)."""
+
+    __tablename__ = "product_links"
+
+    product_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    project_id: Mapped[str] = _fk("projects.id", "RESTRICT", nullable=False)
+    board_id: Mapped[str] = _fk("boards.id", "RESTRICT", nullable=False)
+    linked_at: Mapped[str] = mapped_column(Instant, nullable=False)
+    linked_by: Mapped[str | None] = _fk("users.id", "SET NULL")
+
+
+class ProductLinkHistory(Base):
+    """Every association and swap, append-only."""
+
+    __tablename__ = "product_link_history"
+    __table_args__ = (
+        CheckConstraint("action IN ('linked','unlinked')", name="action"),
+        Index("idx_link_history_product", "product_id", "at"),
+    )
+
+    id: Mapped[str] = _id()
+    product_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    project_id: Mapped[str] = _fk("projects.id", "RESTRICT", nullable=False)
+    board_id: Mapped[str] = _fk("boards.id", "RESTRICT", nullable=False)
+    action: Mapped[str] = mapped_column(String(10), nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text)
+    moved_cards: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    at: Mapped[str] = mapped_column(Instant, nullable=False)
+    by: Mapped[str | None] = _fk("users.id", "SET NULL")
+
+
+class ExternalRef(Base):
+    """A card that stands for something in another system — a Pampufa providência.
+
+    ``external_id`` is unique per source, which makes card creation idempotent; on a
+    project swap the reference moves to the card recreated on the new board.
+    """
+
+    __tablename__ = "external_refs"
+    __table_args__ = (
+        UniqueConstraint("source", "external_id"),
+        CheckConstraint(
+            "state IN ('open','resolved_at_origin','delivered','discarded')", name="state"
+        ),
+        Index("idx_external_refs_card", "card_id"),
+    )
+
+    id: Mapped[str] = _id()
+    card_id: Mapped[str] = _fk("cards.id", "CASCADE", nullable=False)
+    product_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    source: Mapped[str] = mapped_column(String(20), nullable=False, default="pampufa")
+    external_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    service: Mapped[str | None] = mapped_column(String(40))
+    kind: Mapped[str | None] = mapped_column(String(80))
+    url: Mapped[str | None] = mapped_column(Text)
+    state: Mapped[str] = mapped_column(String(20), nullable=False, default="open")
+    created_at: Mapped[str] = mapped_column(Instant, nullable=False)
+    resolved_at_origin: Mapped[str | None] = mapped_column(Instant)
+    closed_at: Mapped[str | None] = mapped_column(Instant)
+
+
+class WebhookOutbox(Base):
+    """Notifications to the Pampufa, written with the change and sent until confirmed."""
+
+    __tablename__ = "webhook_outbox"
+    __table_args__ = (Index("idx_webhook_pending", "delivered_at", "next_attempt_at"),)
+
+    id: Mapped[str] = _id()
+    event: Mapped[str] = mapped_column(String(60), nullable=False)
+    product_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(Json, nullable=False, default=dict)
+    created_at: Mapped[str] = mapped_column(Instant, nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[str] = mapped_column(Instant, nullable=False)
+    delivered_at: Mapped[str | None] = mapped_column(Instant)
+    last_error: Mapped[str | None] = mapped_column(Text)
 
 
 # ---------------------------------------------------------------------------

@@ -20,6 +20,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 from fastapi import Depends, Path, Request
+from pampufa_sdk.auth.token import TokenInvalido
 from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,9 +31,17 @@ from .config import (
     settings,
 )
 from .db import utcnow
-from .errors import ApiError, Forbidden, NotFound, Unauthorized
-from .models import Board, FeatureFlag, Plan, User, Workspace, as_dict
+from .errors import ApiError, Conflict, Forbidden, NotFound, Unauthorized
+from .models import PRODUCT_STANDALONE, Board, FeatureFlag, Plan, User, Workspace, as_dict
+from .pampufa import is_pampufa_token, user_for_identity
 from .security import decode_token
+from .tenancy import (
+    current_product,
+    local_product,
+    read_product_header,
+    role_from_pampufa,
+    set_current_product,
+)
 
 __all__ = [
     "CurrentUser",
@@ -125,16 +134,68 @@ async def _load_user(s: AsyncSession, user_id: str) -> CurrentUser:
 
 
 async def get_current_user(request: Request, s: AsyncSession = Depends(get_session)) -> CurrentUser:
-    """Resolve the ``Authorization: Bearer <jwt>`` header into a user row."""
+    """Resolve ``Authorization: Bearer <jwt>`` into a user, a product and a role.
+
+    Two kinds of token are accepted (NG5): the local login (HS256, the database
+    holds the role) and the Pampufa login (EdDSA, the role comes from the token's
+    roles in the product named by ``X-Produto``). Either way the product of the
+    request is fixed here, for every query that follows (see :mod:`.tenancy`).
+    """
     token = _bearer_token(request)
     if not token:
         raise Unauthorized("Missing bearer token.", code="missing_token")
-    claims = decode_token(token)  # raises TokenError (401) when untrustworthy
-    user = await _load_user(s, str(claims.get("sub")))
-    # The role in the token is a hint; the database is authoritative, so a role
-    # change takes effect immediately rather than at the next token refresh.
-    user["token_role"] = claims.get("role")
+    requested = read_product_header(request.headers)
+    if is_pampufa_token(token):
+        user = await _pampufa_user(request, s, token, requested)
+    else:
+        claims = decode_token(token)  # raises TokenError (401) when untrustworthy
+        user = await _load_user(s, str(claims.get("sub")))
+        # The role in the token is a hint; the database is authoritative, so a role
+        # change takes effect immediately rather than at the next token refresh.
+        user["token_role"] = claims.get("role")
+        user["product_id"] = local_product(str(user["role"]), requested)
+        user["via"] = "local"
+    set_current_product(user["product_id"])
     return user
+
+
+async def _pampufa_user(
+    request: Request, s: AsyncSession, token: str, requested: str | None
+) -> CurrentUser:
+    gateway = getattr(request.app.state, "pampufa", None)
+    if gateway is None:
+        raise Unauthorized(
+            "This Nagare is not connected to the Pampufa platform.",
+            code="pampufa_not_configured",
+        )
+    try:
+        identity = await gateway.validate(token)
+    except TokenInvalido as error:
+        raise Unauthorized(str(error), code="invalid_token") from error
+    if requested is None:
+        raise ApiError(
+            "product_required",
+            "Tell the Nagare which product this request is for (X-Produto header).",
+            status=400,
+            details={"header": "X-Produto"},
+        )
+    role = role_from_pampufa(identity.papeis, requested)
+    if role is None:
+        raise Forbidden(
+            "You have no Nagare role in this product.",
+            code="product_forbidden",
+            details={"product": requested},
+        )
+    user = await user_for_identity(s, gateway, identity, token)
+    if not user.is_active:
+        raise Forbidden("This account is deactivated.", code="account_disabled")
+    row = as_dict(user) or {}
+    current = CurrentUser({key: row[key] for key in _PUBLIC_USER_FIELDS})
+    current["role"] = role
+    current["product_id"] = requested
+    current["via"] = "pampufa"
+    current["pampufa_sub"] = identity.sub
+    return current
 
 
 async def get_optional_user(
@@ -271,11 +332,18 @@ def require_flag(key: str) -> Callable[..., Awaitable[None]]:
 
 
 async def find_board(s: AsyncSession, board_ref: str) -> dict[str, Any] | None:
-    """A board row by id or, failing that, by slug (``None`` when neither matches)."""
+    """A board of the current product by id or, failing that, by slug.
+
+    ``None`` when neither matches — a board of another product does not exist here.
+    """
     conditions = [Board.slug == board_ref]
     if _looks_like_uuid(board_ref):
         conditions.insert(0, Board.id == board_ref)
-    rows = (await s.scalars(select(Board).where(or_(*conditions)))).all()
+    query = select(Board).where(or_(*conditions))
+    product = current_product()
+    if product is not None:
+        query = query.where(Board.product_id == product)
+    rows = (await s.scalars(query)).all()
     # An id match wins over a slug that happens to look the same.
     by_id = next((row for row in rows if row.id == board_ref), None)
     return as_dict(by_id or (rows[0] if rows else None))
@@ -332,6 +400,22 @@ def can_write_board(user: dict[str, Any], board: dict[str, Any]) -> bool:
     return False
 
 
+def is_product_board(board: dict[str, Any]) -> bool:
+    """An operational board of a Pampufa product (NG13 applies to these only)."""
+    return board.get("product_id") != PRODUCT_STANDALONE and board.get("kind") == "operational"
+
+
+def assert_board_writable(board: dict[str, Any]) -> None:
+    """A board swapped out of its product (NG14) keeps its history and takes no writes."""
+    if board.get("read_only"):
+        raise Conflict(
+            "board_read_only",
+            "This board was replaced by a new flow for its product and is read-only: its "
+            "history and metrics stay, nothing on it can change.",
+            {"board_id": board.get("id"), "product_id": board.get("product_id")},
+        )
+
+
 def require_board_write(user: dict[str, Any], board: dict[str, Any]) -> None:
     """Raise 403 unless ``user`` may modify content on ``board``."""
     if not can_write_board(user, board):
@@ -372,6 +456,7 @@ def require_board_write_target(
             details={"role": role},
         )
     require_board_write(user, board)
+    assert_board_writable(board)
     return board
 
 

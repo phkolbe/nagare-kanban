@@ -63,6 +63,19 @@ def _b64d(text: str) -> bytes:
     return base64.urlsafe_b64decode(text + padding)
 
 
+def _b64d_canonical(text: str) -> bytes:
+    """Decode, refusing any encoding but the canonical one.
+
+    The last base64 character can carry unused bits; a decoder that ignores them
+    accepts several spellings of the same signature (malleability). Re-encoding and
+    comparing closes that: one signature, one token.
+    """
+    raw = _b64d(text)
+    if _b64e(raw) != text:
+        raise ValueError("non-canonical base64")
+    return raw
+
+
 # ---------------------------------------------------------------------------
 # passwords
 # ---------------------------------------------------------------------------
@@ -178,7 +191,7 @@ def decode_token(token: str, secret: str | None = None, verify_exp: bool = True)
     try:
         header = json.loads(_b64d(header_text))
         claims = json.loads(_b64d(claims_text))
-        signature = _b64d(signature_text)
+        signature = _b64d_canonical(signature_text)
     except (ValueError, TypeError, json.JSONDecodeError):
         raise TokenError("Malformed token.") from None
 

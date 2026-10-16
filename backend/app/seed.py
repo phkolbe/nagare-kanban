@@ -730,14 +730,14 @@ async def _sync_plans_and_flags(s: AsyncSession) -> tuple[dict[str, str], int, i
 
 
 async def _ensure_workspace(s: AsyncSession, plan_ids: dict[str, str], now_iso: str) -> None:
-    """Create the singleton workspace row on the Business plan (SPEC §11)."""
+    """Create the singleton workspace row on the Enterprise plan (NG15: everything on)."""
     if await s.get(Workspace, "workspace"):
         return
     s.add(
         Workspace(
             id="workspace",
             name="Nagare",
-            active_plan_id=plan_ids.get("business"),
+            active_plan_id=plan_ids.get("enterprise"),
             timezone="UTC",
             updated_at=now_iso,
         )

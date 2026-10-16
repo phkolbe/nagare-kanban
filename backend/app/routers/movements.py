@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..db import new_id, seconds_between, utcnow
 from ..deps import CurrentUser, get_current_user, get_session, require_flag
 from ..errors import BadRequest, Conflict, NotFound
+from ..integration import close_card
 from ..models import (
     BoardColumn,
     Card,
@@ -443,6 +444,9 @@ async def move_card(
             new_value=now,
             at=now,
         )
+        # A delivered providência card concludes the providência on the Pampufa
+        # (NG10); the webhook is queued in this same transaction.
+        await close_card(s, card, delivered=True)
     await s.commit()
 
     # -- post-move advisory signals -----------------------------------------

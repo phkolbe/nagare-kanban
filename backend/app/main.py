@@ -11,6 +11,8 @@ whole app from booting.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import importlib
 import logging
 import mimetypes
@@ -30,6 +32,7 @@ from .config import settings
 from .db import Database, migrate
 from .errors import error_payload, install_error_handlers
 from .models import User
+from .pampufa import PampufaGateway, webhook_loop
 from .routers import ROUTER_MODULES
 
 log = logging.getLogger("nagare")
@@ -59,9 +62,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if settings.auto_migrate:
         await migrate(database.url)
     log.info("Nagare Kanban API ready — database at %r", database)
+
+    # Pampufa integration: the gateway may already be there (tests inject a double).
+    if getattr(app.state, "pampufa", None) is None and settings.pampufa_enabled:
+        app.state.pampufa = PampufaGateway(settings)
+    sender: asyncio.Task[None] | None = None
+    if app.state.pampufa is not None and app.state.webhooks_enabled:
+        sender = asyncio.create_task(
+            webhook_loop(database.sessions, app.state.pampufa, settings.webhook_interval_s)
+        )
+        log.info("Pampufa integration on — %s", settings.pampufa_url or "test double")
     try:
         yield
     finally:
+        if sender is not None:
+            sender.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await sender
         await database.dispose()
 
 
@@ -108,7 +125,12 @@ def _file_response(path: Path) -> FileResponse:
     return FileResponse(path, media_type=media_type or "application/octet-stream", headers=headers)
 
 
-def create_app(database_url: str | None = None) -> FastAPI:
+def create_app(
+    database_url: str | None = None,
+    *,
+    pampufa: Any = None,
+    webhooks_enabled: bool = True,
+) -> FastAPI:
     """Build the application. ``database_url`` lets tests point at their own database."""
     app = FastAPI(
         title="Nagare Kanban API",
@@ -124,6 +146,10 @@ def create_app(database_url: str | None = None) -> FastAPI:
         openapi_url="/openapi.json",
     )
     app.state.database = Database(database_url)
+    #: The Pampufa gateway (``None``: standalone). Tests pass an in-memory double.
+    app.state.pampufa = pampufa
+    #: Tests deliver webhooks by hand (``pampufa.deliver_pending``) to stay deterministic.
+    app.state.webhooks_enabled = webhooks_enabled
 
     app.add_middleware(
         CORSMiddleware,

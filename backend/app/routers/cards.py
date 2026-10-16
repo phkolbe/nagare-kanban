@@ -37,6 +37,7 @@ from ..config import (
 from ..db import new_id, seconds_between, utcnow
 from ..deps import (
     CurrentUser,
+    assert_board_writable,
     can_write_board,
     get_current_user,
     get_session,
@@ -44,6 +45,7 @@ from ..deps import (
     require_board_write_target,
 )
 from ..errors import BadRequest, Conflict, Forbidden, NotFound
+from ..integration import close_card
 from ..models import (
     Blocker,
     Board,
@@ -77,6 +79,7 @@ from ..schemas import (
     TaskUpdate,
 )
 from ..sqltypes import from_iso, to_iso
+from ..tenancy import in_product, same_product
 
 router = APIRouter(tags=["cards"])
 
@@ -290,7 +293,7 @@ def _bool(value: Any) -> bool:
 
 async def load_board(s: AsyncSession, board_id: str) -> dict[str, Any]:
     """Board row or 404 — cards are always evaluated in the context of a board."""
-    row = as_dict(await s.get(Board, board_id))
+    row = same_product(as_dict(await s.get(Board, board_id)))
     if row is None:
         raise NotFound("Board", board_id, code="board_not_found")
     return row
@@ -344,11 +347,12 @@ def delivery_column(columns: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 async def fetch_card(s: AsyncSession, card_id: str) -> dict[str, Any]:
     """Enriched card row or 404."""
-    row = (await s.execute(card_select().where(Card.id == card_id))).first()
+    scope = in_product(Card)
+    row = (await s.execute(card_select().where(Card.id == card_id, *scope))).first()
     if row is None:
         # Card keys (NGR-104) are the human handle; accepting one here makes the
         # API and the MCP server pleasant to drive without an id lookup first.
-        row = (await s.execute(card_select().where(Card.key == card_id))).first()
+        row = (await s.execute(card_select().where(Card.key == card_id, *scope))).first()
     if row is None:
         raise NotFound("Card", card_id, code="card_not_found")
     return _card_row(row)
@@ -365,6 +369,7 @@ async def require_card_write(
     """
     board = await load_board(s, card["board_id"])
     require_board_write(user, board)
+    assert_board_writable(board)
     return board
 
 
@@ -767,7 +772,8 @@ async def _user_exists(s: AsyncSession, user_id: str) -> bool:
 
 
 async def _project_exists(s: AsyncSession, project_id: str) -> bool:
-    return (await s.scalar(select(Project.id).where(Project.id == project_id))) is not None
+    query = select(Project.id).where(Project.id == project_id, *in_product(Project))
+    return (await s.scalar(query)) is not None
 
 
 def _tag_condition(s: AsyncSession, tag: str) -> Any:
@@ -818,7 +824,7 @@ async def list_cards(
     of the *filtered* set, not of the page — the board and the filter bar both
     show "showing 50 of 214".
     """
-    conditions: list[Any] = []
+    conditions: list[Any] = in_product(Card)
 
     if board_id:
         conditions.append(Card.board_id == board_id)
@@ -934,7 +940,7 @@ async def create_card(
     """
     # Authorisation precedes existence: see deps.require_board_write_target.
     board = require_board_write_target(
-        user, as_dict(await s.get(Board, payload.board_id)), payload.board_id
+        user, same_product(as_dict(await s.get(Board, payload.board_id))), payload.board_id
     )
 
     columns = await board_columns(s, board["id"])
@@ -975,7 +981,7 @@ async def create_card(
 
     project = None
     if payload.project_id:
-        project = as_dict(await s.get(Project, payload.project_id))
+        project = same_product(as_dict(await s.get(Project, payload.project_id)))
         if project is None:
             raise NotFound("Project", payload.project_id, code="project_not_found")
     if payload.assignee_id and not await _user_exists(s, payload.assignee_id):
@@ -1217,6 +1223,9 @@ async def update_card(
 
     if values:
         await s.execute(update(Card).where(Card.id == row["id"]).values(**values))
+    if values.get("archived") is True:
+        # Archiving a providência card discards the providência (decision of 16/10/2026).
+        await close_card(s, row, delivered=False)
     await s.commit()
 
     data = card_payload(await fetch_card(s, row["id"]), board=board)
@@ -1253,6 +1262,7 @@ async def delete_card(
         old_value="false",
         new_value="true",
     )
+    await close_card(s, row, delivered=False)
     await s.commit()
     return {"ok": True, "id": row["id"], "message": f"{row['key']} archived."}
 
