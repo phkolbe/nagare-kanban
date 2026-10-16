@@ -39,34 +39,39 @@ would make the dashboard unusable at a few thousand cards.
 from __future__ import annotations
 
 from bisect import bisect_right
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Iterable, Mapping, Sequence
+from datetime import UTC, datetime
+from typing import Any
 
-from ..db import Database, parse_iso
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from ..db import parse_iso
+from ..models import BoardColumn, Card, CardMovement, as_dict
 
 __all__ = [
+    "ACTIVITY",
+    "DAY",
+    "DONE",
     "ENVELOPE",
     "QUEUE",
-    "ACTIVITY",
-    "DONE",
-    "DAY",
-    "Interval",
-    "TouchWait",
-    "LeadTimes",
     "CardFlow",
-    "card_intervals",
+    "Interval",
+    "LeadTimes",
+    "TouchWait",
+    "board_flows",
     "bulk_card_intervals",
-    "touch_wait",
-    "lead_times",
+    "card_intervals",
+    "column_at",
     "flow_start",
+    "lead_times",
+    "load_cards",
     "load_columns",
     "load_movements",
-    "load_cards",
-    "board_flows",
-    "column_at",
-    "seconds_in_window",
     "overlap_seconds",
+    "seconds_in_window",
+    "touch_wait",
 ]
 
 ENVELOPE = "envelope"
@@ -78,7 +83,7 @@ DONE = "done"
 #: and dividing by a named constant beats a bare 86400 sprinkled through the file.
 DAY = 86_400.0
 
-_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 
 # ---------------------------------------------------------------------------
@@ -258,11 +263,11 @@ class CardFlow:
 def _reference(now: str | datetime | None) -> datetime:
     """Normalise the 'as of' instant used to close in-flight intervals."""
     if now is None:
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
     parsed = parse_iso(now) if not isinstance(now, datetime) else now
     if parsed is None:
-        return datetime.now(timezone.utc)
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        return datetime.now(UTC)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
 def _moment(value: Any) -> datetime | None:
@@ -369,7 +374,7 @@ def card_intervals(
 
 def _iso(moment: datetime) -> str:
     """Render an aware datetime the way the rest of the app writes timestamps."""
-    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def bulk_card_intervals(
@@ -500,9 +505,7 @@ def column_at(intervals: Sequence[Interval], moment: datetime) -> Interval | Non
     return found
 
 
-def seconds_in_window(
-    interval: Interval, start: datetime | None, end: datetime | None
-) -> float:
+def seconds_in_window(interval: Interval, start: datetime | None, end: datetime | None) -> float:
     """How much of an interval falls inside ``[start, end]``."""
     entered = _moment(interval.entered_at)
     if entered is None:
@@ -532,14 +535,16 @@ def overlap_seconds(
 # ---------------------------------------------------------------------------
 
 
-def load_columns(db: Database, board_id: str) -> dict[str, dict[str, Any]]:
+def load_columns(db: Session, board_id: str) -> dict[str, dict[str, Any]]:
     """Every column on a board, keyed by id, ordered fields intact."""
-    rows = db.q(
-        "SELECT id, board_id, group_id, name, position, segment, kind, wip_min, "
-        "wip_max, is_commitment_point, is_delivery_point, color, description "
-        "FROM columns WHERE board_id = ? ORDER BY position, name",
-        board_id,
-    )
+    rows = [
+        as_dict(column) or {}
+        for column in db.scalars(
+            select(BoardColumn)
+            .where(BoardColumn.board_id == board_id)
+            .order_by(BoardColumn.position, BoardColumn.name)
+        )
+    ]
     for row in rows:
         row["is_commitment_point"] = bool(row["is_commitment_point"])
         row["is_delivery_point"] = bool(row["is_delivery_point"])
@@ -548,31 +553,26 @@ def load_columns(db: Database, board_id: str) -> dict[str, dict[str, Any]]:
 
 
 def load_movements(
-    db: Database, board_id: str, card_ids: Sequence[str] | None = None
+    db: Session, board_id: str, card_ids: Sequence[str] | None = None
 ) -> dict[str, list[dict[str, Any]]]:
     """All movements for a board in **one** query, bucketed by card id.
 
     ``card_ids`` narrows the scan when only part of the board is in play; it is
-    chunked because sqlite caps the number of bound parameters.
+    chunked to stay well inside every driver's bound-parameter limit. Ties on
+    ``moved_at`` fall back to the id (UUID v7 is ordered by creation).
     """
-    sql = (
-        "SELECT id, card_id, from_column_id, to_column_id, from_segment, to_segment, "
-        "moved_at, moved_by, seconds_in_from_column, is_backward, source, note "
-        "FROM card_movements WHERE board_id = ?"
-    )
+    base = select(CardMovement).where(CardMovement.board_id == board_id)
+    ordering = (CardMovement.card_id, CardMovement.moved_at, CardMovement.id)
     rows: list[dict[str, Any]] = []
     if card_ids is None:
-        rows = db.q(sql + " ORDER BY card_id, moved_at, rowid", board_id)
+        rows = [as_dict(m) or {} for m in db.scalars(base.order_by(*ordering))]
     else:
         unique = list(dict.fromkeys(str(cid) for cid in card_ids))
         for offset in range(0, len(unique), 400):
             chunk = unique[offset : offset + 400]
-            placeholders = ",".join("?" for _ in chunk)
             rows.extend(
-                db.q(
-                    f"{sql} AND card_id IN ({placeholders}) ORDER BY card_id, moved_at, rowid",
-                    [board_id, *chunk],
-                )
+                as_dict(m) or {}
+                for m in db.scalars(base.where(CardMovement.card_id.in_(chunk)).order_by(*ordering))
             )
 
     bucketed: dict[str, list[dict[str, Any]]] = {}
@@ -582,7 +582,7 @@ def load_movements(
 
 
 def load_cards(
-    db: Database,
+    db: Session,
     board_id: str,
     *,
     include_archived: bool = False,
@@ -590,26 +590,18 @@ def load_cards(
     service_class: str | None = None,
 ) -> list[dict[str, Any]]:
     """Board cards with the SPEC §5 metric filters applied in SQL."""
-    sql = ["SELECT * FROM cards WHERE board_id = ?"]
-    args: list[Any] = [board_id]
+    query = select(Card).where(Card.board_id == board_id)
     if not include_archived:
-        sql.append("AND archived = 0")
+        query = query.where(Card.archived.is_(False))
     if project_id:
-        sql.append("AND project_id = ?")
-        args.append(project_id)
+        query = query.where(Card.project_id == project_id)
     if service_class:
-        sql.append("AND service_class = ?")
-        args.append(service_class)
-    sql.append("ORDER BY created_at")
-    rows = db.q(" ".join(sql), args)
-    for row in rows:
-        row["is_blocked"] = bool(row["is_blocked"])
-        row["archived"] = bool(row["archived"])
-    return rows
+        query = query.where(Card.service_class == service_class)
+    return [as_dict(card) or {} for card in db.scalars(query.order_by(Card.created_at, Card.id))]
 
 
 def board_flows(
-    db: Database,
+    db: Session,
     board_id: str,
     *,
     cards: Sequence[Mapping[str, Any]] | None = None,
@@ -623,9 +615,7 @@ def board_flows(
     cards the board holds.
     """
     resolved_columns = dict(columns) if columns is not None else load_columns(db, board_id)
-    resolved_cards = (
-        list(cards) if cards is not None else load_cards(db, board_id, **card_filters)
-    )
+    resolved_cards = list(cards) if cards is not None else load_cards(db, board_id, **card_filters)
     movements = load_movements(db, board_id, [str(c["id"]) for c in resolved_cards])
     reference = _reference(now)
     flows = [

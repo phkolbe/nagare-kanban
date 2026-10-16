@@ -12,8 +12,14 @@ import sys
 from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from uiharness import (  # noqa: E402
-    ROOT, api_login, discover_ids, goto_route, new_context, prime, routes_for,
+from uiharness import (
+    ROOT,
+    api_login,
+    discover_ids,
+    goto_route,
+    new_context,
+    prime,
+    routes_for,
 )
 
 # Noise that says nothing about our code quality.
@@ -37,8 +43,14 @@ def check_theme(pw, token: str, theme: str, ids: dict) -> list[dict]:
     page_errors: list[str] = []
     bad_requests: list[str] = []
 
-    page.on("console", lambda m: console_errors.append(f"{m.type}: {m.text}")
-            if m.type == "error" and interesting(m.text) else None)
+    page.on(
+        "console",
+        lambda m: (
+            console_errors.append(f"{m.type}: {m.text}")
+            if m.type == "error" and interesting(m.text)
+            else None
+        ),
+    )
     page.on("pageerror", lambda e: page_errors.append(str(e)))
 
     def on_response(resp):
@@ -64,16 +76,23 @@ def check_theme(pw, token: str, theme: str, ids: dict) -> list[dict]:
                 mainText: (document.querySelector('main')?.innerText || '').trim().length,
             })"""
         )
-        results.append({
-            "route": route["slug"], "theme": theme,
-            "console_errors": list(console_errors), "page_errors": list(page_errors),
-            "bad_requests": list(bad_requests), **counts,
-        })
+        results.append(
+            {
+                "route": route["slug"],
+                "theme": theme,
+                "console_errors": list(console_errors),
+                "page_errors": list(page_errors),
+                "bad_requests": list(bad_requests),
+                **counts,
+            }
+        )
         total = len(console_errors) + len(page_errors) + len(bad_requests)
         flag = "OK  " if total == 0 else "FAIL"
-        print(f"[{flag}] {theme:5} {route['slug']:18} cols={counts['columns']:>3} "
-              f"cards={counts['cards']:>4} svg={counts['charts']:>3} "
-              f"text={counts['mainText']:>6} errs={total}")
+        print(
+            f"[{flag}] {theme:5} {route['slug']:18} cols={counts['columns']:>3} "
+            f"cards={counts['cards']:>4} svg={counts['charts']:>3} "
+            f"text={counts['mainText']:>6} errs={total}"
+        )
         for e in list(console_errors)[:4] + list(page_errors)[:4] + list(bad_requests)[:4]:
             print(f"         - {e[:190]}")
 
@@ -84,8 +103,10 @@ def check_theme(pw, token: str, theme: str, ids: dict) -> list[dict]:
 def main() -> int:
     token = api_login()
     ids = discover_ids(token)
-    print(f"board={ids['board_id'][:8]}  sim={ids['sim_board_id'][:8]}  "
-          f"project={ids['project_id'][:8]}\n")
+    print(
+        f"board={ids['board_id'][:8]}  sim={ids['sim_board_id'][:8]}  "
+        f"project={ids['project_id'][:8]}\n"
+    )
 
     all_results = []
     with sync_playwright() as pw:
@@ -96,8 +117,10 @@ def main() -> int:
     out = ROOT / "tools" / "ui_check_report.json"
     out.write_text(json.dumps(all_results, indent=2), encoding="utf-8")
 
-    errs = sum(len(r["console_errors"]) + len(r["page_errors"]) + len(r["bad_requests"])
-               for r in all_results)
+    errs = sum(
+        len(r["console_errors"]) + len(r["page_errors"]) + len(r["bad_requests"])
+        for r in all_results
+    )
     empty = [r for r in all_results if r["mainText"] < 200]
     print(f"total problems: {errs}")
     if empty:

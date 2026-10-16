@@ -1,0 +1,78 @@
+# CI do Nagare: ruff e pytest, com a suite inteira rodando no PostgreSQL (o banco de
+# registro) e no SQLite (testes rapidos e demonstracao).
+#
+# O pampufa-sdk e privado: o secret PAMPUFA_SDK_TOKEN (token de LEITURA so do
+# pampufa-sdk) entra no git como credencial apenas para aquele repositorio. Como criar:
+# cofre Obsidian pampufa-plataforma/guia-instalacao-docker-e-ci.md.
+#
+# checkout com `persist-credentials: false`: senao o checkout grava no git um cabecalho
+# com o GITHUB_TOKEN (que so enxerga ESTE repositorio), e ele vence a credencial do
+# pampufa-sdk.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend (ruff e pytest, SQLite e Postgres)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Acesso de leitura ao pampufa-sdk
+        env:
+          TOKEN: ${{ secrets.PAMPUFA_SDK_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::Falta o secret PAMPUFA_SDK_TOKEN (Settings > Secrets and variables > Actions)."
+            exit 1
+          fi
+          URL="https://x-access-token:${TOKEN}@github.com/phkolbe/pampufa-sdk"
+          git config --global url."$URL".insteadOf "https://github.com/phkolbe/pampufa-sdk"
+          git config --global --add url."$URL".insteadOf "ssh://git@github.com/phkolbe/pampufa-sdk"
+          git config --global --add url."$URL".insteadOf "git@github.com:phkolbe/pampufa-sdk"
+      - name: Usuario sem superusuario e database de teste
+        run: |
+          psql -h 127.0.0.1 -U postgres -c "CREATE ROLE nagare LOGIN PASSWORD 'nagare' NOSUPERUSER NOCREATEROLE NOCREATEDB"
+          psql -h 127.0.0.1 -U postgres -c "CREATE DATABASE nagare_teste OWNER nagare"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+          enable-cache: true
+      - run: uv sync --all-extras --locked
+      - run: uv run ruff check
+      - run: uv run ruff format --check
+      - name: pytest (SQLite)
+        run: uv run pytest -q -rs
+      - name: pytest (PostgreSQL)
+        env:
+          TEST_DATABASE_URL: postgresql+asyncpg://nagare:nagare@127.0.0.1:5432/nagare_teste
+        run: uv run pytest -q -rs

@@ -23,11 +23,11 @@ log = logging.getLogger("nagare.errors")
 
 __all__ = [
     "ApiError",
-    "NotFound",
-    "Forbidden",
-    "Unauthorized",
-    "Conflict",
     "BadRequest",
+    "Conflict",
+    "Forbidden",
+    "NotFound",
+    "Unauthorized",
     "error_payload",
     "install_error_handlers",
 ]
@@ -127,9 +127,7 @@ class Conflict(ApiError):
         super().__init__(code, message, 409, details)
 
 
-def error_payload(
-    code: str, message: str, details: dict[str, Any] | None = None
-) -> dict[str, Any]:
+def error_payload(code: str, message: str, details: dict[str, Any] | None = None) -> dict[str, Any]:
     """Build the error envelope without raising (useful in partial responses)."""
     return {"error": {"code": code, "message": message, "details": details or {}}}
 

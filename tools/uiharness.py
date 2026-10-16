@@ -59,16 +59,39 @@ def routes_for(ids: dict[str, str]) -> list[dict]:
     blind-comparison harness maps to a reference category."""
     b, s, p = ids["board_id"], ids["sim_board_id"], ids["project_id"]
     return [
-        {"slug": "board-unified", "hash": f"#/board/{b}?segment=unified", "settle": ".board-column"},
-        {"slug": "board-upstream", "hash": f"#/board/{b}?segment=upstream", "settle": ".board-column"},
-        {"slug": "board-downstream", "hash": f"#/board/{b}?segment=downstream", "settle": ".board-column"},
-        {"slug": "card-drawer", "hash": f"#/board/{b}?segment=unified", "settle": ".board-column",
-         "open_card": True},
+        {
+            "slug": "board-unified",
+            "hash": f"#/board/{b}?segment=unified",
+            "settle": ".board-column",
+        },
+        {
+            "slug": "board-upstream",
+            "hash": f"#/board/{b}?segment=upstream",
+            "settle": ".board-column",
+        },
+        {
+            "slug": "board-downstream",
+            "hash": f"#/board/{b}?segment=downstream",
+            "settle": ".board-column",
+        },
+        {
+            "slug": "card-drawer",
+            "hash": f"#/board/{b}?segment=unified",
+            "settle": ".board-column",
+            "open_card": True,
+        },
         # Increment 2 surfaces.
-        {"slug": "board-lanes", "hash": f"#/board/{b}?segment=unified&lanes=sc",
-         "settle": "[data-lane]"},
-        {"slug": "structure-editor", "hash": f"#/board/{b}?segment=unified",
-         "settle": ".board-column", "open_structure": True},
+        {
+            "slug": "board-lanes",
+            "hash": f"#/board/{b}?segment=unified&lanes=sc",
+            "settle": "[data-lane]",
+        },
+        {
+            "slug": "structure-editor",
+            "hash": f"#/board/{b}?segment=unified",
+            "settle": ".board-column",
+            "open_structure": True,
+        },
         {"slug": "projects", "hash": "#/projects", "settle": "main"},
         {"slug": "project-detail", "hash": f"#/projects/{p}", "settle": "main"},
         {"slug": "metrics", "hash": f"#/metrics/{b}", "settle": "main"},

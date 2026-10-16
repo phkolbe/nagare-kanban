@@ -39,6 +39,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request, status
+from sqlalchemy import func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import (
     NON_INTERACTIVE_ROLES,
@@ -46,20 +48,20 @@ from ..config import (
     ROLE_DESCRIPTIONS,
     ROLE_LABELS,
 )
-from ..db import Database
 from ..deps import (
     CurrentUser,
     effective_flags,
     get_current_user,
-    get_db,
+    get_session,
     token_ttl,
     touch_last_login,
 )
 from ..errors import ApiError, Forbidden, Unauthorized
+from ..models import User, as_dict
 from ..schemas import ApiErrorBody, LoginRequest, TokenResponse, UserOut
 from ..security import encode_token, hash_password, needs_rehash, verify_password
 
-__all__ = ["router", "reset_login_throttle", "login_throttle_state", "MeOut"]
+__all__ = ["MeOut", "login_throttle_state", "reset_login_throttle", "router"]
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -268,16 +270,16 @@ def _assert_interactive(row: dict[str, Any]) -> None:
     responses=_AUTH_RESPONSES,
     summary="Exchange email and password for an access token",
 )
-def login(
+async def login(
     payload: LoginRequest,
     request: Request,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     """Authenticate a human user and return a bearer token plus their profile."""
     email = payload.email.strip().lower()
     _assert_not_locked(email)
 
-    row = db.q1("SELECT * FROM users WHERE lower(email) = ?", email)
+    row = as_dict(await s.scalar(select(User).where(func.lower(User.email) == email)))
     stored = row["password_hash"] if row else _dummy_hash()
     if not verify_password(payload.password, stored) or row is None:
         _register_failure(email)
@@ -294,13 +296,14 @@ def login(
     # Opportunistic upgrade: raising `pbkdf2_iterations` re-hashes on next login
     # instead of forcing a password reset.
     if needs_rehash(row["password_hash"]):
-        db.ex(
-            "UPDATE users SET password_hash = ? WHERE id = ?",
-            hash_password(payload.password),
-            row["id"],
+        await s.execute(
+            update(User)
+            .where(User.id == row["id"])
+            .values(password_hash=hash_password(payload.password))
         )
 
-    row["last_login_at"] = touch_last_login(db, row["id"])
+    row["last_login_at"] = await touch_last_login(s, row["id"])
+    await s.commit()
     response = _issue(row)
     response["user"]["last_login_at"] = row["last_login_at"]
     # The client address is logged by uvicorn; keeping it out of the body avoids
@@ -315,12 +318,12 @@ def login(
     responses=_AUTH_RESPONSES,
     summary="Trade a valid token for a fresh one",
 )
-def refresh(
+async def refresh(
     user: CurrentUser = Depends(get_current_user),
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     """Re-mint a token from the *database* row, so a role change lands at once."""
-    row = db.q1("SELECT * FROM users WHERE id = ?", user["id"])
+    row = as_dict(await s.get(User, user["id"]))
     if row is None:  # pragma: no cover - get_current_user already loaded it
         raise Unauthorized("The account for this token no longer exists.", code="unknown_subject")
     _assert_interactive(row)
@@ -333,9 +336,9 @@ def refresh(
     responses={401: _AUTH_RESPONSES[401], 403: _AUTH_RESPONSES[403]},
     summary="The signed-in user, their capabilities and the effective flags",
 )
-def me(
+async def me(
     user: CurrentUser = Depends(get_current_user),
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     """Everything the shell needs to draw itself for this identity."""
     role = str(user["role"])
@@ -346,7 +349,7 @@ def me(
         "role_description": ROLE_DESCRIPTIONS.get(role, ""),
         "capabilities": capabilities,
         "granted": [name for name, held in capabilities.items() if held],
-        "flags": effective_flags(db),
+        "flags": await effective_flags(s),
         "expires_in": token_ttl(),
     }
 
@@ -357,6 +360,6 @@ def me(
     status_code=status.HTTP_200_OK,
     summary="Capability matrix row for the signed-in role",
 )
-def my_capabilities(user: CurrentUser = Depends(get_current_user)) -> dict[str, bool]:
+async def my_capabilities(user: CurrentUser = Depends(get_current_user)) -> dict[str, bool]:
     """The caller's own SPEC §4 matrix row — a cheap poll for optimistic UI."""
     return _capabilities_for(str(user["role"]))

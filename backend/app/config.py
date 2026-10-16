@@ -42,13 +42,16 @@ class Settings:
     version: str = "1.0.0"
 
     # --- storage -----------------------------------------------------------
-    db_path: Path = field(
-        default_factory=lambda: Path(
-            os.environ.get("NAGARE_DB", str(BASE_DIR / "data" / "nagare.db"))
-        ).expanduser()
+    # PostgreSQL in development and production (postgresql+asyncpg://...). The
+    # default SQLite file keeps a cold clone runnable as a demo, as before.
+    database_url: str = field(
+        default_factory=lambda: os.environ.get(
+            "NAGARE_DATABASE_URL",
+            f"sqlite+aiosqlite:///{(BASE_DIR / 'data' / 'nagare.db').as_posix()}",
+        )
     )
-    schema_path: Path = field(default_factory=lambda: APP_DIR / "schema.sql")
-    sqlite_timeout: float = 30.0
+    #: Upgrade the schema on boot (the old behaviour). ``nagare migrar`` does it explicitly.
+    auto_migrate: bool = field(default_factory=lambda: _env_bool("NAGARE_AUTO_MIGRATE", True))
 
     # --- auth --------------------------------------------------------------
     # A dev default keeps a cold clone runnable; production must set the env var.
@@ -59,9 +62,7 @@ class Settings:
     )
     jwt_algorithm: str = "HS256"
     jwt_issuer: str = "nagare-kanban"
-    token_ttl_seconds: int = field(
-        default_factory=lambda: _env_int("NAGARE_TOKEN_TTL", 12 * 3600)
-    )
+    token_ttl_seconds: int = field(default_factory=lambda: _env_int("NAGARE_TOKEN_TTL", 12 * 3600))
     pbkdf2_iterations: int = 260_000
 
     # --- http --------------------------------------------------------------
@@ -88,8 +89,9 @@ class Settings:
         return origins
 
     def ensure_dirs(self) -> None:
-        """Create the directories the app writes to (the sqlite folder)."""
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        """Create the directories the app writes to (the SQLite folder, in the demo)."""
+        if self.database_url.startswith("sqlite"):
+            Path(self.database_url.split("///", 1)[-1]).parent.mkdir(parents=True, exist_ok=True)
 
 
 settings = Settings()

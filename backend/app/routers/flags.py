@@ -29,6 +29,8 @@ import json
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, status
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import (
     FLAG_BY_KEY,
@@ -38,15 +40,16 @@ from ..config import (
     flags_for_plan,
     plan_tier,
 )
-from ..db import Database, new_id, utcnow
+from ..db import new_id, utcnow
 from ..deps import (
     CurrentUser,
     effective_flags,
     get_active_plan,
-    get_db,
+    get_session,
     require_capability,
 )
 from ..errors import BadRequest, Conflict, Forbidden, NotFound
+from ..models import FeatureFlag, Plan, Workspace, as_dict
 from ..schemas import (
     ApiErrorBody,
     FlagOut,
@@ -60,7 +63,7 @@ from ..schemas import (
     WorkspaceUpdate,
 )
 
-__all__ = ["router", "FlagListOut", "FlagCategoryOut", "WorkspaceDetailOut"]
+__all__ = ["FlagCategoryOut", "FlagListOut", "WorkspaceDetailOut", "router"]
 
 router = APIRouter(tags=["flags & plans"])
 
@@ -123,10 +126,10 @@ class WorkspaceDetailOut(WorkspaceOut):
 # ---------------------------------------------------------------------------
 
 
-def _sync_plan_tiers(db: Database) -> None:
+async def _sync_plan_tiers(s: AsyncSession) -> None:
     """Teach :func:`config.plan_tier` about every plan row in the database."""
-    for row in db.q("SELECT slug, tier_order FROM plans"):
-        PLAN_TIERS[str(row["slug"])] = int(row["tier_order"] or 0)
+    for slug, tier_order in await s.execute(select(Plan.slug, Plan.tier_order)):
+        PLAN_TIERS[str(slug)] = int(tier_order or 0)
 
 
 def _plan_out(row: dict[str, Any]) -> dict[str, Any]:
@@ -171,22 +174,22 @@ def _flag_out(row: dict[str, Any], tier: int) -> dict[str, Any]:
     }
 
 
-def _active_tier(db: Database) -> int:
-    plan = get_active_plan(db)
+async def _active_tier(s: AsyncSession) -> int:
+    plan = await get_active_plan(s)
     return plan_tier(plan.get("slug") if plan else None)
 
 
-def _load_flag(db: Database, key: str) -> dict[str, Any]:
-    row = db.q1("SELECT * FROM feature_flags WHERE key = ?", key)
+async def _load_flag(s: AsyncSession, key: str) -> dict[str, Any]:
+    row = as_dict(await s.get(FeatureFlag, key))
     if row is None:
         raise NotFound("Feature flag", key, code="flag_not_found")
     return row
 
 
-def _load_plan(db: Database, plan_id: str) -> dict[str, Any]:
-    row = db.q1("SELECT * FROM plans WHERE id = ?", plan_id)
+async def _load_plan(s: AsyncSession, plan_id: str) -> dict[str, Any]:
+    row = as_dict(await s.get(Plan, plan_id))
     if row is None:
-        row = db.q1("SELECT * FROM plans WHERE slug = ?", plan_id)
+        row = as_dict(await s.scalar(select(Plan).where(Plan.slug == plan_id)))
     if row is None:
         raise NotFound("Plan", plan_id, code="plan_not_found")
     return row
@@ -203,37 +206,36 @@ def _validate_flag_keys(keys: list[str]) -> list[str]:
     return list(dict.fromkeys(keys))
 
 
-def _workspace_row(db: Database) -> dict[str, Any]:
+async def _workspace_row(s: AsyncSession) -> dict[str, Any]:
     """The singleton workspace row, provisioned on first read if absent.
 
     A cold database that has been migrated but not seeded would otherwise answer
     every ``/workspace`` read with a 404 and leave the shell with no header to
     draw. Provisioning is idempotent and picks the lowest tier available.
     """
-    row = db.q1("SELECT * FROM workspace WHERE id = 'workspace'")
+    row = as_dict(await s.get(Workspace, "workspace"))
     if row is not None:
         return row
-    fallback = db.q1("SELECT id FROM plans WHERE is_active = 1 ORDER BY tier_order LIMIT 1")
-    db.ex(
-        "INSERT INTO workspace (id, name, active_plan_id, timezone, updated_at) "
-        "VALUES ('workspace', ?, ?, 'UTC', ?)",
-        "Nagare",
-        fallback["id"] if fallback else None,
-        utcnow(),
+    fallback = await s.scalar(
+        select(Plan.id).where(Plan.is_active.is_(True)).order_by(Plan.tier_order).limit(1)
     )
-    return db.q1("SELECT * FROM workspace WHERE id = 'workspace'") or {
-        "id": "workspace",
-        "name": "Nagare",
-        "active_plan_id": None,
-        "timezone": "UTC",
-        "updated_at": utcnow(),
-    }
+    workspace = Workspace(
+        id="workspace", name="Nagare", active_plan_id=fallback, timezone="UTC", updated_at=utcnow()
+    )
+    s.add(workspace)
+    await s.commit()
+    return as_dict(workspace) or {}
 
 
-def _workspace_out(db: Database) -> dict[str, Any]:
-    row = _workspace_row(db)
-    plan_row = db.q1("SELECT * FROM plans WHERE id = ?", row.get("active_plan_id"))
-    plans = [_plan_out(item) for item in db.q("SELECT * FROM plans ORDER BY tier_order")]
+async def _workspace_out(s: AsyncSession) -> dict[str, Any]:
+    row = await _workspace_row(s)
+    plan_row = (
+        as_dict(await s.get(Plan, row["active_plan_id"])) if row.get("active_plan_id") else None
+    )
+    plans = [
+        _plan_out(as_dict(item) or {})
+        for item in await s.scalars(select(Plan).order_by(Plan.tier_order))
+    ]
     return {
         "id": "workspace",
         "name": row["name"],
@@ -241,7 +243,7 @@ def _workspace_out(db: Database) -> dict[str, Any]:
         "timezone": row.get("timezone") or "UTC",
         "updated_at": row.get("updated_at"),
         "plan": _plan_out(plan_row) if plan_row else None,
-        "flags": effective_flags(db),
+        "flags": await effective_flags(s),
         "plans": plans,
     }
 
@@ -257,16 +259,16 @@ def _workspace_out(db: Database) -> dict[str, Any]:
     responses=_FORBIDDEN,
     summary="Every feature flag, raw and grouped by category",
 )
-def list_flags(
-    db: Database = Depends(get_db),
+async def list_flags(
+    s: AsyncSession = Depends(get_session),
     _actor: CurrentUser = Depends(manage_flags),
     category: str | None = Query(None, description="Restrict to one category."),
 ) -> dict[str, Any]:
     """The switchboard: each flag with its plan gate and whether it is effective."""
-    _sync_plan_tiers(db)
-    tier = _active_tier(db)
-    rows = db.q("SELECT * FROM feature_flags ORDER BY category, key")
-    items = [_flag_out(row, tier) for row in rows]
+    await _sync_plan_tiers(s)
+    tier = await _active_tier(s)
+    rows = await s.scalars(select(FeatureFlag).order_by(FeatureFlag.category, FeatureFlag.key))
+    items = [_flag_out(as_dict(row) or {}, tier) for row in rows]
     if category:
         items = [item for item in items if item["category"] == category]
 
@@ -285,7 +287,7 @@ def list_flags(
             }
         )
 
-    plan = get_active_plan(db)
+    plan = await get_active_plan(s)
     return {
         "items": items,
         "total": len(items),
@@ -300,13 +302,13 @@ def list_flags(
     response_model=dict[str, bool],
     summary="{key: bool} — enabled AND unlocked by the active plan",
 )
-def effective(
-    db: Database = Depends(get_db),
+async def effective(
+    s: AsyncSession = Depends(get_session),
     _actor: CurrentUser = Depends(any_user),
 ) -> dict[str, bool]:
     """The exact map ``deps.require_flag`` enforces; the UI gates itself with it."""
-    _sync_plan_tiers(db)
-    return effective_flags(db)
+    await _sync_plan_tiers(s)
+    return await effective_flags(s)
 
 
 @router.patch(
@@ -315,28 +317,28 @@ def effective(
     responses={**_FORBIDDEN, 404: {"model": ApiErrorBody, "description": "Unknown flag"}},
     summary="Switch a flag on or off, or move its minimum plan",
 )
-def update_flag(
+async def update_flag(
     key: str,
     payload: FlagUpdate,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     _actor: CurrentUser = Depends(manage_flags),
 ) -> dict[str, Any]:
     """Flip a flag. The response already reflects the new effective state."""
-    _sync_plan_tiers(db)
-    row = _load_flag(db, key)
+    await _sync_plan_tiers(s)
+    row = await _load_flag(s, key)
 
     changes: dict[str, Any] = {}
     if payload.is_enabled is not None and bool(payload.is_enabled) != bool(row["is_enabled"]):
-        changes["is_enabled"] = 1 if payload.is_enabled else 0
+        changes["is_enabled"] = bool(payload.is_enabled)
     if payload.min_plan is not None and payload.min_plan != row["min_plan"]:
         changes["min_plan"] = payload.min_plan
 
     if changes:
-        assignments = ", ".join(f"{column} = ?" for column in changes)
-        db.ex(f"UPDATE feature_flags SET {assignments} WHERE key = ?", [*changes.values(), key])
-        row = _load_flag(db, key)
+        await s.execute(update(FeatureFlag).where(FeatureFlag.key == key).values(**changes))
+        await s.commit()
+        row = await _load_flag(s, key)
 
-    return _flag_out(row, _active_tier(db))
+    return _flag_out(row, await _active_tier(s))
 
 
 # ---------------------------------------------------------------------------
@@ -350,15 +352,15 @@ def update_flag(
     responses=_FORBIDDEN,
     summary="The plan catalogue, cheapest tier first",
 )
-def list_plans(
-    db: Database = Depends(get_db),
+async def list_plans(
+    s: AsyncSession = Depends(get_session),
     _actor: CurrentUser = Depends(manage_flags),
 ) -> ListResponse[PlanOut]:
     """Every plan with the flag set it advertises."""
-    _sync_plan_tiers(db)
-    rows = db.q("SELECT * FROM plans ORDER BY tier_order, name")
+    await _sync_plan_tiers(s)
+    rows = (await s.scalars(select(Plan).order_by(Plan.tier_order, Plan.name))).all()
     return ListResponse[PlanOut](
-        items=[PlanOut(**_plan_out(row)) for row in rows], total=len(rows)
+        items=[PlanOut(**_plan_out(as_dict(row) or {})) for row in rows], total=len(rows)
     )
 
 
@@ -369,14 +371,14 @@ def list_plans(
     responses={**_FORBIDDEN, 409: {"model": ApiErrorBody, "description": "Slug taken"}},
     summary="Create a plan",
 )
-def create_plan(
+async def create_plan(
     payload: PlanCreate,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     _actor: CurrentUser = Depends(manage_flags),
 ) -> PlanOut:
     """Add a tier. ``tier_order`` is what gates flags; ``flags`` is the shop window."""
     slug = payload.slug.strip().lower()
-    if db.q1("SELECT id FROM plans WHERE slug = ?", slug):
+    if await s.scalar(select(Plan.id).where(Plan.slug == slug)):
         raise Conflict("plan_slug_taken", "A plan with that slug already exists.", {"slug": slug})
 
     keys = _validate_flag_keys(list(payload.flags)) or flags_for_plan(slug)
@@ -389,17 +391,12 @@ def create_plan(
         "currency": (payload.currency or "USD").upper(),
         "tier_order": int(payload.tier_order),
         "description": payload.description,
-        "flags": json.dumps(keys),
-        "is_active": 1 if payload.is_active else 0,
+        "flags": keys,
+        "is_active": bool(payload.is_active),
     }
-    db.ex(
-        "INSERT INTO plans (id, name, slug, price_month, price_year, currency, tier_order, "
-        "description, flags, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        [row[column] for column in
-         ("id", "name", "slug", "price_month", "price_year", "currency", "tier_order",
-          "description", "flags", "is_active")],
-    )
-    _sync_plan_tiers(db)
+    s.add(Plan(**row))
+    await s.commit()
+    await _sync_plan_tiers(s)
     return PlanOut(**_plan_out(row))
 
 
@@ -409,14 +406,14 @@ def create_plan(
     responses={**_FORBIDDEN, 404: {"model": ApiErrorBody, "description": "Unknown plan"}},
     summary="Update a plan",
 )
-def update_plan(
+async def update_plan(
     plan_id: str,
     payload: PlanUpdate,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     _actor: CurrentUser = Depends(manage_flags),
 ) -> PlanOut:
     """Change pricing, copy, tier order or the advertised flag set."""
-    row = _load_plan(db, plan_id)
+    row = await _load_plan(s, plan_id)
     changes: dict[str, Any] = {}
 
     if payload.name is not None:
@@ -432,22 +429,24 @@ def update_plan(
     if payload.description is not None:
         changes["description"] = payload.description
     if payload.flags is not None:
-        changes["flags"] = json.dumps(_validate_flag_keys(list(payload.flags)))
+        changes["flags"] = _validate_flag_keys(list(payload.flags))
     if payload.is_active is not None:
-        active_id = db.scalar("SELECT active_plan_id FROM workspace WHERE id = 'workspace'")
+        active_id = await s.scalar(
+            select(Workspace.active_plan_id).where(Workspace.id == "workspace")
+        )
         if not payload.is_active and active_id == row["id"]:
             raise Conflict(
                 "active_plan_locked",
                 "Switch the workspace to another plan before retiring this one.",
                 {"plan_id": row["id"], "slug": row["slug"]},
             )
-        changes["is_active"] = 1 if payload.is_active else 0
+        changes["is_active"] = bool(payload.is_active)
 
     if changes:
-        assignments = ", ".join(f"{column} = ?" for column in changes)
-        db.ex(f"UPDATE plans SET {assignments} WHERE id = ?", [*changes.values(), row["id"]])
-        row = _load_plan(db, row["id"])
-        _sync_plan_tiers(db)
+        await s.execute(update(Plan).where(Plan.id == row["id"]).values(**changes))
+        await s.commit()
+        row = await _load_plan(s, row["id"])
+        await _sync_plan_tiers(s)
 
     return PlanOut(**_plan_out(row))
 
@@ -462,13 +461,13 @@ def update_plan(
     response_model=WorkspaceDetailOut,
     summary="The workspace, its active plan and the flags that plan makes effective",
 )
-def get_workspace(
-    db: Database = Depends(get_db),
+async def get_workspace(
+    s: AsyncSession = Depends(get_session),
     _actor: CurrentUser = Depends(any_user),
 ) -> dict[str, Any]:
     """Readable by every signed-in identity: the shell prints name and plan."""
-    _sync_plan_tiers(db)
-    return _workspace_out(db)
+    await _sync_plan_tiers(s)
+    return await _workspace_out(s)
 
 
 @router.patch(
@@ -477,9 +476,9 @@ def get_workspace(
     responses={**_FORBIDDEN, 404: {"model": ApiErrorBody, "description": "Unknown plan"}},
     summary="Rename the workspace or switch its active plan",
 )
-def update_workspace(
+async def update_workspace(
     payload: WorkspaceUpdate,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     actor: CurrentUser = Depends(require_capability("manage_users")),
 ) -> dict[str, Any]:
     """Switching ``active_plan_id`` re-gates every feature in the same request.
@@ -487,8 +486,8 @@ def update_workspace(
     Renaming is administrator work; changing the plan is a commercial decision and
     stays with the master, matching "Manage plans & flags" in SPEC §4.
     """
-    _sync_plan_tiers(db)
-    row = _workspace_row(db)
+    await _sync_plan_tiers(s)
+    row = await _workspace_row(s)
     changes: dict[str, Any] = {}
 
     if payload.active_plan_id is not None and payload.active_plan_id != row.get("active_plan_id"):
@@ -498,7 +497,7 @@ def update_workspace(
                 code="plan_change_forbidden",
                 details={"role": actor["role"], "required": ["master"]},
             )
-        plan = _load_plan(db, payload.active_plan_id)
+        plan = await _load_plan(s, payload.active_plan_id)
         if not plan["is_active"]:
             raise BadRequest(
                 "That plan is retired and cannot be activated.",
@@ -514,14 +513,11 @@ def update_workspace(
 
     if changes:
         changes["updated_at"] = utcnow()
-        assignments = ", ".join(f"{column} = ?" for column in changes)
-        db.ex(
-            f"UPDATE workspace SET {assignments} WHERE id = 'workspace'",
-            list(changes.values()),
-        )
-        _sync_plan_tiers(db)
+        await s.execute(update(Workspace).where(Workspace.id == "workspace").values(**changes))
+        await s.commit()
+        await _sync_plan_tiers(s)
 
-    return _workspace_out(db)
+    return await _workspace_out(s)
 
 
 @router.get(
@@ -529,7 +525,7 @@ def update_workspace(
     response_model=dict[str, Any],
     summary="Static flag catalogue with the plan each flag requires",
 )
-def flag_catalogue(_actor: CurrentUser = Depends(any_user)) -> dict[str, Any]:
+async def flag_catalogue(_actor: CurrentUser = Depends(any_user)) -> dict[str, Any]:
     """The SPEC §3 table as data — used by the pricing/upgrade copy in the UI.
 
     It reads from :mod:`backend.app.config` rather than the database on purpose:

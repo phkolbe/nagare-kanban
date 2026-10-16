@@ -1,15 +1,19 @@
 """Shared pytest fixtures for the whole suite.
 
-The database is built **once per session** into a temp file, seeded with the real
-:mod:`backend.app.seed` generator, and every test in every module reads from it.
-Seeding takes a couple of seconds; doing it per test would make the suite
+The database is built **once per session**, migrated with Alembic and seeded with
+the real :mod:`backend.app.seed` generator, and every test in every module reads
+from it. Seeding takes a couple of seconds; doing it per test would make the suite
 unusable.
+
+It is a temp SQLite file by default. With ``TEST_DATABASE_URL`` set (for example
+``postgresql+asyncpg://nagare:nagare@localhost:5432/nagare_teste``) the same suite
+runs against PostgreSQL — the database of record — after resetting its schema.
 
 Fixtures other test modules rely on:
 
 ``client``      FastAPI ``TestClient`` bound to the seeded database
 ``auth``        ``auth("editor")`` -> ``{"Authorization": "Bearer …"}``
-``db``          a :class:`backend.app.db.Database` on the same file
+``db``          a raw-SQL handle (:mod:`sqlhelper`) on the same database
 ``board``       the seeded "Nagare Flow" operational board row
 ``columns``     its columns, ordered, as a list of dicts
 ``sim_board``   the seeded "Scenario Lab" simulator board row
@@ -17,9 +21,12 @@ Fixtures other test modules rely on:
 
 from __future__ import annotations
 
+import asyncio
+import os
 import sys
+from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any
 
 import pytest
 
@@ -27,10 +34,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from backend.app import db as db_module  # noqa: E402
 from backend.app.config import settings  # noqa: E402
-from backend.app.db import Database, connect  # noqa: E402
+from backend.app.db import Database as AppDatabase  # noqa: E402
+from backend.app.db import migrate_sync, reset_database  # noqa: E402
 from backend.app.security import encode_token  # noqa: E402
+
+from sqlhelper import Database, connect  # noqa: E402
 
 ROLE_EMAILS: dict[str, str] = {
     "master": "master@nagare.app",
@@ -42,38 +51,45 @@ ROLE_EMAILS: dict[str, str] = {
 }
 
 
-@pytest.fixture(scope="session")
-def db_path(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
-    """A temp sqlite file, migrated and seeded once for the whole session."""
-    path = tmp_path_factory.mktemp("nagare-db") / "test.db"
+async def _seed(url: str) -> None:
+    from backend.app.seed import seed
 
-    # Point the process-wide settings at the temp file so module-level helpers
-    # (db.q, seed, MCP-style scripts) hit the same database as the dependency.
-    original = settings.db_path
-    settings.db_path = path
-    db_module.close_thread_connection()
-
-    from backend.app.seed import seed  # imported late: it reads settings.db_path
-
-    database = Database(connect(path))
+    database = AppDatabase(url)
     try:
-        db_module.migrate(database)
-        seed(database)
+        async with database.sessions() as session:
+            await seed(session)
     finally:
-        database.close()
-
-    yield path
-
-    db_module.close_thread_connection()
-    settings.db_path = original
+        await database.dispose()
 
 
 @pytest.fixture(scope="session")
-def app(db_path: Path):
-    """The FastAPI application wired to the seeded temp database."""
+def database_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
+    """A migrated and seeded database for the whole session."""
+    url = os.environ.get("TEST_DATABASE_URL")
+    if url:
+        reset_database(url)
+    else:
+        path = tmp_path_factory.mktemp("nagare-db") / "test.db"
+        url = f"sqlite+aiosqlite:///{path.as_posix()}"
+
+    # Point the process-wide settings at the test database so anything that reads
+    # them (the app factory, scripts) hits the same place as the fixtures.
+    original = settings.database_url
+    settings.database_url = url
+    migrate_sync(url)
+    asyncio.run(_seed(url))
+
+    yield url
+
+    settings.database_url = original
+
+
+@pytest.fixture(scope="session")
+def app(database_url: str):
+    """The FastAPI application wired to the seeded test database."""
     from backend.app.main import create_app
 
-    return create_app(db_path=db_path)
+    return create_app(database_url=database_url)
 
 
 @pytest.fixture(scope="session")
@@ -86,9 +102,9 @@ def client(app) -> Iterator[Any]:
 
 
 @pytest.fixture()
-def db(db_path: Path) -> Iterator[Database]:
-    """A fresh connection to the seeded database, closed after the test."""
-    database = Database(connect(db_path))
+def db(database_url: str) -> Iterator[Database]:
+    """A fresh raw-SQL handle on the seeded database, closed after the test."""
+    database = connect(database_url)
     try:
         yield database
     finally:
@@ -96,8 +112,8 @@ def db(db_path: Path) -> Iterator[Database]:
 
 
 @pytest.fixture(scope="session")
-def _user_rows(db_path: Path) -> dict[str, dict[str, Any]]:
-    database = Database(connect(db_path))
+def _user_rows(database_url: str) -> dict[str, dict[str, Any]]:
+    database = connect(database_url)
     try:
         return {row["role"]: row for row in database.q("SELECT * FROM users")}
     finally:
@@ -109,8 +125,8 @@ def auth(client, _user_rows) -> Callable[[str], dict[str, str]]:
     """Return ``auth(role)`` producing an ``Authorization`` header for that role.
 
     Prefers a real ``POST /auth/login`` round trip so the header exercises the
-    same code path the browser does; falls back to minting the token directly
-    while the auth router is still being written.
+    same code path the browser does; the non-interactive ``system`` identity gets
+    its token minted directly.
     """
     cache: dict[str, str] = {}
 
@@ -123,15 +139,12 @@ def auth(client, _user_rows) -> Callable[[str], dict[str, str]]:
 
         token: str | None = None
         if role not in {"system"}:
-            try:
-                response = client.post(
-                    "/api/v1/auth/login",
-                    json={"email": email, "password": settings.demo_password},
-                )
-                if response.status_code == 200:
-                    token = response.json().get("access_token")
-            except Exception:  # pragma: no cover - router not ready yet
-                token = None
+            response = client.post(
+                "/api/v1/auth/login",
+                json={"email": email, "password": settings.demo_password},
+            )
+            if response.status_code == 200:
+                token = response.json().get("access_token")
 
         if not token:
             row = _user_rows[role]
@@ -173,9 +186,7 @@ def sim_board(db: Database) -> dict[str, Any]:
 @pytest.fixture()
 def columns(db: Database, board: dict[str, Any]) -> list[dict[str, Any]]:
     """The operational board's columns in flow order."""
-    return db.q(
-        "SELECT * FROM columns WHERE board_id = ? ORDER BY position", board["id"]
-    )
+    return db.q("SELECT * FROM columns WHERE board_id = ? ORDER BY position", board["id"])
 
 
 @pytest.fixture()

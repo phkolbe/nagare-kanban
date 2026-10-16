@@ -25,11 +25,12 @@ seeded "Nagare Flow" board is never written to from here.
 from __future__ import annotations
 
 import uuid
-from typing import Any, Callable, Iterator
+from collections.abc import Callable, Iterator
+from typing import Any
 
 import pytest
 
-from backend.app.db import Database
+from sqlhelper import Database
 
 API = "/api/v1"
 
@@ -149,7 +150,12 @@ def test_a_column_can_be_created_in_every_segment_and_kind(client, master, new_b
 
     board = get_board(client, master, board_id)
     assert names_in_order(board) == [
-        "Envelope", "Intake", "Shaping", "Build", "Review", "Delivered"
+        "Envelope",
+        "Intake",
+        "Shaping",
+        "Build",
+        "Review",
+        "Delivered",
     ]
     assert_dense(board)
     by_id = {c["id"]: c for c in board["columns"]}
@@ -162,9 +168,16 @@ def test_a_column_can_be_created_in_every_segment_and_kind(client, master, new_b
 
     # Every optional field on the create payload round-trips.
     detailed = add_column(
-        client, master, board_id,
-        name="Buffer", segment="downstream", kind="queue",
-        wip_min=1, wip_max=4, color="#3b7ea1", description="Waiting on the release train.",
+        client,
+        master,
+        board_id,
+        name="Buffer",
+        segment="downstream",
+        kind="queue",
+        wip_min=1,
+        wip_max=4,
+        color="#3b7ea1",
+        description="Waiting on the release train.",
     )
     assert detailed["wip_min"] == 1 and detailed["wip_max"] == 4
     assert detailed["color"] == "#3b7ea1"
@@ -180,24 +193,18 @@ def test_a_column_is_renamed_and_re_kinded_between_queue_and_activity(
     columns = build_flow(client, master, board_id)
     review = columns["Review"]["id"]
 
-    renamed = client.patch(
-        f"{API}/columns/{review}", json={"name": "Verify"}, headers=master
-    )
+    renamed = client.patch(f"{API}/columns/{review}", json={"name": "Verify"}, headers=master)
     assert renamed.status_code == 200, renamed.text
     assert renamed.json()["name"] == "Verify"
     assert renamed.json()["kind"] == "queue"
 
     # queue -> activity: the column now accrues touch time instead of wait time,
     # which is the whole reason the structure editor explains the choice.
-    to_activity = client.patch(
-        f"{API}/columns/{review}", json={"kind": "activity"}, headers=master
-    )
+    to_activity = client.patch(f"{API}/columns/{review}", json={"kind": "activity"}, headers=master)
     assert to_activity.status_code == 200, to_activity.text
     assert to_activity.json()["kind"] == "activity"
 
-    back_to_queue = client.patch(
-        f"{API}/columns/{review}", json={"kind": "queue"}, headers=master
-    )
+    back_to_queue = client.patch(f"{API}/columns/{review}", json={"kind": "queue"}, headers=master)
     assert back_to_queue.status_code == 200, back_to_queue.text
     assert back_to_queue.json()["kind"] == "queue"
 
@@ -206,9 +213,7 @@ def test_a_column_is_renamed_and_re_kinded_between_queue_and_activity(
     assert points(board) == (columns["Build"]["id"], columns["Delivered"]["id"])
 
 
-def test_column_shape_rules_are_refused_with_a_readable_conflict(
-    client, master, new_board
-) -> None:
+def test_column_shape_rules_are_refused_with_a_readable_conflict(client, master, new_board) -> None:
     board_id = new_board()["id"]
     columns = build_flow(client, master, board_id)
 
@@ -284,12 +289,23 @@ def test_an_out_of_range_position_is_refused_instead_of_silently_clamped(
 
     # An in-range index inserts exactly where it was asked to.
     inserted = add_column(
-        client, master, board_id,
-        name="Ready", segment="downstream", kind="queue", position=3,
+        client,
+        master,
+        board_id,
+        name="Ready",
+        segment="downstream",
+        kind="queue",
+        position=3,
     )
     board = get_board(client, master, board_id)
     assert names_in_order(board) == [
-        "Envelope", "Intake", "Shaping", "Ready", "Build", "Review", "Delivered"
+        "Envelope",
+        "Intake",
+        "Shaping",
+        "Ready",
+        "Build",
+        "Review",
+        "Delivered",
     ]
     assert_dense(board)
     assert points(board)[0] == inserted["id"], "the new first downstream column commits"
@@ -300,9 +316,7 @@ def test_the_last_done_column_cannot_be_re_kinded_away(client, master, new_board
     columns = build_flow(client, master, board_id)
     delivered = columns["Delivered"]["id"]
 
-    refused = client.patch(
-        f"{API}/columns/{delivered}", json={"kind": "queue"}, headers=master
-    )
+    refused = client.patch(f"{API}/columns/{delivered}", json={"kind": "queue"}, headers=master)
     assert refused.status_code == 409
     body = refused.json()["error"]
     assert body["code"] == "invalid_structure"
@@ -316,9 +330,7 @@ def test_the_last_done_column_cannot_be_re_kinded_away(client, master, new_board
     second_done = add_column(
         client, master, board_id, name="Shipped", segment="downstream", kind="done"
     )
-    allowed = client.patch(
-        f"{API}/columns/{delivered}", json={"kind": "queue"}, headers=master
-    )
+    allowed = client.patch(f"{API}/columns/{delivered}", json={"kind": "queue"}, headers=master)
     assert allowed.status_code == 200, allowed.text
     board = get_board(client, master, board_id)
     assert points(board)[1] == second_done["id"], "the delivery point moved to the last done"
@@ -333,7 +345,9 @@ def test_changing_a_segment_moves_the_commitment_point(client, master, new_board
     board_id = new_board()["id"]
     columns = build_flow(client, master, board_id)
     build, review, delivered = (
-        columns["Build"]["id"], columns["Review"]["id"], columns["Delivered"]["id"]
+        columns["Build"]["id"],
+        columns["Review"]["id"],
+        columns["Delivered"]["id"],
     )
 
     assert points(get_board(client, master, board_id))[0] == build
@@ -349,7 +363,12 @@ def test_changing_a_segment_moves_the_commitment_point(client, master, new_board
     board = get_board(client, master, board_id)
     assert_dense(board)
     assert names_in_order(board) == [
-        "Envelope", "Intake", "Shaping", "Build", "Review", "Delivered"
+        "Envelope",
+        "Intake",
+        "Shaping",
+        "Build",
+        "Review",
+        "Delivered",
     ]
     assert points(board) == (review, delivered)
 
@@ -378,15 +397,24 @@ def test_reorder_keeps_positions_dense_and_the_commitment_point_true(
         f"{API}/boards/{board_id}/columns/reorder",
         json={
             "ordered_ids": [
-                ids["Envelope"], ids["Shaping"], ids["Intake"],
-                ids["Review"], ids["Build"], ids["Delivered"],
+                ids["Envelope"],
+                ids["Shaping"],
+                ids["Intake"],
+                ids["Review"],
+                ids["Build"],
+                ids["Delivered"],
             ]
         },
         headers=master,
     )
     assert reordered.status_code == 200, reordered.text
     assert [c["name"] for c in reordered.json()["items"]] == [
-        "Envelope", "Shaping", "Intake", "Review", "Build", "Delivered"
+        "Envelope",
+        "Shaping",
+        "Intake",
+        "Review",
+        "Build",
+        "Delivered",
     ]
     board = get_board(client, master, board_id)
     assert_dense(board)
@@ -395,9 +423,7 @@ def test_reorder_keeps_positions_dense_and_the_commitment_point_true(
     )
 
 
-def test_reorder_refuses_foreign_ids_partial_lists_and_repeats(
-    client, master, new_board
-) -> None:
+def test_reorder_refuses_foreign_ids_partial_lists_and_repeats(client, master, new_board) -> None:
     board_id = new_board()["id"]
     other_board_id = new_board()["id"]
     columns = build_flow(client, master, board_id)
@@ -424,7 +450,9 @@ def test_reorder_refuses_foreign_ids_partial_lists_and_repeats(
     assert body["code"] == "incomplete_column_order"
     assert body["details"]["expected"] == 6 and body["details"]["received"] == 3
     assert {entry["name"] for entry in body["details"]["missing"]} == {
-        "Build", "Review", "Delivered"
+        "Build",
+        "Review",
+        "Delivered",
     }
 
     repeated = client.post(
@@ -438,7 +466,12 @@ def test_reorder_refuses_foreign_ids_partial_lists_and_repeats(
     # None of the three rejected orders touched the board.
     board = get_board(client, master, board_id)
     assert names_in_order(board) == [
-        "Envelope", "Intake", "Shaping", "Build", "Review", "Delivered"
+        "Envelope",
+        "Intake",
+        "Shaping",
+        "Build",
+        "Review",
+        "Delivered",
     ]
     assert_dense(board)
 
@@ -504,10 +537,13 @@ def test_drain_then_delete_moves_every_card_and_keeps_its_history(
         assert drain_row["seconds_in_from_column"] is not None
         assert drain_row["seconds_in_from_column"] >= 0
         assert "Intake" in (drain_row["note"] or "")
-        labels = [entry["label"] for entry in
-                  client.get(f"{API}/cards/{card['id']}/history", headers=master)
-                  .json()["timeline"]]
-        assert any("Moved from “Intake” to “Build”" == label for label in labels)
+        labels = [
+            entry["label"]
+            for entry in client.get(f"{API}/cards/{card['id']}/history", headers=master).json()[
+                "timeline"
+            ]
+        ]
+        assert any(label == "Moved from “Intake” to “Build”" for label in labels)
 
     # The WIP badge the UI repaints after a drain agrees with the move.
     wip = get_wip(client, master, board_id)
@@ -518,7 +554,7 @@ def test_drain_then_delete_moves_every_card_and_keeps_its_history(
     # one measuring how long the card sat in Intake.
     for card in cards:
         rows = db.q(
-            "SELECT * FROM card_movements WHERE card_id = ? ORDER BY moved_at, rowid",
+            "SELECT * FROM card_movements WHERE card_id = ? ORDER BY moved_at, id",
             card["id"],
         )
         assert [row["to_column_id"] for row in rows] == [intake, build]
@@ -534,7 +570,7 @@ def test_drain_then_delete_moves_every_card_and_keeps_its_history(
 
     for card in cards:
         rows = db.q(
-            "SELECT * FROM card_movements WHERE card_id = ? ORDER BY moved_at, rowid",
+            "SELECT * FROM card_movements WHERE card_id = ? ORDER BY moved_at, id",
             card["id"],
         )
         # The drain row survives the delete — the card's arrival in Build, the
@@ -552,8 +588,7 @@ def test_drain_then_delete_moves_every_card_and_keeps_its_history(
             card["id"],
         )
         assert any(
-            event["old_value"] == "Intake" and event["new_value"] == "Build"
-            for event in events
+            event["old_value"] == "Intake" and event["new_value"] == "Build" for event in events
         ), "card_events has no foreign key to columns, so the story is still readable"
         card_now = client.get(f"{API}/cards/{card['id']}", headers=master).json()
         assert card_now["column_id"] == build
@@ -575,9 +610,7 @@ def test_drain_may_go_backwards_and_says_so_in_the_audit_trail(
     assert drained.json()["moved"] == 1
     assert drained.json()["is_backward"] is True
 
-    rows = db.q(
-        "SELECT * FROM card_movements WHERE card_id = ? ORDER BY moved_at, rowid", card["id"]
-    )
+    rows = db.q("SELECT * FROM card_movements WHERE card_id = ? ORDER BY moved_at, id", card["id"])
     assert rows[-1]["is_backward"] == 1
     assert rows[-1]["from_column_id"] == build and rows[-1]["to_column_id"] == intake
     overrides = db.q(
@@ -595,15 +628,11 @@ def test_drain_may_go_backwards_and_says_so_in_the_audit_trail(
     assert client.delete(f"{API}/columns/{build}", headers=master).status_code == 200
 
 
-def test_draining_an_envelope_column_opens_its_sealed_demands(
-    client, master, new_board
-) -> None:
+def test_draining_an_envelope_column_opens_its_sealed_demands(client, master, new_board) -> None:
     board_id = new_board()["id"]
     columns = build_flow(client, master, board_id)
     envelope, intake = columns["Envelope"]["id"], columns["Intake"]["id"]
-    sealed = make_card(
-        client, master, board_id, envelope, "Unread demand", envelope_state="sealed"
-    )
+    sealed = make_card(client, master, board_id, envelope, "Unread demand", envelope_state="sealed")
     assert sealed["envelope_state"] == "sealed"
 
     drained = client.post(
@@ -702,9 +731,7 @@ def test_group_create_rename_wip_and_delete(client, master, new_board) -> None:
     assert renamed.json()["wip_max"] == 9
     assert renamed.json()["wip_min"] == 1
 
-    bad_range = client.patch(
-        f"{API}/groups/{group_id}", json={"wip_min": 12}, headers=master
-    )
+    bad_range = client.patch(f"{API}/groups/{group_id}", json={"wip_min": 12}, headers=master)
     assert bad_range.status_code == 400
     assert bad_range.json()["error"]["code"] == "invalid_wip_range"
 
@@ -728,9 +755,7 @@ def test_group_create_rename_wip_and_delete(client, master, new_board) -> None:
     assert_dense(board)
 
 
-def test_a_non_contiguous_group_is_refused_and_names_the_columns(
-    client, master, new_board
-) -> None:
+def test_a_non_contiguous_group_is_refused_and_names_the_columns(client, master, new_board) -> None:
     board_id = new_board()["id"]
     columns = build_flow(client, master, board_id)
 
@@ -774,7 +799,8 @@ def test_a_non_contiguous_group_is_refused_and_names_the_columns(
     assert broken_patch.json()["error"]["code"] == "group_not_contiguous"
     board = get_board(client, master, board_id)
     assert {c["name"] for c in board["columns"] if c["group_id"] == group_id} == {
-        "Intake", "Shaping"
+        "Intake",
+        "Shaping",
     }
 
     # Re-segmenting a member out of the run breaks the span too, and is refused
@@ -794,9 +820,7 @@ def test_a_non_contiguous_group_is_refused_and_names_the_columns(
 # ---------------------------------------------------------------------------
 
 
-def test_wip_limits_are_editable_at_column_group_and_flow_scope(
-    client, master, new_board
-) -> None:
+def test_wip_limits_are_editable_at_column_group_and_flow_scope(client, master, new_board) -> None:
     board_id = new_board(wip_min=None, wip_max=None)["id"]
     columns = build_flow(client, master, board_id)
     build, review = columns["Build"]["id"], columns["Review"]["id"]
@@ -913,12 +937,8 @@ def test_structure_writes_are_refused_for_editors_and_viewers(
             json={"ordered_ids": [c["id"] for c in columns.values()]},
             headers=headers,
         ),
-        client.post(
-            f"{API}/columns/{build}/drain", json={"to_column_id": review}, headers=headers
-        ),
-        client.post(
-            f"{API}/boards/{board_id}/groups", json={"name": "Theirs"}, headers=headers
-        ),
+        client.post(f"{API}/columns/{build}/drain", json={"to_column_id": review}, headers=headers),
+        client.post(f"{API}/boards/{board_id}/groups", json={"name": "Theirs"}, headers=headers),
         client.patch(f"{API}/groups/{group_id}", json={"wip_max": 99}, headers=headers),
         client.delete(f"{API}/groups/{group_id}", headers=headers),
         client.patch(f"{API}/boards/{board_id}", json={"wip_max": 99}, headers=headers),
@@ -934,14 +954,17 @@ def test_structure_writes_are_refused_for_editors_and_viewers(
     # Nothing leaked through.
     board = get_board(client, master, board_id)
     assert names_in_order(board) == [
-        "Envelope", "Intake", "Shaping", "Build", "Review", "Delivered"
+        "Envelope",
+        "Intake",
+        "Shaping",
+        "Build",
+        "Review",
+        "Delivered",
     ]
     assert get_wip(client, master, board_id)["columns"][build]["count"] == 1
 
 
-def test_the_simulator_role_shapes_only_its_own_boards(
-    client, auth, master, new_board
-) -> None:
+def test_the_simulator_role_shapes_only_its_own_boards(client, auth, master, new_board) -> None:
     """SPEC §4: ``simulator`` owns ``kind='simulator'`` boards and nothing else.
 
     The structure routes declare a role gate wide enough to let this role
@@ -967,9 +990,9 @@ def test_the_simulator_role_shapes_only_its_own_boards(
         headers=simulator,
     )
     assert allowed.status_code == 201, allowed.text
-    assert client.delete(
-        f"{API}/columns/{allowed.json()['id']}", headers=simulator
-    ).status_code == 200
+    assert (
+        client.delete(f"{API}/columns/{allowed.json()['id']}", headers=simulator).status_code == 200
+    )
 
 
 @pytest.mark.parametrize("role", ["master", "administrator"])
@@ -984,18 +1007,28 @@ def test_structure_writes_are_allowed_for_master_and_administrator(
     created = add_column(
         client, headers, board_id, name="Staging", segment="downstream", kind="queue"
     )
-    assert client.patch(
-        f"{API}/columns/{created['id']}",
-        json={"name": "Staging area", "wip_max": 4},
-        headers=headers,
-    ).status_code == 200
-    assert client.post(
-        f"{API}/boards/{board_id}/columns/reorder",
-        json={"ordered_ids": [*[ids[n] for n in
-                                ("Envelope", "Intake", "Shaping", "Build", "Review")],
-                              created["id"], ids["Delivered"]]},
-        headers=headers,
-    ).status_code == 200
+    assert (
+        client.patch(
+            f"{API}/columns/{created['id']}",
+            json={"name": "Staging area", "wip_max": 4},
+            headers=headers,
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            f"{API}/boards/{board_id}/columns/reorder",
+            json={
+                "ordered_ids": [
+                    *[ids[n] for n in ("Envelope", "Intake", "Shaping", "Build", "Review")],
+                    created["id"],
+                    ids["Delivered"],
+                ]
+            },
+            headers=headers,
+        ).status_code
+        == 200
+    )
 
     group = client.post(
         f"{API}/boards/{board_id}/groups",
@@ -1003,12 +1036,13 @@ def test_structure_writes_are_allowed_for_master_and_administrator(
         headers=headers,
     )
     assert group.status_code == 201, group.text
-    assert client.patch(
-        f"{API}/groups/{group.json()['id']}", json={"wip_max": 7}, headers=headers
-    ).status_code == 200
-    assert client.delete(
-        f"{API}/groups/{group.json()['id']}", headers=headers
-    ).status_code == 200
+    assert (
+        client.patch(
+            f"{API}/groups/{group.json()['id']}", json={"wip_max": 7}, headers=headers
+        ).status_code
+        == 200
+    )
+    assert client.delete(f"{API}/groups/{group.json()['id']}", headers=headers).status_code == 200
 
     make_card(client, master, board_id, created["id"], "Draining me")
     drained = client.post(

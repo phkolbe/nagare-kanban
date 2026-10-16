@@ -18,10 +18,15 @@ definition of column ordering, WIP evaluation and event writing.
 
 from __future__ import annotations
 
-from typing import Any, Iterable, Literal
+from collections.abc import Iterable
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import ConfigDict
+from sqlalchemy import Select, String, case, cast, delete, func, or_, select, type_coerce, update
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from ..config import (
     CARD_SIZES,
@@ -29,17 +34,31 @@ from ..config import (
     SERVICE_CLASSES,
     VALUE_AREAS,
 )
-from ..db import Database, new_id, seconds_between, utcnow
+from ..db import new_id, seconds_between, utcnow
 from ..deps import (
     CurrentUser,
     can_write_board,
     get_current_user,
-    get_db,
+    get_session,
     require_board_write,
     require_board_write_target,
 )
 from ..errors import BadRequest, Conflict, Forbidden, NotFound
-from ..models import Card, json_dumps
+from ..models import (
+    Blocker,
+    Board,
+    BoardColumn,
+    Card,
+    CardEvent,
+    CardMovement,
+    CardTask,
+    ColumnGroup,
+    Comment,
+    Project,
+    User,
+    as_dict,
+    json_dumps,
+)
 from ..schemas import (
     BlockerOut,
     BlockRequest,
@@ -57,15 +76,14 @@ from ..schemas import (
     TaskOut,
     TaskUpdate,
 )
+from ..sqltypes import from_iso, to_iso
 
 router = APIRouter(tags=["cards"])
 
 __all__ = [
-    "router",
-    # helpers shared with routers.movements
-    "CARD_SELECT",
     "board_columns",
     "card_payload",
+    "card_select",
     "column_order",
     "commitment_column",
     "delivery_column",
@@ -73,9 +91,11 @@ __all__ = [
     "fetch_card",
     "flow_totals",
     "load_board",
+    "movement_select",
     "next_card_key",
     "record_event",
     "require_card_write",
+    "router",
     "sle_risk",
     "wip_status",
 ]
@@ -104,42 +124,124 @@ class CardDetail(CardDetailOut):
 
 
 # ---------------------------------------------------------------------------
-# SQL fragments
+# projections
 # ---------------------------------------------------------------------------
 
-#: Every card read goes through this projection so a card looks the same in the
-#: list, in the drawer and in a move response.
-CARD_SELECT = """
-SELECT c.*,
-       p.key   AS project_key,
-       p.name  AS project_name,
-       p.color AS project_color,
-       u.name  AS assignee_name,
-       col.name    AS column_name,
-       col.kind    AS column_kind,
-       col.segment AS column_segment,
-       col.position AS column_position,
-       col.is_commitment_point AS column_is_commitment_point,
-       col.is_delivery_point   AS column_is_delivery_point,
-       (SELECT COUNT(*) FROM card_tasks t WHERE t.card_id = c.id) AS task_total,
-       (SELECT COUNT(*) FROM card_tasks t WHERE t.card_id = c.id AND t.is_done = 1)
-           AS task_done,
-       (SELECT MIN(b.started_at) FROM blockers b
-         WHERE b.card_id = c.id AND b.ended_at IS NULL) AS blocked_since
-  FROM cards c
-  LEFT JOIN projects p ON p.id = c.project_id
-  LEFT JOIN users    u ON u.id = c.assignee_id
-  JOIN columns     col ON col.id = c.column_id
-"""
+#: The card columns, in declaration order — the base of every card payload.
+_CARD_FIELDS: tuple[str, ...] = tuple(attr.key for attr in Card.__mapper__.column_attrs)
 
-_SORTS: dict[str, str] = {
+#: Labels joined onto every card read, so a card looks the same in the list, in
+#: the drawer and in a move response.
+_EXTRA_LABELS: tuple[str, ...] = (
+    "project_key",
+    "project_name",
+    "project_color",
+    "assignee_name",
+    "column_name",
+    "column_kind",
+    "column_segment",
+    "column_position",
+    "column_is_commitment_point",
+    "column_is_delivery_point",
+    "task_total",
+    "task_done",
+    "blocked_since",
+)
+
+
+def card_select() -> Select[Any]:
+    """``SELECT`` of a card plus project, assignee, column and task/blocker counts."""
+    task_total = (
+        select(func.count()).where(CardTask.card_id == Card.id).correlate(Card).scalar_subquery()
+    )
+    task_done = (
+        select(func.count())
+        .where(CardTask.card_id == Card.id, CardTask.is_done.is_(True))
+        .correlate(Card)
+        .scalar_subquery()
+    )
+    blocked_since = (
+        select(func.min(Blocker.started_at))
+        .where(Blocker.card_id == Card.id, Blocker.ended_at.is_(None))
+        .correlate(Card)
+        .scalar_subquery()
+    )
+    return (
+        select(
+            Card,
+            Project.key.label("project_key"),
+            Project.name.label("project_name"),
+            Project.color.label("project_color"),
+            User.name.label("assignee_name"),
+            BoardColumn.name.label("column_name"),
+            BoardColumn.kind.label("column_kind"),
+            BoardColumn.segment.label("column_segment"),
+            BoardColumn.position.label("column_position"),
+            BoardColumn.is_commitment_point.label("column_is_commitment_point"),
+            BoardColumn.is_delivery_point.label("column_is_delivery_point"),
+            task_total.label("task_total"),
+            task_done.label("task_done"),
+            blocked_since.label("blocked_since"),
+        )
+        .outerjoin(Project, Project.id == Card.project_id)
+        .outerjoin(User, User.id == Card.assignee_id)
+        .join(BoardColumn, BoardColumn.id == Card.column_id)
+    )
+
+
+def _card_row(result_row: Any) -> dict[str, Any]:
+    """One row of :func:`card_select` as the flat dict the payload builders read."""
+    data = as_dict(result_row[0]) or {}
+    mapping = result_row._mapping
+    for label in _EXTRA_LABELS:
+        data[label] = mapping[label]
+    return data
+
+
+def movement_select() -> Select[Any]:
+    """``SELECT`` of movements with the column and mover names resolved."""
+    from_column = aliased(BoardColumn)
+    to_column = aliased(BoardColumn)
+    return (
+        select(
+            CardMovement,
+            from_column.name.label("from_column_name"),
+            to_column.name.label("to_column_name"),
+            User.name.label("moved_by_name"),
+        )
+        .outerjoin(from_column, from_column.id == CardMovement.from_column_id)
+        .outerjoin(to_column, to_column.id == CardMovement.to_column_id)
+        .outerjoin(User, User.id == CardMovement.moved_by)
+    )
+
+
+def movement_row(result_row: Any) -> dict[str, Any]:
+    data = as_dict(result_row[0]) or {}
+    mapping = result_row._mapping
+    for label in ("from_column_name", "to_column_name", "moved_by_name"):
+        data[label] = mapping[label]
+    return data
+
+
+def _comment_select() -> Select[Any]:
+    return select(Comment, User.name.label("author_name")).outerjoin(
+        User, User.id == Comment.author_id
+    )
+
+
+def _comment_row(result_row: Any) -> dict[str, Any]:
+    data = as_dict(result_row[0]) or {}
+    data["author_name"] = result_row._mapping["author_name"]
+    return data
+
+
+_SORTS: dict[str, Any] = {
     # sort key -> ORDER BY expression (direction is applied by the caller)
-    "created_at": "c.created_at",
-    "aging": "COALESCE(c.committed_at, c.opened_at, c.created_at)",
-    "due_date": "c.due_date",
-    "title": "LOWER(c.title)",
-    "key": "c.key",
-    "position": "col.position, c.position",
+    "created_at": lambda: Card.created_at,
+    "aging": lambda: func.coalesce(Card.committed_at, Card.opened_at, Card.created_at),
+    "due_date": lambda: Card.due_date,
+    "title": lambda: func.lower(Card.title),
+    "key": lambda: Card.key,
 }
 
 #: Sorts whose natural reading is "biggest first".
@@ -186,15 +288,15 @@ def _bool(value: Any) -> bool:
     return bool(value) and value not in (0, "0", "false", "False")
 
 
-def load_board(db: Database, board_id: str) -> dict[str, Any]:
+async def load_board(s: AsyncSession, board_id: str) -> dict[str, Any]:
     """Board row or 404 — cards are always evaluated in the context of a board."""
-    row = db.q1("SELECT * FROM boards WHERE id = ?", board_id)
+    row = as_dict(await s.get(Board, board_id))
     if row is None:
         raise NotFound("Board", board_id, code="board_not_found")
     return row
 
 
-def board_columns(db: Database, board_id: str) -> list[dict[str, Any]]:
+async def board_columns(s: AsyncSession, board_id: str) -> list[dict[str, Any]]:
     """Every column of a board in **unified flow order**.
 
     SPEC §6.1 defines "forward" against the unified ordering: all upstream
@@ -203,11 +305,16 @@ def board_columns(db: Database, board_id: str) -> list[dict[str, Any]]:
     positions restart per segment working exactly like the seeded board, whose
     positions are already globally ordered.
     """
-    return db.q(
-        "SELECT * FROM columns WHERE board_id = ? "
-        "ORDER BY CASE segment WHEN 'upstream' THEN 0 ELSE 1 END, position, name",
-        board_id,
+    rows = await s.scalars(
+        select(BoardColumn)
+        .where(BoardColumn.board_id == board_id)
+        .order_by(
+            case((BoardColumn.segment == "upstream", 0), else_=1),
+            BoardColumn.position,
+            BoardColumn.name,
+        )
     )
+    return [as_dict(row) or {} for row in rows]
 
 
 def column_order(columns: list[dict[str, Any]]) -> dict[str, int]:
@@ -235,32 +342,34 @@ def delivery_column(columns: list[dict[str, Any]]) -> dict[str, Any] | None:
     return done[-1] if done else None
 
 
-def fetch_card(db: Database, card_id: str) -> dict[str, Any]:
+async def fetch_card(s: AsyncSession, card_id: str) -> dict[str, Any]:
     """Enriched card row or 404."""
-    row = db.q1(CARD_SELECT + " WHERE c.id = ?", card_id)
+    row = (await s.execute(card_select().where(Card.id == card_id))).first()
     if row is None:
         # Card keys (NGR-104) are the human handle; accepting one here makes the
         # API and the MCP server pleasant to drive without an id lookup first.
-        row = db.q1(CARD_SELECT + " WHERE c.key = ?", card_id)
+        row = (await s.execute(card_select().where(Card.key == card_id))).first()
     if row is None:
         raise NotFound("Card", card_id, code="card_not_found")
-    return row
+    return _card_row(row)
 
 
-def require_card_write(db: Database, user: CurrentUser, card: dict[str, Any]) -> dict[str, Any]:
+async def require_card_write(
+    s: AsyncSession, user: CurrentUser, card: dict[str, Any]
+) -> dict[str, Any]:
     """Authorise a write against the card's board; returns the board row.
 
     SPEC §4: editors, administrators, masters and the system identity work
     operational boards; the ``simulator`` role owns simulator boards; viewers
     never write.
     """
-    board = load_board(db, card["board_id"])
+    board = await load_board(s, card["board_id"])
     require_board_write(user, board)
     return board
 
 
 def record_event(
-    db: Database,
+    s: AsyncSession,
     card: dict[str, Any],
     event_type: str,
     *,
@@ -270,35 +379,38 @@ def record_event(
     new_value: Any = None,
     at: str | None = None,
 ) -> str:
-    """Append one row to ``card_events`` and return its id."""
+    """Append one row to ``card_events`` (in the caller's transaction); returns its id."""
     event_id = new_id()
-    db.ex(
-        "INSERT INTO card_events (id, card_id, board_id, actor_id, event_type, field, "
-        "old_value, new_value, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-        event_id,
-        card["id"],
-        card["board_id"],
-        actor_id,
-        event_type,
-        field,
-        None if old_value is None else str(old_value),
-        None if new_value is None else str(new_value),
-        at or utcnow(),
+    s.add(
+        CardEvent(
+            id=event_id,
+            card_id=card["id"],
+            board_id=card["board_id"],
+            actor_id=actor_id,
+            event_type=event_type,
+            field=field,
+            old_value=None if old_value is None else str(old_value),
+            new_value=None if new_value is None else str(new_value),
+            created_at=at or utcnow(),
+        )
     )
     return event_id
 
 
-def next_card_key(db: Database, prefix: str) -> str:
+async def next_card_key(s: AsyncSession, prefix: str, product_id: str | None = None) -> str:
     """Next ``PREFIX-nnn`` key, continuing the per-project counter.
 
     The seed starts each project at 101, so a fresh project's first card is
     ``KEY-101`` and an existing project continues from its highest number —
     including numbers that were skipped or deleted, which keeps keys stable and
-    never reuses a retired reference.
+    never reuses a retired reference. Keys are unique per product.
     """
+    query = select(Card.key).where(Card.key.like(f"{prefix}-%"))
+    if product_id is not None:
+        query = query.where(Card.product_id == product_id)
     highest = 100
-    for row in db.q("SELECT key FROM cards WHERE key LIKE ?", f"{prefix}-%"):
-        _, _, number = str(row["key"]).partition("-")
+    for key in await s.scalars(query):
+        _, _, number = str(key).partition("-")
         if number.isdigit():
             highest = max(highest, int(number))
     return f"{prefix}-{highest + 1}"
@@ -310,6 +422,14 @@ def _key_prefix(project: dict[str, Any] | None, board: dict[str, Any]) -> str:
         return str(project["key"]).upper()
     letters = [ch for ch in str(board.get("slug") or board.get("name") or "card") if ch.isalnum()]
     return ("".join(letters[:3]) or "CARD").upper()
+
+
+async def next_position(s: AsyncSession, column_id: str) -> int:
+    """The slot at the bottom of a column."""
+    highest = await s.scalar(
+        select(func.coalesce(func.max(Card.position), -1)).where(Card.column_id == column_id)
+    )
+    return int(highest if highest is not None else -1) + 1
 
 
 # ---------------------------------------------------------------------------
@@ -338,8 +458,23 @@ def _cell(count: int, minimum: int | None, maximum: int | None, label: str) -> d
     }
 
 
-def wip_status(
-    db: Database, board: dict[str, Any], columns: list[dict[str, Any]] | None = None
+async def flow_count(s: AsyncSession, board_id: str) -> int:
+    """WIP as SPEC §7.1 defines it: committed and not yet delivered."""
+    return int(
+        await s.scalar(
+            select(func.count()).where(
+                Card.board_id == board_id,
+                Card.archived.is_(False),
+                Card.committed_at.is_not(None),
+                Card.delivered_at.is_(None),
+            )
+        )
+        or 0
+    )
+
+
+async def wip_status(
+    s: AsyncSession, board: dict[str, Any], columns: list[dict[str, Any]] | None = None
 ) -> dict[str, Any]:
     """Live WIP for every column, every group and the whole flow.
 
@@ -349,13 +484,13 @@ def wip_status(
     not a "how many rows are on the screen" policy.
     """
     board_id = board["id"]
-    columns = columns if columns is not None else board_columns(db, board_id)
+    columns = columns if columns is not None else await board_columns(s, board_id)
     counts = {
-        row["column_id"]: int(row["n"])
-        for row in db.q(
-            "SELECT column_id, COUNT(*) AS n FROM cards "
-            "WHERE board_id = ? AND archived = 0 GROUP BY column_id",
-            board_id,
+        column_id: int(n)
+        for column_id, n in await s.execute(
+            select(Card.column_id, func.count())
+            .where(Card.board_id == board_id, Card.archived.is_(False))
+            .group_by(Card.column_id)
         )
     }
 
@@ -370,29 +505,20 @@ def wip_status(
             group_counts[column["group_id"]] = group_counts.get(column["group_id"], 0) + count
 
     group_cells: dict[str, dict[str, Any]] = {}
-    for group in db.q(
-        "SELECT * FROM column_groups WHERE board_id = ? ORDER BY position", board_id
+    for group in await s.scalars(
+        select(ColumnGroup).where(ColumnGroup.board_id == board_id).order_by(ColumnGroup.position)
     ):
-        group_cells[group["id"]] = _cell(
-            group_counts.get(group["id"], 0),
-            group.get("wip_min"),
-            group.get("wip_max"),
-            group["name"],
+        group_cells[group.id] = _cell(
+            group_counts.get(group.id, 0), group.wip_min, group.wip_max, group.name
         )
 
-    flow_count = int(
-        db.scalar(
-            "SELECT COUNT(*) FROM cards WHERE board_id = ? AND archived = 0 "
-            "AND committed_at IS NOT NULL AND delivered_at IS NULL",
-            board_id,
-        )
-        or 0
-    )
     return {
         "board_id": board_id,
         "columns": column_cells,
         "groups": group_cells,
-        "flow": _cell(flow_count, board.get("wip_min"), board.get("wip_max"), "Whole flow"),
+        "flow": _cell(
+            await flow_count(s, board_id), board.get("wip_min"), board.get("wip_max"), "Whole flow"
+        ),
     }
 
 
@@ -401,8 +527,8 @@ def wip_status(
 # ---------------------------------------------------------------------------
 
 
-def dwell_intervals(
-    db: Database,
+async def dwell_intervals(
+    s: AsyncSession,
     card: dict[str, Any],
     columns_by_id: dict[str, dict[str, Any]] | None = None,
     now: str | None = None,
@@ -418,12 +544,16 @@ def dwell_intervals(
     now = now or utcnow()
     if columns_by_id is None:
         columns_by_id = {
-            column["id"]: column for column in board_columns(db, card["board_id"])
+            column["id"]: column for column in await board_columns(s, card["board_id"])
         }
-    moves = db.q(
-        "SELECT * FROM card_movements WHERE card_id = ? ORDER BY moved_at, rowid",
-        card["id"],
-    )
+    moves = [
+        as_dict(move) or {}
+        for move in await s.scalars(
+            select(CardMovement)
+            .where(CardMovement.card_id == card["id"])
+            .order_by(CardMovement.moved_at, CardMovement.id)
+        )
+    ]
     intervals: list[dict[str, Any]] = []
     for index, move in enumerate(moves):
         column = columns_by_id.get(move["to_column_id"], {})
@@ -539,7 +669,6 @@ def sle_risk(board: dict[str, Any], card: dict[str, Any], now: str | None = None
 
 
 def card_payload(
-    db: Database,
     row: dict[str, Any],
     *,
     now: str | None = None,
@@ -547,7 +676,11 @@ def card_payload(
 ) -> dict[str, Any]:
     """Turn an enriched card row into the JSON shape every card endpoint returns."""
     now = now or utcnow()
-    data = (Card.from_row(row) or Card()).to_dict()
+    data = {field: row.get(field) for field in _CARD_FIELDS}
+    data["tags"] = list(row.get("tags") or [])
+    data["custom_fields"] = dict(row.get("custom_fields") or {})
+    data["is_blocked"] = _bool(row.get("is_blocked"))
+    data["archived"] = _bool(row.get("archived"))
     data.update(
         {
             "project_key": row.get("project_key"),
@@ -562,9 +695,7 @@ def card_payload(
             "blocked_since": row.get("blocked_since"),
             "age_days": _days(seconds_between(row.get("created_at"), now)),
             "aging_days": _days(
-                seconds_between(
-                    row.get("committed_at"), row.get("delivered_at") or now
-                )
+                seconds_between(row.get("committed_at"), row.get("delivered_at") or now)
             ),
             "is_in_flight": bool(row.get("committed_at")) and not row.get("delivered_at"),
         }
@@ -576,18 +707,14 @@ def card_payload(
     return data
 
 
-def _movement_rows(db: Database, card_id: str) -> list[dict[str, Any]]:
+async def _movement_rows(s: AsyncSession, card_id: str) -> list[dict[str, Any]]:
     """Movements for one card, newest last, with names resolved for display."""
-    return db.q(
-        "SELECT m.*, fc.name AS from_column_name, tc.name AS to_column_name, "
-        "u.name AS moved_by_name "
-        "FROM card_movements m "
-        "LEFT JOIN columns fc ON fc.id = m.from_column_id "
-        "LEFT JOIN columns tc ON tc.id = m.to_column_id "
-        "LEFT JOIN users u ON u.id = m.moved_by "
-        "WHERE m.card_id = ? ORDER BY m.moved_at, m.rowid",
-        card_id,
+    rows = await s.execute(
+        movement_select()
+        .where(CardMovement.card_id == card_id)
+        .order_by(CardMovement.moved_at, CardMovement.id)
     )
+    return [movement_row(row) for row in rows]
 
 
 def _movement_payload(row: dict[str, Any]) -> dict[str, Any]:
@@ -596,7 +723,6 @@ def _movement_payload(row: dict[str, Any]) -> dict[str, Any]:
     seconds = row.get("seconds_in_from_column")
     data["seconds_in_from_column"] = None if seconds is None else int(seconds)
     data["days_in_from_column"] = _days(None if seconds is None else float(seconds))
-    data.pop("rowid", None)
     return data
 
 
@@ -613,6 +739,45 @@ def _blocker_payload(row: dict[str, Any], now: str) -> dict[str, Any]:
     return data
 
 
+async def _tasks(s: AsyncSession, card_id: str) -> list[dict[str, Any]]:
+    rows = await s.scalars(
+        select(CardTask)
+        .where(CardTask.card_id == card_id)
+        .order_by(CardTask.position, CardTask.created_at)
+    )
+    return [as_dict(row) or {} for row in rows]
+
+
+async def _blockers(s: AsyncSession, card_id: str) -> list[dict[str, Any]]:
+    rows = await s.scalars(
+        select(Blocker).where(Blocker.card_id == card_id).order_by(Blocker.started_at)
+    )
+    return [as_dict(row) or {} for row in rows]
+
+
+async def _comments(s: AsyncSession, card_id: str) -> list[dict[str, Any]]:
+    rows = await s.execute(
+        _comment_select().where(Comment.card_id == card_id).order_by(Comment.created_at)
+    )
+    return [_comment_row(row) for row in rows]
+
+
+async def _user_exists(s: AsyncSession, user_id: str) -> bool:
+    return (await s.scalar(select(User.id).where(User.id == user_id))) is not None
+
+
+async def _project_exists(s: AsyncSession, project_id: str) -> bool:
+    return (await s.scalar(select(Project.id).where(Project.id == project_id))) is not None
+
+
+def _tag_condition(s: AsyncSession, tag: str) -> Any:
+    """``tags`` holds a JSON array of strings: match the element, never a substring."""
+    if s.get_bind().dialect.name == "postgresql":
+        return type_coerce(Card.tags, JSONB).contains([tag])
+    # Matching the quoted form keeps "api" from matching "api-gateway".
+    return cast(Card.tags, String).like(f'%"{tag}"%')
+
+
 # ---------------------------------------------------------------------------
 # GET /cards
 # ---------------------------------------------------------------------------
@@ -623,7 +788,7 @@ def _blocker_payload(row: dict[str, Any], now: str) -> dict[str, Any]:
     response_model=ListResponse[CardItem],
     summary="List cards with the full filter set",
 )
-def list_cards(
+async def list_cards(
     board_id: str | None = Query(None, description="Restrict to one board."),
     project_id: str | None = Query(None, description="Project id, or 'none' for unassigned."),
     service_class: str | None = Query(None, description="Comma-separated classes of service."),
@@ -644,7 +809,7 @@ def list_cards(
     order: SortOrder | None = Query(None),
     limit: int = Query(200, ge=1, le=1000),
     offset: int = Query(0, ge=0),
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Every documented filter, plus sorting and pagination.
@@ -653,32 +818,26 @@ def list_cards(
     of the *filtered* set, not of the page — the board and the filter bar both
     show "showing 50 of 214".
     """
-    where: list[str] = []
-    params: list[Any] = []
+    conditions: list[Any] = []
 
     if board_id:
-        where.append("c.board_id = ?")
-        params.append(board_id)
+        conditions.append(Card.board_id == board_id)
     if project_id:
         if project_id in {"none", "null", "unassigned"}:
-            where.append("c.project_id IS NULL")
+            conditions.append(Card.project_id.is_(None))
         else:
-            where.append("c.project_id = ?")
-            params.append(project_id)
+            conditions.append(Card.project_id == project_id)
     if assignee_id:
         if assignee_id in {"none", "null", "unassigned"}:
-            where.append("c.assignee_id IS NULL")
+            conditions.append(Card.assignee_id.is_(None))
         else:
-            where.append("c.assignee_id = ?")
-            params.append(assignee_id)
+            conditions.append(Card.assignee_id == assignee_id)
     if segment and segment != "unified":
-        where.append("col.segment = ?")
-        params.append(segment)
+        conditions.append(BoardColumn.segment == segment)
 
     columns = _split_csv(column_id)
     if columns:
-        where.append(f"c.column_id IN ({', '.join('?' for _ in columns)})")
-        params.extend(columns)
+        conditions.append(Card.column_id.in_(columns))
 
     for name, raw, allowed in (
         ("service_class", service_class, SERVICE_CLASSES),
@@ -688,44 +847,38 @@ def list_cards(
     ):
         values = _validate_enum(name, _split_csv(raw), allowed)
         if values:
-            where.append(f"c.{name} IN ({', '.join('?' for _ in values)})")
-            params.extend(values)
+            conditions.append(getattr(Card, name).in_(values))
 
     tags = _split_csv(tag)
     if tags:
-        # ``tags`` is a JSON array of strings; matching the quoted form keeps
-        # "api" from matching "api-gateway".
-        where.append("(" + " OR ".join("c.tags LIKE ?" for _ in tags) + ")")
-        params.extend(f'%"{value}"%' for value in tags)
+        conditions.append(or_(*(_tag_condition(s, value) for value in tags)))
 
     if q:
         needle = f"%{q.strip()}%"
-        where.append("(c.title LIKE ? OR c.description LIKE ? OR c.key LIKE ?)")
-        params.extend([needle, needle, needle])
-    if is_blocked is not None:
-        where.append("c.is_blocked = ?")
-        params.append(1 if is_blocked else 0)
-    if envelope_state:
-        where.append("c.envelope_state = ?")
-        params.append(envelope_state)
-    if due_before:
-        where.append("c.due_date IS NOT NULL AND c.due_date <= ?")
-        params.append(due_before)
-    if in_flight is not None:
-        where.append(
-            "c.committed_at IS NOT NULL AND c.delivered_at IS NULL"
-            if in_flight
-            else "(c.committed_at IS NULL OR c.delivered_at IS NOT NULL)"
+        conditions.append(
+            or_(Card.title.ilike(needle), Card.description.ilike(needle), Card.key.ilike(needle))
         )
-    where.append("c.archived = ?")
-    params.append(1 if archived else 0)
-
-    clause = " WHERE " + " AND ".join(where) if where else ""
+    if is_blocked is not None:
+        conditions.append(Card.is_blocked.is_(bool(is_blocked)))
+    if envelope_state:
+        conditions.append(Card.envelope_state == envelope_state)
+    if due_before:
+        conditions.append(Card.due_date.is_not(None))
+        conditions.append(Card.due_date <= due_before)
+    if in_flight is not None:
+        conditions.append(
+            (Card.committed_at.is_not(None) & Card.delivered_at.is_(None))
+            if in_flight
+            else (Card.committed_at.is_(None) | Card.delivered_at.is_not(None))
+        )
+    conditions.append(Card.archived.is_(bool(archived)))
 
     total = int(
-        db.scalar(
-            "SELECT COUNT(*) FROM cards c JOIN columns col ON col.id = c.column_id" + clause,
-            params,
+        await s.scalar(
+            select(func.count())
+            .select_from(Card)
+            .join(BoardColumn, BoardColumn.id == Card.column_id)
+            .where(*conditions)
         )
         or 0
     )
@@ -736,17 +889,22 @@ def list_cards(
     sql_direction = direction
     if sort == "aging":
         sql_direction = "asc" if direction == "desc" else "desc"
-    nulls_last = ""
-    if sort in {"due_date", "aging"}:
-        nulls_last = f"CASE WHEN {_SORTS[sort]} IS NULL THEN 1 ELSE 0 END, "
-    order_by = (
-        f" ORDER BY {nulls_last}{_SORTS[sort]} {sql_direction.upper()}, c.key ASC"
-        f" LIMIT ? OFFSET ?"
-    )
 
-    rows = db.q(CARD_SELECT + clause + order_by, [*params, limit, offset])
+    expressions = [BoardColumn.position, Card.position] if sort == "position" else [_SORTS[sort]()]
+    ordering: list[Any] = []
+    if sort in {"due_date", "aging"}:
+        ordering.append(case((expressions[0].is_(None), 1), else_=0))
+    ordering.extend(
+        expression.desc() if sql_direction == "desc" else expression.asc()
+        for expression in expressions
+    )
+    ordering.append(Card.key.asc())
+
+    rows = await s.execute(
+        card_select().where(*conditions).order_by(*ordering).limit(limit).offset(offset)
+    )
     now = utcnow()
-    return {"items": [card_payload(db, row, now=now) for row in rows], "total": total}
+    return {"items": [card_payload(_card_row(row), now=now) for row in rows], "total": total}
 
 
 # ---------------------------------------------------------------------------
@@ -760,9 +918,9 @@ def list_cards(
     status_code=201,
     summary="Create a card (writes its creation movement and event)",
 )
-def create_card(
+async def create_card(
     payload: CardCreate,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Create a card and open its history.
@@ -776,10 +934,10 @@ def create_card(
     """
     # Authorisation precedes existence: see deps.require_board_write_target.
     board = require_board_write_target(
-        user, db.q1("SELECT * FROM boards WHERE id = ?", payload.board_id), payload.board_id
+        user, as_dict(await s.get(Board, payload.board_id)), payload.board_id
     )
 
-    columns = board_columns(db, board["id"])
+    columns = await board_columns(s, board["id"])
     if not columns:
         raise BadRequest(
             "This board has no columns yet, so it cannot hold cards.",
@@ -817,95 +975,86 @@ def create_card(
 
     project = None
     if payload.project_id:
-        project = db.q1("SELECT * FROM projects WHERE id = ?", payload.project_id)
+        project = as_dict(await s.get(Project, payload.project_id))
         if project is None:
             raise NotFound("Project", payload.project_id, code="project_not_found")
-    if payload.assignee_id and not db.q1(
-        "SELECT id FROM users WHERE id = ?", payload.assignee_id
-    ):
+    if payload.assignee_id and not await _user_exists(s, payload.assignee_id):
         raise NotFound("User", payload.assignee_id, code="user_not_found")
 
     commitment = commitment_column(columns)
     delivery = delivery_column(columns)
     now = utcnow()
     committed_at = (
-        now
-        if commitment is not None and order[target["id"]] >= order[commitment["id"]]
-        else None
+        now if commitment is not None and order[target["id"]] >= order[commitment["id"]] else None
     )
     delivered_at = now if delivery is not None and target["id"] == delivery["id"] else None
     opened_at = None if payload.envelope_state == "sealed" else now
 
     card_id = new_id()
     prefix = _key_prefix(project, board)
-    position = (
-        int(
-            db.scalar(
-                "SELECT COALESCE(MAX(position), -1) FROM cards WHERE column_id = ?",
-                target["id"],
-            )
-            or -1
+    position = await next_position(s, target["id"])
+    key = await next_card_key(s, prefix, board["product_id"])
+
+    s.add(
+        Card(
+            id=card_id,
+            product_id=board["product_id"],
+            board_id=board["id"],
+            column_id=target["id"],
+            project_id=payload.project_id,
+            key=key,
+            title=payload.title,
+            description=payload.description,
+            service_class=payload.service_class,
+            assignee_id=payload.assignee_id,
+            requester=payload.requester,
+            size=payload.size,
+            value_area=payload.value_area,
+            demand_type=payload.demand_type,
+            due_date=payload.due_date,
+            position=position,
+            envelope_state=payload.envelope_state,
+            is_blocked=False,
+            tags=list(payload.tags),
+            custom_fields=dict(payload.custom_fields),
+            created_at=now,
+            opened_at=opened_at,
+            committed_at=committed_at,
+            delivered_at=delivered_at,
+            archived=False,
+            created_by=user["id"],
         )
-        + 1
     )
+    await s.flush()
+    s.add(
+        CardMovement(
+            id=new_id(),
+            card_id=card_id,
+            board_id=board["id"],
+            from_column_id=None,
+            to_column_id=target["id"],
+            from_segment=None,
+            to_segment=target["segment"],
+            moved_at=now,
+            moved_by=user["id"],
+            seconds_in_from_column=None,
+            note=None,
+            is_backward=False,
+            source="api" if user.get("role") == "system" else "ui",
+        )
+    )
+    record_event(
+        s,
+        {"id": card_id, "board_id": board["id"]},
+        "created",
+        actor_id=user["id"],
+        field="column",
+        new_value=target["name"],
+        at=now,
+    )
+    await s.commit()
 
-    with db.tx():
-        key = next_card_key(db, prefix)
-        db.ex(
-            "INSERT INTO cards (id, board_id, column_id, project_id, key, title, description, "
-            "service_class, assignee_id, requester, size, value_area, demand_type, due_date, "
-            "position, envelope_state, is_blocked, tags, custom_fields, created_at, opened_at, "
-            "committed_at, delivered_at, archived, created_by) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?,0,?)",
-            card_id,
-            board["id"],
-            target["id"],
-            payload.project_id,
-            key,
-            payload.title,
-            payload.description,
-            payload.service_class,
-            payload.assignee_id,
-            payload.requester,
-            payload.size,
-            payload.value_area,
-            payload.demand_type,
-            payload.due_date,
-            position,
-            payload.envelope_state,
-            json_dumps(payload.tags),
-            json_dumps(payload.custom_fields),
-            now,
-            opened_at,
-            committed_at,
-            delivered_at,
-            user["id"],
-        )
-        db.ex(
-            "INSERT INTO card_movements (id, card_id, board_id, from_column_id, to_column_id, "
-            "from_segment, to_segment, moved_at, moved_by, seconds_in_from_column, note, "
-            "is_backward, source) VALUES (?,?,?,NULL,?,NULL,?,?,?,NULL,?,0,?)",
-            new_id(),
-            card_id,
-            board["id"],
-            target["id"],
-            target["segment"],
-            now,
-            user["id"],
-            None,
-            "api" if user.get("role") == "system" else "ui",
-        )
-        record_event(
-            db,
-            {"id": card_id, "board_id": board["id"]},
-            "created",
-            actor_id=user["id"],
-            field="column",
-            new_value=target["name"],
-            at=now,
-        )
-
-    return card_payload(db, fetch_card(db, card_id), now=now, board=board)
+    return card_payload(await fetch_card(s, card_id), now=now, board=board)
 
 
 # ---------------------------------------------------------------------------
@@ -918,45 +1067,28 @@ def create_card(
     response_model=CardDetail,
     summary="One card with tasks, blockers, comments, movements and flow figures",
 )
-def get_card(
+async def get_card(
     card_id: str,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Everything the detail drawer renders in a single round trip."""
-    row = fetch_card(db, card_id)
-    board = load_board(db, row["board_id"])
-    columns = board_columns(db, board["id"])
+    row = await fetch_card(s, card_id)
+    board = await load_board(s, row["board_id"])
+    columns = await board_columns(s, board["id"])
     by_id = {column["id"]: column for column in columns}
     now = utcnow()
 
-    intervals = dwell_intervals(db, row, by_id, now)
-    data = card_payload(db, row, now=now, board=board)
+    intervals = await dwell_intervals(s, row, by_id, now)
+    data = card_payload(row, now=now, board=board)
     data.update(
         {
-            "tasks": [
-                _task_payload(task)
-                for task in db.q(
-                    "SELECT * FROM card_tasks WHERE card_id = ? ORDER BY position, created_at",
-                    row["id"],
-                )
-            ],
+            "tasks": [_task_payload(task) for task in await _tasks(s, row["id"])],
             "blockers": [
-                _blocker_payload(blocker, now)
-                for blocker in db.q(
-                    "SELECT * FROM blockers WHERE card_id = ? ORDER BY started_at", row["id"]
-                )
+                _blocker_payload(blocker, now) for blocker in await _blockers(s, row["id"])
             ],
-            "comments": [
-                dict(comment)
-                for comment in db.q(
-                    "SELECT cm.*, u.name AS author_name FROM comments cm "
-                    "LEFT JOIN users u ON u.id = cm.author_id "
-                    "WHERE cm.card_id = ? ORDER BY cm.created_at",
-                    row["id"],
-                )
-            ],
-            "movements": [_movement_payload(move) for move in _movement_rows(db, row["id"])],
+            "comments": await _comments(s, row["id"]),
+            "movements": [_movement_payload(move) for move in await _movement_rows(s, row["id"])],
             "intervals": intervals,
             "flow": flow_totals(row, intervals),
             "board": {
@@ -978,9 +1110,9 @@ def get_card(
 # PATCH /cards/{id}
 # ---------------------------------------------------------------------------
 
-#: Editable fields and the SQL column each maps to. ``column_id`` is missing on
-#: purpose: a column change is a *move* and must go through POST /cards/{id}/move
-#: so that it is measured, audited and WIP-checked.
+#: Editable fields. ``column_id`` is missing on purpose: a column change is a
+#: *move* and must go through POST /cards/{id}/move so that it is measured,
+#: audited and WIP-checked.
 _EDITABLE: tuple[str, ...] = (
     "title",
     "description",
@@ -999,6 +1131,7 @@ _EDITABLE: tuple[str, ...] = (
 )
 
 _JSON_FIELDS = {"tags", "custom_fields"}
+_INSTANT_FIELDS = {"due_date"}
 
 
 def _display(field: str, value: Any) -> str | None:
@@ -1012,20 +1145,28 @@ def _display(field: str, value: Any) -> str | None:
     return str(value)
 
 
+def _normalised(field: str, value: Any) -> Any:
+    """The value as the database will hand it back (instants in canonical ISO form)."""
+    if field in _INSTANT_FIELDS and value is not None:
+        moment = from_iso(value)
+        return to_iso(moment) if moment is not None else None
+    return value
+
+
 @router.patch(
     "/cards/{card_id}",
     response_model=CardItem,
     summary="Edit a card — one audit event per changed field",
 )
-def update_card(
+async def update_card(
     card_id: str,
     payload: CardUpdate,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Apply a partial update, writing one ``card_events`` row per changed field."""
-    row = fetch_card(db, card_id)
-    board = require_card_write(db, user, row)
+    row = await fetch_card(s, card_id)
+    board = await require_card_write(s, user, row)
 
     changes = payload.model_dump(exclude_unset=True)
     unknown = [field for field in changes if field not in _EDITABLE]
@@ -1036,50 +1177,49 @@ def update_card(
             details={"fields": sorted(unknown)},
         )
 
-    if changes.get("project_id"):
-        if not db.q1("SELECT id FROM projects WHERE id = ?", changes["project_id"]):
-            raise NotFound("Project", changes["project_id"], code="project_not_found")
-    if changes.get("assignee_id"):
-        if not db.q1("SELECT id FROM users WHERE id = ?", changes["assignee_id"]):
-            raise NotFound("User", changes["assignee_id"], code="user_not_found")
+    if changes.get("project_id") and not await _project_exists(s, changes["project_id"]):
+        raise NotFound("Project", changes["project_id"], code="project_not_found")
+    if changes.get("assignee_id") and not await _user_exists(s, changes["assignee_id"]):
+        raise NotFound("User", changes["assignee_id"], code="user_not_found")
 
-    current = Card.from_row(row) or Card()
     now = utcnow()
     applied: list[dict[str, Any]] = []
+    values: dict[str, Any] = {}
 
-    with db.tx():
-        for field in _EDITABLE:
-            if field not in changes:
-                continue
-            new_value = changes[field]
-            old_value = getattr(current, field)
-            if field in _JSON_FIELDS:
-                unchanged = json_dumps(old_value) == json_dumps(new_value)
-                stored: Any = json_dumps(new_value)
-            elif field == "archived":
-                unchanged = bool(old_value) == bool(new_value)
-                stored = 1 if new_value else 0
-            else:
-                unchanged = old_value == new_value
-                stored = new_value
-            if unchanged:
-                continue
-            db.ex(f"UPDATE cards SET {field} = ? WHERE id = ?", stored, row["id"])
-            record_event(
-                db,
-                row,
-                "archived" if field == "archived" and new_value else "updated",
-                actor_id=user["id"],
-                field=field,
-                old_value=_display(field, old_value),
-                new_value=_display(field, new_value),
-                at=now,
-            )
-            applied.append(
-                {"field": field, "old": _display(field, old_value), "new": _display(field, new_value)}
-            )
+    for field in _EDITABLE:
+        if field not in changes:
+            continue
+        new_value = _normalised(field, changes[field])
+        old_value = row.get(field)
+        if field in _JSON_FIELDS:
+            unchanged = json_dumps(old_value) == json_dumps(new_value)
+        elif field == "archived":
+            unchanged = bool(old_value) == bool(new_value)
+            new_value = bool(new_value)
+        else:
+            unchanged = old_value == new_value
+        if unchanged:
+            continue
+        values[field] = new_value
+        record_event(
+            s,
+            row,
+            "archived" if field == "archived" and new_value else "updated",
+            actor_id=user["id"],
+            field=field,
+            old_value=_display(field, old_value),
+            new_value=_display(field, new_value),
+            at=now,
+        )
+        applied.append(
+            {"field": field, "old": _display(field, old_value), "new": _display(field, new_value)}
+        )
 
-    data = card_payload(db, fetch_card(db, row["id"]), board=board)
+    if values:
+        await s.execute(update(Card).where(Card.id == row["id"]).values(**values))
+    await s.commit()
+
+    data = card_payload(await fetch_card(s, row["id"]), board=board)
     data["changed_fields"] = [change["field"] for change in applied]
     return data
 
@@ -1089,31 +1229,31 @@ def update_card(
     response_model=OkResponse,
     summary="Archive a card (soft delete — history is never destroyed)",
 )
-def delete_card(
+async def delete_card(
     card_id: str,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Archive rather than erase: the movement log feeds historic metrics.
 
     A hard delete would silently rewrite every chart that already counted this
-    card, so ``DELETE`` sets ``archived = 1`` and records an ``archived`` event.
+    card, so ``DELETE`` sets ``archived`` and records an ``archived`` event.
     """
-    row = fetch_card(db, card_id)
-    require_card_write(db, user, row)
+    row = await fetch_card(s, card_id)
+    await require_card_write(s, user, row)
     if _bool(row.get("archived")):
         return {"ok": True, "id": row["id"], "message": "Card was already archived."}
-    with db.tx():
-        db.ex("UPDATE cards SET archived = 1 WHERE id = ?", row["id"])
-        record_event(
-            db,
-            row,
-            "archived",
-            actor_id=user["id"],
-            field="archived",
-            old_value="false",
-            new_value="true",
-        )
+    await s.execute(update(Card).where(Card.id == row["id"]).values(archived=True))
+    record_event(
+        s,
+        row,
+        "archived",
+        actor_id=user["id"],
+        field="archived",
+        old_value="false",
+        new_value="true",
+    )
+    await s.commit()
     return {"ok": True, "id": row["id"], "message": f"{row['key']} archived."}
 
 
@@ -1127,16 +1267,14 @@ def delete_card(
     response_model=ListResponse[TaskOut],
     summary="List a card's tasks",
 )
-def list_tasks(
+async def list_tasks(
     card_id: str,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Checklist items in display order."""
-    row = fetch_card(db, card_id)
-    tasks = db.q(
-        "SELECT * FROM card_tasks WHERE card_id = ? ORDER BY position, created_at", row["id"]
-    )
+    row = await fetch_card(s, card_id)
+    tasks = await _tasks(s, row["id"])
     return {"items": [_task_payload(task) for task in tasks], "total": len(tasks)}
 
 
@@ -1146,127 +1284,127 @@ def list_tasks(
     status_code=201,
     summary="Add a task to a card",
 )
-def create_task(
+async def create_task(
     card_id: str,
     payload: TaskCreate,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Append a checklist item and record a ``task_added`` event."""
-    row = fetch_card(db, card_id)
-    require_card_write(db, user, row)
-    if payload.assignee_id and not db.q1(
-        "SELECT id FROM users WHERE id = ?", payload.assignee_id
-    ):
+    row = await fetch_card(s, card_id)
+    await require_card_write(s, user, row)
+    if payload.assignee_id and not await _user_exists(s, payload.assignee_id):
         raise NotFound("User", payload.assignee_id, code="user_not_found")
 
     now = utcnow()
     task_id = new_id()
-    position = (
-        payload.position
-        if payload.position is not None
-        else int(
-            db.scalar(
-                "SELECT COALESCE(MAX(position), -1) FROM card_tasks WHERE card_id = ?",
-                row["id"],
+    if payload.position is not None:
+        position = payload.position
+    else:
+        highest = await s.scalar(
+            select(func.coalesce(func.max(CardTask.position), -1)).where(
+                CardTask.card_id == row["id"]
             )
-            or -1
         )
-        + 1
+        position = int(highest if highest is not None else -1) + 1
+    task = CardTask(
+        id=task_id,
+        card_id=row["id"],
+        title=payload.title,
+        is_done=bool(payload.is_done),
+        assignee_id=payload.assignee_id,
+        position=position,
+        created_at=now,
+        completed_at=now if payload.is_done else None,
     )
-    with db.tx():
-        db.ex(
-            "INSERT INTO card_tasks (id, card_id, title, is_done, assignee_id, position, "
-            "created_at, completed_at) VALUES (?,?,?,?,?,?,?,?)",
-            task_id,
-            row["id"],
-            payload.title,
-            1 if payload.is_done else 0,
-            payload.assignee_id,
-            position,
-            now,
-            now if payload.is_done else None,
-        )
+    s.add(task)
+    record_event(
+        s, row, "task_added", actor_id=user["id"], field="task", new_value=payload.title, at=now
+    )
+    if payload.is_done:
         record_event(
-            db, row, "task_added", actor_id=user["id"], field="task",
-            new_value=payload.title, at=now,
+            s,
+            row,
+            "task_completed",
+            actor_id=user["id"],
+            field="task",
+            new_value=payload.title,
+            at=now,
         )
-        if payload.is_done:
-            record_event(
-                db, row, "task_completed", actor_id=user["id"], field="task",
-                new_value=payload.title, at=now,
-            )
-    return _task_payload(db.q1("SELECT * FROM card_tasks WHERE id = ?", task_id) or {})
+    await s.commit()
+    return _task_payload(as_dict(task) or {})
 
 
 @router.patch("/tasks/{task_id}", response_model=TaskOut, summary="Edit or complete a task")
-def update_task(
+async def update_task(
     task_id: str,
     payload: TaskUpdate,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Edit a checklist item; completing one records a ``task_completed`` event."""
-    task = db.q1("SELECT * FROM card_tasks WHERE id = ?", task_id)
+    task = as_dict(await s.get(CardTask, task_id))
     if task is None:
         raise NotFound("Task", task_id, code="task_not_found")
-    card = fetch_card(db, task["card_id"])
-    require_card_write(db, user, card)
+    card = await fetch_card(s, task["card_id"])
+    await require_card_write(s, user, card)
 
     changes = payload.model_dump(exclude_unset=True)
-    if changes.get("assignee_id") and not db.q1(
-        "SELECT id FROM users WHERE id = ?", changes["assignee_id"]
-    ):
+    if changes.get("assignee_id") and not await _user_exists(s, changes["assignee_id"]):
         raise NotFound("User", changes["assignee_id"], code="user_not_found")
 
     now = utcnow()
-    with db.tx():
-        for field in ("title", "assignee_id", "position"):
-            if field in changes and changes[field] != task.get(field):
-                db.ex(f"UPDATE card_tasks SET {field} = ? WHERE id = ?", changes[field], task_id)
-                record_event(
-                    db, card, "updated", actor_id=user["id"], field=f"task.{field}",
-                    old_value=task.get(field), new_value=changes[field], at=now,
-                )
-        if "is_done" in changes and _bool(changes["is_done"]) != _bool(task["is_done"]):
-            done = _bool(changes["is_done"])
-            db.ex(
-                "UPDATE card_tasks SET is_done = ?, completed_at = ? WHERE id = ?",
-                1 if done else 0,
-                now if done else None,
-                task_id,
-            )
+    values: dict[str, Any] = {}
+    for field in ("title", "assignee_id", "position"):
+        if field in changes and changes[field] != task.get(field):
+            values[field] = changes[field]
             record_event(
-                db,
+                s,
                 card,
-                "task_completed" if done else "updated",
+                "updated",
                 actor_id=user["id"],
-                field="task",
-                old_value=None if done else task["title"],
-                new_value=task["title"] if done else None,
+                field=f"task.{field}",
+                old_value=task.get(field),
+                new_value=changes[field],
                 at=now,
             )
-    return _task_payload(db.q1("SELECT * FROM card_tasks WHERE id = ?", task_id) or {})
+    if "is_done" in changes and _bool(changes["is_done"]) != _bool(task["is_done"]):
+        done = _bool(changes["is_done"])
+        values["is_done"] = done
+        values["completed_at"] = now if done else None
+        record_event(
+            s,
+            card,
+            "task_completed" if done else "updated",
+            actor_id=user["id"],
+            field="task",
+            old_value=None if done else task["title"],
+            new_value=task["title"] if done else None,
+            at=now,
+        )
+    if values:
+        await s.execute(update(CardTask).where(CardTask.id == task_id).values(**values))
+    await s.commit()
+    return _task_payload(as_dict(await s.get(CardTask, task_id, populate_existing=True)) or {})
 
 
 @router.delete("/tasks/{task_id}", response_model=OkResponse, summary="Delete a task")
-def delete_task(
+async def delete_task(
     task_id: str,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Remove a checklist item and note the removal on the card's audit trail."""
-    task = db.q1("SELECT * FROM card_tasks WHERE id = ?", task_id)
+    task = as_dict(await s.get(CardTask, task_id))
     if task is None:
         raise NotFound("Task", task_id, code="task_not_found")
-    card = fetch_card(db, task["card_id"])
-    require_card_write(db, user, card)
-    with db.tx():
-        db.ex("DELETE FROM card_tasks WHERE id = ?", task_id)
-        record_event(
-            db, card, "updated", actor_id=user["id"], field="task.deleted",
-            old_value=task["title"],
-        )
+    card = await fetch_card(s, task["card_id"])
+    await require_card_write(s, user, card)
+    await s.execute(delete(CardTask).where(CardTask.id == task_id))
+    record_event(
+        s, card, "updated", actor_id=user["id"], field="task.deleted", old_value=task["title"]
+    )
+    await s.commit()
     return {"ok": True, "id": task_id, "message": "Task deleted."}
 
 
@@ -1275,53 +1413,60 @@ def delete_task(
 # ---------------------------------------------------------------------------
 
 
+async def _open_blockers(s: AsyncSession, card_id: str) -> list[dict[str, Any]]:
+    rows = await s.scalars(
+        select(Blocker)
+        .where(Blocker.card_id == card_id, Blocker.ended_at.is_(None))
+        .order_by(Blocker.started_at)
+    )
+    return [as_dict(row) or {} for row in rows]
+
+
 @router.post(
     "/cards/{card_id}/block",
     response_model=BlockerOut,
     status_code=201,
     summary="Block a card",
 )
-def block_card(
+async def block_card(
     card_id: str,
     payload: BlockRequest,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Open a blocker interval; blocked time is a first-class flow metric."""
-    row = fetch_card(db, card_id)
-    require_card_write(db, user, row)
-    open_blocker = db.q1(
-        "SELECT * FROM blockers WHERE card_id = ? AND ended_at IS NULL ORDER BY started_at",
-        row["id"],
-    )
-    if open_blocker is not None:
+    row = await fetch_card(s, card_id)
+    await require_card_write(s, user, row)
+    open_blockers = await _open_blockers(s, row["id"])
+    if open_blockers:
+        open_blocker = open_blockers[0]
         raise Conflict(
             "card_already_blocked",
             f"{row['key']} is already blocked — unblock it before recording a new reason.",
-            {"card_id": row["id"], "blocker_id": open_blocker["id"],
-             "reason": open_blocker["reason"]},
+            {
+                "card_id": row["id"],
+                "blocker_id": open_blocker["id"],
+                "reason": open_blocker["reason"],
+            },
         )
 
     now = utcnow()
-    blocker_id = new_id()
-    with db.tx():
-        db.ex(
-            "INSERT INTO blockers (id, card_id, reason, category, started_at, ended_at, "
-            "created_by) VALUES (?,?,?,?,?,NULL,?)",
-            blocker_id,
-            row["id"],
-            payload.reason,
-            payload.category,
-            now,
-            user["id"],
-        )
-        db.ex("UPDATE cards SET is_blocked = 1 WHERE id = ?", row["id"])
-        record_event(
-            db, row, "blocked", actor_id=user["id"], field="blocker",
-            new_value=payload.reason, at=now,
-        )
-    blocker = db.q1("SELECT * FROM blockers WHERE id = ?", blocker_id) or {}
-    return _blocker_payload(blocker, now)
+    blocker = Blocker(
+        id=new_id(),
+        card_id=row["id"],
+        reason=payload.reason,
+        category=payload.category,
+        started_at=now,
+        ended_at=None,
+        created_by=user["id"],
+    )
+    s.add(blocker)
+    await s.execute(update(Card).where(Card.id == row["id"]).values(is_blocked=True))
+    record_event(
+        s, row, "blocked", actor_id=user["id"], field="blocker", new_value=payload.reason, at=now
+    )
+    await s.commit()
+    return _blocker_payload(as_dict(blocker) or {}, now)
 
 
 @router.post(
@@ -1329,18 +1474,15 @@ def block_card(
     response_model=BlockerOut,
     summary="Unblock a card, closing the blocker interval",
 )
-def unblock_card(
+async def unblock_card(
     card_id: str,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Close every open blocker on the card and clear the flag."""
-    row = fetch_card(db, card_id)
-    require_card_write(db, user, row)
-    open_blockers = db.q(
-        "SELECT * FROM blockers WHERE card_id = ? AND ended_at IS NULL ORDER BY started_at",
-        row["id"],
-    )
+    row = await fetch_card(s, card_id)
+    await require_card_write(s, user, row)
+    open_blockers = await _open_blockers(s, row["id"])
     if not open_blockers:
         raise Conflict(
             "card_not_blocked",
@@ -1349,18 +1491,23 @@ def unblock_card(
         )
 
     now = utcnow()
-    with db.tx():
-        db.ex(
-            "UPDATE blockers SET ended_at = ? WHERE card_id = ? AND ended_at IS NULL",
-            now,
-            row["id"],
-        )
-        db.ex("UPDATE cards SET is_blocked = 0 WHERE id = ?", row["id"])
-        record_event(
-            db, row, "unblocked", actor_id=user["id"], field="blocker",
-            old_value=open_blockers[0]["reason"], at=now,
-        )
-    closed = db.q1("SELECT * FROM blockers WHERE id = ?", open_blockers[0]["id"]) or {}
+    await s.execute(
+        update(Blocker)
+        .where(Blocker.card_id == row["id"], Blocker.ended_at.is_(None))
+        .values(ended_at=now)
+    )
+    await s.execute(update(Card).where(Card.id == row["id"]).values(is_blocked=False))
+    record_event(
+        s,
+        row,
+        "unblocked",
+        actor_id=user["id"],
+        field="blocker",
+        old_value=open_blockers[0]["reason"],
+        at=now,
+    )
+    await s.commit()
+    closed = as_dict(await s.get(Blocker, open_blockers[0]["id"], populate_existing=True)) or {}
     return _blocker_payload(closed, now)
 
 
@@ -1369,17 +1516,15 @@ def unblock_card(
     response_model=ListResponse[BlockerOut],
     summary="A card's blocker history",
 )
-def list_blockers(
+async def list_blockers(
     card_id: str,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Every blocker ever recorded on the card, oldest first."""
-    row = fetch_card(db, card_id)
+    row = await fetch_card(s, card_id)
     now = utcnow()
-    blockers = db.q(
-        "SELECT * FROM blockers WHERE card_id = ? ORDER BY started_at", row["id"]
-    )
+    blockers = await _blockers(s, row["id"])
     return {
         "items": [_blocker_payload(blocker, now) for blocker in blockers],
         "total": len(blockers),
@@ -1396,20 +1541,15 @@ def list_blockers(
     response_model=ListResponse[CommentOut],
     summary="A card's comments",
 )
-def list_comments(
+async def list_comments(
     card_id: str,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Comments in the order they were written."""
-    row = fetch_card(db, card_id)
-    comments = db.q(
-        "SELECT c.*, u.name AS author_name FROM comments c "
-        "LEFT JOIN users u ON u.id = c.author_id "
-        "WHERE c.card_id = ? ORDER BY c.created_at",
-        row["id"],
-    )
-    return {"items": [dict(comment) for comment in comments], "total": len(comments)}
+    row = await fetch_card(s, card_id)
+    comments = await _comments(s, row["id"])
+    return {"items": comments, "total": len(comments)}
 
 
 @router.post(
@@ -1418,30 +1558,36 @@ def list_comments(
     status_code=201,
     summary="Comment on a card",
 )
-def create_comment(
+async def create_comment(
     card_id: str,
     payload: CommentCreate,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Add a comment and record a ``commented`` event."""
-    row = fetch_card(db, card_id)
-    require_card_write(db, user, row)
+    row = await fetch_card(s, card_id)
+    await require_card_write(s, user, row)
     now = utcnow()
     comment_id = new_id()
-    with db.tx():
-        db.ex(
-            "INSERT INTO comments (id, card_id, author_id, body, created_at) VALUES (?,?,?,?,?)",
-            comment_id,
-            row["id"],
-            user["id"],
-            payload.body,
-            now,
+    s.add(
+        Comment(
+            id=comment_id,
+            card_id=row["id"],
+            author_id=user["id"],
+            body=payload.body,
+            created_at=now,
         )
-        record_event(
-            db, row, "commented", actor_id=user["id"], field="comment",
-            new_value=payload.body[:200], at=now,
-        )
+    )
+    record_event(
+        s,
+        row,
+        "commented",
+        actor_id=user["id"],
+        field="comment",
+        new_value=payload.body[:200],
+        at=now,
+    )
+    await s.commit()
     return {
         "id": comment_id,
         "card_id": row["id"],
@@ -1464,50 +1610,55 @@ def _own_comment_or_admin(user: CurrentUser, comment: dict[str, Any]) -> None:
 
 
 @router.patch("/comments/{comment_id}", response_model=CommentOut, summary="Edit a comment")
-def update_comment(
+async def update_comment(
     comment_id: str,
     payload: CommentCreate,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Rewrite a comment body."""
-    comment = db.q1("SELECT * FROM comments WHERE id = ?", comment_id)
+    comment = as_dict(await s.get(Comment, comment_id))
     if comment is None:
         raise NotFound("Comment", comment_id, code="comment_not_found")
-    card = fetch_card(db, comment["card_id"])
-    require_card_write(db, user, card)
+    card = await fetch_card(s, comment["card_id"])
+    await require_card_write(s, user, card)
     _own_comment_or_admin(user, comment)
-    with db.tx():
-        db.ex("UPDATE comments SET body = ? WHERE id = ?", payload.body, comment_id)
-        record_event(
-            db, card, "updated", actor_id=user["id"], field="comment",
-            old_value=comment["body"][:200], new_value=payload.body[:200],
-        )
-    updated = db.q1(
-        "SELECT c.*, u.name AS author_name FROM comments c "
-        "LEFT JOIN users u ON u.id = c.author_id WHERE c.id = ?",
-        comment_id,
+    await s.execute(update(Comment).where(Comment.id == comment_id).values(body=payload.body))
+    record_event(
+        s,
+        card,
+        "updated",
+        actor_id=user["id"],
+        field="comment",
+        old_value=comment["body"][:200],
+        new_value=payload.body[:200],
     )
-    return dict(updated or {})
+    await s.commit()
+    updated = (await s.execute(_comment_select().where(Comment.id == comment_id))).first()
+    return _comment_row(updated) if updated is not None else {}
 
 
 @router.delete("/comments/{comment_id}", response_model=OkResponse, summary="Delete a comment")
-def delete_comment(
+async def delete_comment(
     comment_id: str,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Remove a comment; the audit trail keeps the fact that it existed."""
-    comment = db.q1("SELECT * FROM comments WHERE id = ?", comment_id)
+    comment = as_dict(await s.get(Comment, comment_id))
     if comment is None:
         raise NotFound("Comment", comment_id, code="comment_not_found")
-    card = fetch_card(db, comment["card_id"])
-    require_card_write(db, user, card)
+    card = await fetch_card(s, comment["card_id"])
+    await require_card_write(s, user, card)
     _own_comment_or_admin(user, comment)
-    with db.tx():
-        db.ex("DELETE FROM comments WHERE id = ?", comment_id)
-        record_event(
-            db, card, "updated", actor_id=user["id"], field="comment.deleted",
-            old_value=comment["body"][:200],
-        )
+    await s.execute(delete(Comment).where(Comment.id == comment_id))
+    record_event(
+        s,
+        card,
+        "updated",
+        actor_id=user["id"],
+        field="comment.deleted",
+        old_value=comment["body"][:200],
+    )
+    await s.commit()
     return {"ok": True, "id": comment_id, "message": "Comment deleted."}

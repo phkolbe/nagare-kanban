@@ -28,13 +28,13 @@ from .errors import ApiError
 
 __all__ = [
     "TokenError",
-    "hash_password",
-    "verify_password",
-    "needs_rehash",
-    "encode_token",
     "decode_token",
-    "token_expiry",
+    "encode_token",
     "generate_secret",
+    "hash_password",
+    "needs_rehash",
+    "token_expiry",
+    "verify_password",
 ]
 
 _PBKDF2_PREFIX = "pbkdf2"
@@ -96,9 +96,7 @@ def verify_password(password: str, stored: str | None) -> bool:
         return False
     if rounds <= 0 or not salt or not expected:
         return False
-    candidate = hashlib.pbkdf2_hmac(
-        "sha256", password.encode("utf-8"), salt, rounds, len(expected)
-    )
+    candidate = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, rounds, len(expected))
     return hmac.compare_digest(candidate, expected)
 
 
@@ -159,9 +157,7 @@ def encode_token(
         }
     )
     header = {"alg": settings.jwt_algorithm, "typ": "JWT"}
-    signing_input = f"{_b64e(_json_compact(header))}.{_b64e(_json_compact(claims))}".encode(
-        "ascii"
-    )
+    signing_input = f"{_b64e(_json_compact(header))}.{_b64e(_json_compact(claims))}".encode("ascii")
     signature = _sign(signing_input, secret or settings.jwt_secret)
     return f"{signing_input.decode('ascii')}.{_b64e(signature)}"
 

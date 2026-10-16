@@ -14,19 +14,22 @@ from __future__ import annotations
 import importlib
 import logging
 import mimetypes
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any
 
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from sqlalchemy import func, select
 
 from . import __version__
 from .config import settings
-from .db import Database, connect, migrate
+from .db import Database, migrate
 from .errors import error_payload, install_error_handlers
+from .models import User
 from .routers import ROUTER_MODULES
 
 log = logging.getLogger("nagare")
@@ -51,15 +54,15 @@ _NO_CACHE = {
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Apply migrations on boot so the app is usable from a cold clone."""
-    path = getattr(app.state, "db_path", None)
-    database = Database(connect(path))
+    """Open the engine and apply migrations on boot, so a cold clone is usable."""
+    database: Database = app.state.database
+    if settings.auto_migrate:
+        await migrate(database.url)
+    log.info("Nagare Kanban API ready — database at %r", database)
     try:
-        migrate(database)
-        log.info("Nagare Kanban API ready — database at %s", path or settings.db_path)
+        yield
     finally:
-        database.close()
-    yield
+        await database.dispose()
 
 
 def _mount_routers(app: FastAPI) -> list[str]:
@@ -105,8 +108,8 @@ def _file_response(path: Path) -> FileResponse:
     return FileResponse(path, media_type=media_type or "application/octet-stream", headers=headers)
 
 
-def create_app(db_path: str | Path | None = None) -> FastAPI:
-    """Build the application. ``db_path`` lets tests point at a temp database."""
+def create_app(database_url: str | None = None) -> FastAPI:
+    """Build the application. ``database_url`` lets tests point at their own database."""
     app = FastAPI(
         title="Nagare Kanban API",
         version=__version__,
@@ -120,8 +123,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         redoc_url="/redoc",
         openapi_url="/openapi.json",
     )
-    if db_path is not None:
-        app.state.db_path = str(db_path)
+    app.state.database = Database(database_url)
 
     app.add_middleware(
         CORSMiddleware,
@@ -139,17 +141,14 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     meta = APIRouter(tags=["meta"])
 
     @meta.get("/health", summary="Liveness and readiness probe")
-    def health(request: Request) -> dict[str, Any]:
+    async def health(request: Request) -> dict[str, Any]:
         """Report process health plus whether the database is migrated and seeded."""
         database_ok = True
         seeded = False
         try:
-            database = Database(connect(getattr(request.app.state, "db_path", None)))
-            try:
-                seeded = bool(database.scalar("SELECT COUNT(*) FROM users"))
-            finally:
-                database.close()
-        except Exception:  # pragma: no cover - only when the file is unreadable
+            async with request.app.state.database.sessions() as s:
+                seeded = bool(await s.scalar(select(func.count()).select_from(User)))
+        except Exception:  # pragma: no cover - only when the database is unreachable
             database_ok = False
         return {
             "status": "ok" if database_ok else "degraded",
@@ -157,7 +156,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             "version": __version__,
             "database": database_ok,
             "seeded": seeded,
-            "time": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "time": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
 
     app.include_router(meta, prefix=API_PREFIX)
@@ -184,17 +183,22 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         not mounted yet answers with the standard JSON 404 rather than a 405 from
         the router table — the client cannot tell those apart usefully.
         """
-        if full_path.startswith("api/") or full_path == "api" or request.method not in {
-            "GET",
-            "HEAD",
-        }:
+        if (
+            full_path.startswith("api/")
+            or full_path == "api"
+            or request.method
+            not in {
+                "GET",
+                "HEAD",
+            }
+        ):
             return JSONResponse(
                 status_code=404,
                 content=error_payload(
                     "not_found", f"No API route for {request.method} /{full_path}."
                 ),
             )
-        relative = full_path[len("static/"):] if full_path.startswith("static/") else full_path
+        relative = full_path[len("static/") :] if full_path.startswith("static/") else full_path
         candidate = _safe_frontend_path(relative)
         if candidate and candidate.is_file():
             return _file_response(candidate)

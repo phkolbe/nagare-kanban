@@ -1,11 +1,13 @@
 #!/usr/bin/env python
 """Nagare Kanban — single entry point.
 
-    python -m pip install -r requirements.txt
-    python run.py
+    uv sync
+    uv run python run.py
 
-Migrates the sqlite database, seeds the demo workspace on first run, then serves
-the API *and* the static frontend from one origin at http://127.0.0.1:8770.
+Migrates the database (Alembic), seeds the demo workspace on first run, then
+serves the API *and* the static frontend from one origin at http://127.0.0.1:8770.
+The database is ``NAGARE_DATABASE_URL`` (PostgreSQL in the platform's dev setup);
+without it, a SQLite file in ``data/`` keeps a cold clone runnable as a demo.
 
     python run.py --reset          delete the database and reseed from scratch
     python run.py --port 9000      serve on another port
@@ -47,9 +49,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="enable uvicorn auto-reload (development only)",
     )
     parser.add_argument(
-        "--db",
+        "--database-url",
         default=None,
-        help="path to the sqlite file (default data/nagare.db)",
+        help="SQLAlchemy URL (default NAGARE_DATABASE_URL, else data/nagare.db)",
     )
     return parser.parse_args(argv)
 
@@ -79,26 +81,28 @@ def main(argv: list[str] | None = None) -> int:
         os.environ["NAGARE_PORT"] = str(args.port)
     if args.host is not None:
         os.environ["NAGARE_HOST"] = args.host
-    if args.db is not None:
-        os.environ["NAGARE_DB"] = args.db
+    if args.database_url is not None:
+        os.environ["NAGARE_DATABASE_URL"] = args.database_url
+
+    import asyncio
 
     from backend.app import db as db_module
     from backend.app.config import settings
-    from backend.app.seed import seed_if_empty
+    from backend.app.seed import migrate_and_seed
+    from sqlalchemy.engine import make_url
 
     settings.ensure_dirs()
+    where = make_url(settings.database_url).render_as_string(hide_password=True)
 
     if args.reset:
         db_module.reset_database()
-        print(f"Removed the existing database at {settings.db_path}")
+        print(f"Reset the database at {where}")
 
-    database = db_module.get_database()
-    db_module.migrate(database)
-    summary = seed_if_empty(database)
+    summary = asyncio.run(migrate_and_seed())
 
     if summary.get("skipped"):
         print(
-            f"Database ready at {settings.db_path} "
+            f"Database ready at {where} "
             f"({summary.get('users', 0)} users, {summary.get('cards', 0)} cards) — "
             "seeding skipped."
         )
@@ -112,8 +116,6 @@ def main(argv: list[str] | None = None) -> int:
             f"{summary.get('movements', 0)} movements and "
             f"{summary.get('events', 0)} audit events."
         )
-
-    db_module.close_thread_connection()
 
     if args.seed_only:
         return 0

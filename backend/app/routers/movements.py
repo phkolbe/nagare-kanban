@@ -26,10 +26,22 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query
+from sqlalchemy import func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..db import Database, new_id, seconds_between, utcnow
-from ..deps import CurrentUser, get_current_user, get_db, require_flag
+from ..db import new_id, seconds_between, utcnow
+from ..deps import CurrentUser, get_current_user, get_session, require_flag
 from ..errors import BadRequest, Conflict, NotFound
+from ..models import (
+    BoardColumn,
+    Card,
+    CardEvent,
+    CardMovement,
+    CardTask,
+    ColumnGroup,
+    User,
+    as_dict,
+)
 from ..schemas import MovementSource, MoveRequest, MoveResult, OpenSchema
 from .cards import (
     board_columns,
@@ -39,8 +51,12 @@ from .cards import (
     delivery_column,
     dwell_intervals,
     fetch_card,
+    flow_count,
     flow_totals,
     load_board,
+    movement_row,
+    movement_select,
+    next_position,
     record_event,
     require_card_write,
     wip_status,
@@ -48,7 +64,7 @@ from .cards import (
 
 router = APIRouter(tags=["movements"])
 
-__all__ = ["router", "move_card", "MoveBody"]
+__all__ = ["MoveBody", "move_card", "router"]
 
 #: Roles allowed to force a backward move (SPEC §6.2).
 FORCE_ROLES = frozenset({"master", "administrator"})
@@ -117,40 +133,47 @@ def _breaches(current: int, projected: int, maximum: int | None) -> bool:
     return maximum is not None and projected > maximum and projected > current
 
 
-def _column_count(db: Database, column_id: str) -> int:
+async def _column_count(s: AsyncSession, column_id: str) -> int:
     return int(
-        db.scalar(
-            "SELECT COUNT(*) FROM cards WHERE column_id = ? AND archived = 0", column_id
+        await s.scalar(
+            select(func.count()).where(Card.column_id == column_id, Card.archived.is_(False))
         )
         or 0
     )
 
 
-def _group_count(db: Database, board_id: str, group_id: str) -> int:
+async def _group_count(s: AsyncSession, board_id: str, group_id: str) -> int:
     return int(
-        db.scalar(
-            "SELECT COUNT(*) FROM cards c JOIN columns col ON col.id = c.column_id "
-            "WHERE col.board_id = ? AND col.group_id = ? AND c.archived = 0",
-            board_id,
-            group_id,
+        await s.scalar(
+            select(func.count())
+            .select_from(Card)
+            .join(BoardColumn, BoardColumn.id == Card.column_id)
+            .where(
+                BoardColumn.board_id == board_id,
+                BoardColumn.group_id == group_id,
+                Card.archived.is_(False),
+            )
         )
         or 0
     )
 
 
-def _flow_count(db: Database, board_id: str) -> int:
-    """WIP as SPEC §7.1 defines it: committed and not yet delivered."""
-    return int(
-        db.scalar(
-            "SELECT COUNT(*) FROM cards WHERE board_id = ? AND archived = 0 "
-            "AND committed_at IS NOT NULL AND delivered_at IS NULL",
-            board_id,
-        )
-        or 0
-    )
+async def _lock_board_for_move(s: AsyncSession, board_id: str) -> None:
+    """Serialise moves on one board for the rest of the transaction.
+
+    The WIP check and the insert have to see the same snapshot, otherwise two
+    moves can both find room for the last slot in a column. SQLite's writer lock
+    already gives that; on PostgreSQL a row lock on the board does.
+    """
+    if s.get_bind().dialect.name == "postgresql":
+        from ..models import Board
+
+        await s.execute(select(Board.id).where(Board.id == board_id).with_for_update())
 
 
-def _wip_conflict(policy: str, name: str, current: int, maximum: int, extra: dict[str, Any]) -> Conflict:
+def _wip_conflict(
+    policy: str, name: str, current: int, maximum: int, extra: dict[str, Any]
+) -> Conflict:
     return Conflict(
         "wip_limit_exceeded",
         f"The {policy} WIP limit on {_quote(name)} is full: {current} of {maximum} "
@@ -171,8 +194,8 @@ def _wip_conflict(policy: str, name: str, current: int, maximum: int, extra: dic
 # ---------------------------------------------------------------------------
 
 
-def move_card(
-    db: Database,
+async def move_card(
+    s: AsyncSession,
     user: CurrentUser,
     card_ref: str,
     to_column_id: str,
@@ -187,15 +210,15 @@ def move_card(
     card, the movement row that was written, the recomputed WIP status for the
     board, whether an expedite override was used, and any advisory warnings.
     """
-    card = fetch_card(db, card_ref)
-    board = require_card_write(db, user, card)
-    columns = board_columns(db, board["id"])
+    card = await fetch_card(s, card_ref)
+    board = await require_card_write(s, user, card)
+    columns = await board_columns(s, board["id"])
     by_id = {column["id"]: column for column in columns}
     order = column_order(columns)
 
     target = by_id.get(to_column_id)
     if target is None:
-        exists = db.q1("SELECT id, board_id FROM columns WHERE id = ?", to_column_id)
+        exists = await s.scalar(select(BoardColumn.id).where(BoardColumn.id == to_column_id))
         if exists is None:
             raise NotFound("Column", to_column_id, code="column_not_found")
         raise BadRequest(
@@ -264,169 +287,166 @@ def move_card(
         and order[target["id"]] >= order[commitment["id"]]
     )
     will_deliver = (
-        not card.get("delivered_at")
-        and delivery is not None
-        and target["id"] == delivery["id"]
+        not card.get("delivered_at") and delivery is not None and target["id"] == delivery["id"]
     )
 
     expedite = card.get("service_class") == "expedite"
     wip_override = False
     warnings: list[str] = []
 
-    with db.tx():
-        # Re-read inside the write transaction: the WIP check and the insert
-        # have to see the same snapshot, otherwise two moves can both find room
-        # for the last slot in a column.
-        fresh = db.q1("SELECT * FROM cards WHERE id = ?", card["id"])
-        if fresh is None:  # pragma: no cover - deleted between the reads
-            raise NotFound("Card", card["id"], code="card_not_found")
-        if fresh["column_id"] != origin["id"]:
-            raise Conflict(
-                "card_moved_elsewhere",
-                f"{card['key']} was moved by someone else while you were deciding.",
-                {"card_id": card["id"], "column_id": fresh["column_id"]},
-            )
+    # Re-read inside the write transaction: the WIP check and the insert
+    # have to see the same snapshot, otherwise two moves can both find room
+    # for the last slot in a column.
+    await _lock_board_for_move(s, board["id"])
+    fresh = as_dict(await s.get(Card, card["id"], populate_existing=True))
+    if fresh is None:  # pragma: no cover - deleted between the reads
+        raise NotFound("Card", card["id"], code="card_not_found")
+    if fresh["column_id"] != origin["id"]:
+        raise Conflict(
+            "card_moved_elsewhere",
+            f"{card['key']} was moved by someone else while you were deciding.",
+            {"card_id": card["id"], "column_id": fresh["column_id"]},
+        )
 
-        # -- column policy (expedite may bypass this one only) --------------
-        column_current = _column_count(db, target["id"])
-        if _breaches(column_current, column_current + 1, target.get("wip_max")):
-            if not expedite:
+    # -- column policy (expedite may bypass this one only) --------------
+    column_current = await _column_count(s, target["id"])
+    if _breaches(column_current, column_current + 1, target.get("wip_max")):
+        if not expedite:
+            raise _wip_conflict(
+                "column",
+                target["name"],
+                column_current,
+                int(target["wip_max"]),
+                {"column_id": target["id"], "service_class": card.get("service_class")},
+            )
+        wip_override = True
+        warnings.append(
+            f"Expedite override: {_quote(target['name'])} is at its WIP maximum "
+            f"({column_current}/{target['wip_max']}) and now holds "
+            f"{column_current + 1}."
+        )
+
+    # -- group policy ---------------------------------------------------
+    group_id = target.get("group_id")
+    if group_id:
+        group = as_dict(await s.get(ColumnGroup, group_id))
+        if group is not None and group.get("wip_max") is not None:
+            group_current = await _group_count(s, board["id"], group_id)
+            projected = group_current + (0 if origin.get("group_id") == group_id else 1)
+            if _breaches(group_current, projected, group.get("wip_max")):
                 raise _wip_conflict(
-                    "column",
-                    target["name"],
-                    column_current,
-                    int(target["wip_max"]),
-                    {"column_id": target["id"], "service_class": card.get("service_class")},
-                )
-            wip_override = True
-            warnings.append(
-                f"Expedite override: {_quote(target['name'])} is at its WIP maximum "
-                f"({column_current}/{target['wip_max']}) and now holds "
-                f"{column_current + 1}."
-            )
-
-        # -- group policy ---------------------------------------------------
-        group_id = target.get("group_id")
-        if group_id:
-            group = db.q1("SELECT * FROM column_groups WHERE id = ?", group_id)
-            if group is not None and group.get("wip_max") is not None:
-                group_current = _group_count(db, board["id"], group_id)
-                projected = group_current + (0 if origin.get("group_id") == group_id else 1)
-                if _breaches(group_current, projected, group.get("wip_max")):
-                    raise _wip_conflict(
-                        "group",
-                        group["name"],
-                        group_current,
-                        int(group["wip_max"]),
-                        {"group_id": group_id, "column_id": target["id"]},
-                    )
-
-        # -- whole-flow policy ----------------------------------------------
-        if board.get("wip_max") is not None:
-            was_in_flight = bool(fresh["committed_at"]) and not fresh["delivered_at"]
-            will_be_in_flight = bool(fresh["committed_at"] or will_commit) and not (
-                fresh["delivered_at"] or will_deliver
-            )
-            flow_current = _flow_count(db, board["id"])
-            projected = flow_current + (int(will_be_in_flight) - int(was_in_flight))
-            if _breaches(flow_current, projected, board.get("wip_max")):
-                raise _wip_conflict(
-                    "flow",
-                    board["name"],
-                    flow_current,
-                    int(board["wip_max"]),
-                    {"board_id": board["id"], "column_id": target["id"]},
+                    "group",
+                    group["name"],
+                    group_current,
+                    int(group["wip_max"]),
+                    {"group_id": group_id, "column_id": target["id"]},
                 )
 
-        # -- measure the interval that is closing now ------------------------
-        previous = db.q1(
-            "SELECT moved_at FROM card_movements WHERE card_id = ? "
-            "ORDER BY moved_at DESC, rowid DESC LIMIT 1",
-            card["id"],
+    # -- whole-flow policy ----------------------------------------------
+    if board.get("wip_max") is not None:
+        was_in_flight = bool(fresh["committed_at"]) and not fresh["delivered_at"]
+        will_be_in_flight = bool(fresh["committed_at"] or will_commit) and not (
+            fresh["delivered_at"] or will_deliver
         )
-        since = previous["moved_at"] if previous else fresh["created_at"]
-        seconds_in_from_column = seconds_between(since, now)
-        seconds_in_from_column = (
-            None if seconds_in_from_column is None else int(round(max(0.0, seconds_in_from_column)))
-        )
-
-        movement_id = new_id()
-        db.ex(
-            "INSERT INTO card_movements (id, card_id, board_id, from_column_id, to_column_id, "
-            "from_segment, to_segment, moved_at, moved_by, seconds_in_from_column, note, "
-            "is_backward, source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            movement_id,
-            card["id"],
-            board["id"],
-            origin["id"],
-            target["id"],
-            origin["segment"],
-            target["segment"],
-            now,
-            user["id"],
-            seconds_in_from_column,
-            note,
-            1 if is_backward else 0,
-            source or ("api" if user.get("role") == "system" else "ui"),
-        )
-
-        position = (
-            int(
-                db.scalar(
-                    "SELECT COALESCE(MAX(position), -1) FROM cards WHERE column_id = ?",
-                    target["id"],
-                )
-                or -1
+        flow_current = await flow_count(s, board["id"])
+        projected = flow_current + (int(will_be_in_flight) - int(was_in_flight))
+        if _breaches(flow_current, projected, board.get("wip_max")):
+            raise _wip_conflict(
+                "flow",
+                board["name"],
+                flow_current,
+                int(board["wip_max"]),
+                {"board_id": board["id"], "column_id": target["id"]},
             )
-            + 1
-        )
-        db.ex(
-            "UPDATE cards SET column_id = ?, position = ?, "
-            "committed_at = COALESCE(committed_at, ?), "
-            "delivered_at = COALESCE(delivered_at, ?) WHERE id = ?",
-            target["id"],
-            position,
-            now if will_commit else None,
-            now if will_deliver else None,
-            card["id"],
-        )
 
+    # -- measure the interval that is closing now ------------------------
+    previous = await s.scalar(
+        select(CardMovement.moved_at)
+        .where(CardMovement.card_id == card["id"])
+        .order_by(CardMovement.moved_at.desc(), CardMovement.id.desc())
+        .limit(1)
+    )
+    since = previous if previous else fresh["created_at"]
+    seconds_in_from_column = seconds_between(since, now)
+    seconds_in_from_column = (
+        None if seconds_in_from_column is None else round(max(0.0, seconds_in_from_column))
+    )
+
+    movement_id = new_id()
+    s.add(
+        CardMovement(
+            id=movement_id,
+            card_id=card["id"],
+            board_id=board["id"],
+            from_column_id=origin["id"],
+            to_column_id=target["id"],
+            from_segment=origin["segment"],
+            to_segment=target["segment"],
+            moved_at=now,
+            moved_by=user["id"],
+            seconds_in_from_column=seconds_in_from_column,
+            note=note,
+            is_backward=bool(is_backward),
+            source=source or ("api" if user.get("role") == "system" else "ui"),
+        )
+    )
+
+    position = await next_position(s, target["id"])
+    values: dict[str, Any] = {"column_id": target["id"], "position": position}
+    # committed_at / delivered_at are stamped once and never rewritten.
+    if will_commit:
+        values["committed_at"] = now
+    if will_deliver:
+        values["delivered_at"] = now
+    await s.execute(update(Card).where(Card.id == card["id"]).values(**values))
+
+    record_event(
+        s,
+        card,
+        "moved",
+        actor_id=user["id"],
+        field="column",
+        old_value=origin["name"],
+        new_value=target["name"],
+        at=now,
+    )
+    if is_backward:
+        # SPEC §6.2 — a forced backward move is an exception to the flow
+        # policy and must be visible as such in the audit trail.
         record_event(
-            db,
+            s,
             card,
             "moved",
             actor_id=user["id"],
-            field="column",
+            field="backward_override",
             old_value=origin["name"],
             new_value=target["name"],
             at=now,
         )
-        if is_backward:
-            # SPEC §6.2 — a forced backward move is an exception to the flow
-            # policy and must be visible as such in the audit trail.
-            record_event(
-                db,
-                card,
-                "moved",
-                actor_id=user["id"],
-                field="backward_override",
-                old_value=origin["name"],
-                new_value=target["name"],
-                at=now,
-            )
-        if will_commit:
-            record_event(
-                db, card, "updated", actor_id=user["id"], field="committed_at",
-                new_value=now, at=now,
-            )
-        if will_deliver:
-            record_event(
-                db, card, "updated", actor_id=user["id"], field="delivered_at",
-                new_value=now, at=now,
-            )
+    if will_commit:
+        record_event(
+            s,
+            card,
+            "updated",
+            actor_id=user["id"],
+            field="committed_at",
+            new_value=now,
+            at=now,
+        )
+    if will_deliver:
+        record_event(
+            s,
+            card,
+            "updated",
+            actor_id=user["id"],
+            field="delivered_at",
+            new_value=now,
+            at=now,
+        )
+    await s.commit()
 
     # -- post-move advisory signals -----------------------------------------
-    status = wip_status(db, board, columns)
+    status = await wip_status(s, board, columns)
     for column in (origin, target):
         cell = status["columns"].get(column["id"], {})
         if cell.get("state") == "under":
@@ -436,8 +456,7 @@ def move_card(
             )
         elif cell.get("state") == "over" and column["id"] == target["id"] and not wip_override:
             warnings.append(
-                f"{_quote(column['name'])} is over its WIP maximum "
-                f"({cell['count']}/{cell['max']})."
+                f"{_quote(column['name'])} is over its WIP maximum ({cell['count']}/{cell['max']})."
             )
     flow_cell = status["flow"]
     if flow_cell.get("state") == "over":
@@ -458,8 +477,10 @@ def move_card(
         warnings.append(f"{card['key']} is still blocked; the blocker was carried over.")
     if will_deliver:
         open_tasks = int(
-            db.scalar(
-                "SELECT COUNT(*) FROM card_tasks WHERE card_id = ? AND is_done = 0", card["id"]
+            await s.scalar(
+                select(func.count()).where(
+                    CardTask.card_id == card["id"], CardTask.is_done.is_(False)
+                )
             )
             or 0
         )
@@ -468,20 +489,13 @@ def move_card(
                 f"Delivered with {open_tasks} task{'s' if open_tasks > 1 else ''} still open."
             )
 
-    updated = fetch_card(db, card["id"])
-    movement = db.q1(
-        "SELECT m.*, fc.name AS from_column_name, tc.name AS to_column_name, "
-        "u.name AS moved_by_name FROM card_movements m "
-        "LEFT JOIN columns fc ON fc.id = m.from_column_id "
-        "LEFT JOIN columns tc ON tc.id = m.to_column_id "
-        "LEFT JOIN users u ON u.id = m.moved_by WHERE m.id = ?",
-        movement_id,
-    )
-    payload = dict(movement or {})
+    updated = await fetch_card(s, card["id"])
+    movement = (await s.execute(movement_select().where(CardMovement.id == movement_id))).first()
+    payload = movement_row(movement) if movement is not None else {}
     payload["is_backward"] = bool(payload.get("is_backward"))
 
     return {
-        "card": card_payload(db, updated, now=now, board=board),
+        "card": card_payload(updated, now=now, board=board),
         "movement": payload,
         "wip_override": wip_override,
         "warnings": warnings,
@@ -501,10 +515,10 @@ def move_card(
     response_model=MoveResult,
     summary="Move a card forward through the flow (SPEC §6)",
 )
-def move(
+async def move(
     card_id: str,
     payload: MoveBody,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Move a card and return the card, the movement, the new WIP and warnings.
@@ -512,8 +526,8 @@ def move(
     Confirmation dialogs are a frontend concern driven by ``board.confirm_moves``
     (SPEC §6.9); this endpoint never asks, it decides.
     """
-    return move_card(
-        db,
+    return await move_card(
+        s,
         user,
         card_id,
         payload.to_column_id,
@@ -526,6 +540,33 @@ def move(
 # ---------------------------------------------------------------------------
 # history
 # ---------------------------------------------------------------------------
+
+
+async def _movements(s: AsyncSession, card_id: str) -> list[dict[str, Any]]:
+    """A card's movements, chronological (the id breaks ties: UUID v7 is ordered)."""
+    rows = await s.execute(
+        movement_select()
+        .where(CardMovement.card_id == card_id)
+        .order_by(CardMovement.moved_at, CardMovement.id)
+    )
+    return [movement_row(row) for row in rows]
+
+
+async def _events(s: AsyncSession, card_id: str) -> list[dict[str, Any]]:
+    """A card's audit events with the actor's name, chronological."""
+    rows = await s.execute(
+        select(CardEvent, User.name.label("actor_name"))
+        .outerjoin(User, User.id == CardEvent.actor_id)
+        .where(CardEvent.card_id == card_id)
+        .order_by(CardEvent.created_at, CardEvent.id)
+    )
+    out = []
+    for row in rows:
+        data = as_dict(row[0]) or {}
+        data["actor_name"] = row._mapping["actor_name"]
+        out.append(data)
+    return out
+
 
 #: Sort rank for entries that share a timestamp: a card is created, then moved,
 #: and only afterwards edited.
@@ -586,10 +627,10 @@ def _movement_label(
     summary="Merged movement + audit history with dwell times and touch/wait totals",
     dependencies=[Depends(require_flag("card_history"))],
 )
-def card_history(
+async def card_history(
     card_id: str,
     order: Literal["asc", "desc"] = Query("asc"),
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """The card's whole story, in the shape the drawer's history tab renders.
@@ -600,28 +641,15 @@ def card_history(
     decaying (or not) as the card travels. ``dwell`` aggregates the time spent
     per column, including the still-open interval the card is sitting in.
     """
-    card = fetch_card(db, card_id)
-    board = load_board(db, card["board_id"])
-    columns = board_columns(db, board["id"])
+    card = await fetch_card(s, card_id)
+    board = await load_board(s, card["board_id"])
+    columns = await board_columns(s, board["id"])
     by_id = {column["id"]: column for column in columns}
     now = utcnow()
 
-    movements = db.q(
-        "SELECT m.*, fc.name AS from_column_name, tc.name AS to_column_name, "
-        "u.name AS moved_by_name FROM card_movements m "
-        "LEFT JOIN columns fc ON fc.id = m.from_column_id "
-        "LEFT JOIN columns tc ON tc.id = m.to_column_id "
-        "LEFT JOIN users u ON u.id = m.moved_by "
-        "WHERE m.card_id = ? ORDER BY m.moved_at, m.rowid",
-        card["id"],
-    )
-    events = db.q(
-        "SELECT e.*, u.name AS actor_name FROM card_events e "
-        "LEFT JOIN users u ON u.id = e.actor_id "
-        "WHERE e.card_id = ? ORDER BY e.created_at, e.rowid",
-        card["id"],
-    )
-    intervals = dwell_intervals(db, card, by_id, now)
+    movements = await _movements(s, card["id"])
+    events = await _events(s, card["id"])
+    intervals = await dwell_intervals(s, card, by_id, now)
 
     # -- per-column dwell ---------------------------------------------------
     dwell: dict[str, dict[str, Any]] = {}
@@ -675,9 +703,7 @@ def card_history(
                 "is_backward": bool(movement.get("is_backward")),
                 "source": movement.get("source"),
                 "seconds_in_from_column": movement.get("seconds_in_from_column"),
-                "duration_in_from_column": humanize_seconds(
-                    movement.get("seconds_in_from_column")
-                ),
+                "duration_in_from_column": humanize_seconds(movement.get("seconds_in_from_column")),
                 "_closes": closing,
                 "_rank": _RANK["movement"],
             }
@@ -757,22 +783,14 @@ def card_history(
     "/cards/{card_id}/movements",
     summary="Raw movement rows for one card, chronological",
 )
-def card_movements(
+async def card_movements(
     card_id: str,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """The unmerged movement log — what every metric replays."""
-    card = fetch_card(db, card_id)
-    rows = db.q(
-        "SELECT m.*, fc.name AS from_column_name, tc.name AS to_column_name, "
-        "u.name AS moved_by_name FROM card_movements m "
-        "LEFT JOIN columns fc ON fc.id = m.from_column_id "
-        "LEFT JOIN columns tc ON tc.id = m.to_column_id "
-        "LEFT JOIN users u ON u.id = m.moved_by "
-        "WHERE m.card_id = ? ORDER BY m.moved_at, m.rowid",
-        card["id"],
-    )
+    card = await fetch_card(s, card_id)
+    rows = await _movements(s, card["id"])
     items = []
     for row in rows:
         item = dict(row)
@@ -787,18 +805,13 @@ def card_movements(
     summary="Raw audit events for one card, chronological",
     dependencies=[Depends(require_flag("card_history"))],
 )
-def card_events(
+async def card_events(
     card_id: str,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """The field-level audit trail, each row with its actor and a label."""
-    card = fetch_card(db, card_id)
-    rows = db.q(
-        "SELECT e.*, u.name AS actor_name FROM card_events e "
-        "LEFT JOIN users u ON u.id = e.actor_id "
-        "WHERE e.card_id = ? ORDER BY e.created_at, e.rowid",
-        card["id"],
-    )
+    card = await fetch_card(s, card_id)
+    rows = await _events(s, card["id"])
     items = [{**dict(row), "label": _event_label(row)} for row in rows]
     return {"items": items, "total": len(items)}

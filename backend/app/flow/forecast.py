@@ -44,40 +44,41 @@ from __future__ import annotations
 
 import math
 import random
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
-from typing import Any, Callable, Iterable, Mapping, Sequence
+from datetime import UTC, date, datetime, timedelta
+from typing import Any
 
 __all__ = [
-    # constants
-    "DEFAULT_TRIALS",
     "CONFIDENCE_LEVELS",
     "DEFAULT_CLASS_MIX",
-    "DEFAULT_SIZE_MIX",
-    "SIZE_FACTORS",
-    "DEFAULT_WIP_CONFIGS",
     "DEFAULT_EXPEDITE_SHARES",
-    # statistics helpers
-    "percentile",
-    "percentiles",
-    "histogram",
-    "weekly_throughput_from_deliveries",
-    # monte carlo
-    "monte_carlo_when",
-    "monte_carlo_how_many",
+    "DEFAULT_SIZE_MIX",
+    # constants
+    "DEFAULT_TRIALS",
+    "DEFAULT_WIP_CONFIGS",
+    "SIZE_FACTORS",
     # simulator
     "ColumnSpec",
     "DemandCard",
     "DemandStream",
     "SimulationResult",
-    "column_specs_from_rows",
     "build_demand_stream",
+    "class_of_service_experiment",
+    "column_specs_from_rows",
+    "compare_runs",
+    "histogram",
+    "monte_carlo_how_many",
+    # monte carlo
+    "monte_carlo_when",
+    # statistics helpers
+    "percentile",
+    "percentiles",
+    "replay",
     "simulate_flow",
+    "weekly_throughput_from_deliveries",
     # experiments
     "wip_experiment",
-    "class_of_service_experiment",
-    "replay",
-    "compare_runs",
 ]
 
 # ---------------------------------------------------------------------------
@@ -157,8 +158,18 @@ DEFAULT_WIP_CONFIGS: tuple[dict[str, Any], ...] = (
 DEFAULT_EXPEDITE_SHARES: tuple[float, ...] = (0.0, 0.05, 0.10, 0.20, 0.35)
 
 _MONTHS: tuple[str, ...] = (
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
 )
 
 _EPS = 1e-9
@@ -243,7 +254,9 @@ def _stdev(values: Sequence[float]) -> float | None:
     return math.sqrt(sum((v - avg) ** 2 for v in values) / (len(values) - 1))
 
 
-def histogram(values: Sequence[float], *, max_bins: int = 40, integer: bool = True) -> list[dict[str, Any]]:
+def histogram(
+    values: Sequence[float], *, max_bins: int = 40, integer: bool = True
+) -> list[dict[str, Any]]:
     """A chart-ready histogram: one bin per distinct value when that is sensible.
 
     Forecast distributions are usually narrow integers ("6, 7, 8 weeks"), where a
@@ -316,7 +329,7 @@ def _parse_iso(value: Any) -> datetime | None:
     if value is None:
         return None
     if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
     text = str(value).strip()
     if not text:
         return None
@@ -326,7 +339,7 @@ def _parse_iso(value: Any) -> datetime | None:
         parsed = datetime.fromisoformat(text)
     except ValueError:
         return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
 def _format_day(value: date, reference: date | None = None) -> str:
@@ -365,7 +378,9 @@ def weekly_throughput_from_deliveries(
     first = moments[0]
     span_weeks = max(1, math.ceil(((last - first).total_seconds() / 86400.0) / 7.0))
     if weeks is not None:
-        span_weeks = max(1, min(int(weeks), span_weeks)) if include_empty_weeks else max(1, int(weeks))
+        span_weeks = (
+            max(1, min(int(weeks), span_weeks)) if include_empty_weeks else max(1, int(weeks))
+        )
         span_weeks = max(1, int(weeks))
     buckets = [0] * span_weeks
     window_start = last - timedelta(weeks=span_weeks)
@@ -428,7 +443,7 @@ def monte_carlo_when(
     confidence_levels: Sequence[int] = CONFIDENCE_LEVELS,
     max_weeks: int = 520,
 ) -> dict[str, Any]:
-    """"How long for ``backlog_size`` items?" — resampled weekly throughput.
+    """ "How long for ``backlog_size`` items?" — resampled weekly throughput.
 
     Each trial draws weekly throughput values *with replacement* until the
     backlog is cleared and records how many weeks that took. The answer is the
@@ -490,7 +505,9 @@ def monte_carlo_when(
             }
         )
 
-    headline = next((row for row in levels if row["confidence"] == 85), levels[-1] if levels else None)
+    headline = next(
+        (row for row in levels if row["confidence"] == 85), levels[-1] if levels else None
+    )
     return {
         "kind": "monte_carlo_when",
         "question": f"How long to deliver {backlog} {_pluralise(backlog, 'item')}?",
@@ -565,7 +582,7 @@ def monte_carlo_how_many(
     start_date: Any = None,
     confidence_levels: Sequence[int] = CONFIDENCE_LEVELS,
 ) -> dict[str, Any]:
-    """"How many items by a date?" — resampled weekly throughput.
+    """ "How many items by a date?" — resampled weekly throughput.
 
     Higher confidence means **fewer** items, so these percentiles descend: a
     forecast you are 95% sure of is by construction a smaller promise than one
@@ -613,7 +630,7 @@ def monte_carlo_how_many(
     levels: list[dict[str, Any]] = []
     percentile_map: dict[str, int] = {}
     for level in confidence_levels:
-        index = min(n - 1, max(0, int(math.floor(n * (1.0 - level / 100.0)))))
+        index = min(n - 1, max(0, math.floor(n * (1.0 - level / 100.0))))
         value = ordered[index]
         key = f"p{int(level)}"
         percentile_map[key] = value
@@ -630,7 +647,9 @@ def monte_carlo_how_many(
             }
         )
 
-    headline = next((row for row in levels if row["confidence"] == 85), levels[-1] if levels else None)
+    headline = next(
+        (row for row in levels if row["confidence"] == 85), levels[-1] if levels else None
+    )
     return {
         "kind": "monte_carlo_how_many",
         "question": f"How many items can we deliver in {horizon_days} days?",
@@ -690,7 +709,7 @@ def _how_many_verdict(
 
 def _resolve_start_date(value: Any) -> date:
     if value is None:
-        return datetime.now(timezone.utc).date()
+        return datetime.now(UTC).date()
     if isinstance(value, datetime):
         return value.date()
     if isinstance(value, date):
@@ -701,7 +720,7 @@ def _resolve_start_date(value: Any) -> date:
     try:
         return date.fromisoformat(str(value)[:10])
     except ValueError:
-        return datetime.now(timezone.utc).date()
+        return datetime.now(UTC).date()
 
 
 # ---------------------------------------------------------------------------
@@ -768,7 +787,9 @@ def column_specs_from_rows(
     that has not entered the system yet, so simulating flow through it would
     invent work that nobody is doing.
     """
-    ordered = sorted(rows, key=lambda row: (int(row.get("position") or 0), str(row.get("name") or "")))
+    ordered = sorted(
+        rows, key=lambda row: (int(row.get("position") or 0), str(row.get("name") or ""))
+    )
     specs: list[ColumnSpec] = []
     for row in ordered:
         kind = str(row.get("kind") or "queue")
@@ -875,7 +896,9 @@ class DemandStream:
         return counts
 
 
-def _normalise_mix(mix: Mapping[str, float] | None, default: Mapping[str, float]) -> list[tuple[str, float]]:
+def _normalise_mix(
+    mix: Mapping[str, float] | None, default: Mapping[str, float]
+) -> list[tuple[str, float]]:
     """Weighted choices as a stable, ordered list — dict order must not matter."""
     source = {str(k): float(v) for k, v in (mix or {}).items() if float(v) > 0} or dict(default)
     total = sum(source.values())
@@ -1129,7 +1152,9 @@ def simulate_flow(
     warmup_days = (
         float(warmup_weeks) * 7.0
         if warmup_weeks is not None
-        else min(horizon * 0.25, 14.0) if weeks >= 8 else 0.0
+        else min(horizon * 0.25, 14.0)
+        if weeks >= 8
+        else 0.0
     )
     window = max(_EPS, horizon - warmup_days)
 
@@ -1246,7 +1271,7 @@ def simulate_flow(
         spec = specs[index]
         seconds_in_from = None
         if previous is not None:
-            seconds_in_from = int(round((now - item.entered_at) * 86400.0))
+            seconds_in_from = round((now - item.entered_at) * 86400.0)
             col_time_total[previous] += now - item.entered_at
         charge(item, now)
         item.col = index
@@ -1300,9 +1325,7 @@ def simulate_flow(
         expedite = item.card.service_class == "expedite"
         if not expedite and len(cols[target]) >= limits[target]:
             return False
-        if target >= commit_index > item.col and not expedite and flow_wip >= flow_limit:
-            return False
-        return True
+        return not (target >= commit_index > item.col and not expedite and flow_wip >= flow_limit)
 
     def ready(item: _Live) -> bool:
         return (not specs[item.col].is_activity) or item.served
@@ -1333,7 +1356,9 @@ def simulate_flow(
     drain_deadline = horizon + (drain_limit_weeks * 7.0 if drain else 0.0)
 
     while True:
-        next_arrival = cards_in[arrival_cursor].arrival_day if arrival_cursor < total_cards else _INF
+        next_arrival = (
+            cards_in[arrival_cursor].arrival_day if arrival_cursor < total_cards else _INF
+        )
         next_service = _INF
         for item in live:
             if item.serving and item.service_end < next_service:
@@ -1348,17 +1373,23 @@ def simulate_flow(
         advance(moment)
 
         # 1. completions — free the servers before anything tries to use them
-        for item in [entry for entry in live if entry.serving and entry.service_end <= moment + _EPS]:
+        for item in [
+            entry for entry in live if entry.serving and entry.service_end <= moment + _EPS
+        ]:
             stop_service(item, item.col, moment, completed=True)
             fill_servers(item.col, moment)
 
         # 2. arrivals — demand is never rejected at the entry column
-        while arrival_cursor < total_cards and cards_in[arrival_cursor].arrival_day <= moment + _EPS:
+        while (
+            arrival_cursor < total_cards and cards_in[arrival_cursor].arrival_day <= moment + _EPS
+        ):
             card = cards_in[arrival_cursor]
             arrival_cursor += 1
             if card.arrival_day > horizon:
                 continue
-            item = _Live(card=card, col=0, entered_at=card.arrival_day, state_since=card.arrival_day)
+            item = _Live(
+                card=card, col=0, entered_at=card.arrival_day, state_since=card.arrival_day
+            )
             live.append(item)
             enter(item, 0, moment, None)
 
@@ -1448,11 +1479,7 @@ def _calibration_scale(
     bottleneck = _INF
     mean_factor = 1.0
     if stream.cards:
-        factors = [
-            value
-            for card in stream.cards
-            for value in card.factors.values()
-        ]
+        factors = [value for card in stream.cards for value in card.factors.values()]
         if factors:
             mean_factor = max(0.05, sum(factors) / len(factors))
     for index, spec in enumerate(specs):
@@ -1516,14 +1543,18 @@ def _summarise(
     avg_lead = _mean(system_lead)
 
     by_class: dict[str, dict[str, Any]] = {}
-    for service_class in sorted({item.card.service_class for item in finished} | set(DEFAULT_CLASS_MIX)):
+    for service_class in sorted(
+        {item.card.service_class for item in finished} | set(DEFAULT_CLASS_MIX)
+    ):
         subset = [item for item in in_window if item.card.service_class == service_class]
         leads = [
             item.delivered_at - item.committed_at
             for item in subset
             if item.committed_at is not None and item.delivered_at is not None
         ]
-        customer = [item.delivered_at - item.card.arrival_day for item in subset if item.delivered_at]
+        customer = [
+            item.delivered_at - item.card.arrival_day for item in subset if item.delivered_at
+        ]
         by_class[service_class] = {
             "delivered": len(subset),
             "share_pct": _round(len(subset) / len(in_window) * 100.0, 1) if in_window else 0.0,
@@ -1539,7 +1570,9 @@ def _summarise(
         for item in in_window
         if item.card.service_class == "fixed_date" and item.card.due_day is not None
     ]
-    on_time = [item for item in fixed_date if (item.delivered_at or _INF) <= (item.card.due_day or 0.0)]
+    on_time = [
+        item for item in fixed_date if (item.delivered_at or _INF) <= (item.card.due_day or 0.0)
+    ]
     due_date_performance = (len(on_time) / len(fixed_date) * 100.0) if fixed_date else None
 
     column_stats: list[dict[str, Any]] = []
@@ -1549,7 +1582,9 @@ def _summarise(
             continue
         utilisation = None
         if spec.is_activity and capacity[index]:
-            utilisation = serving_integral[index] / (capacity[index] * window) * 100.0 if window > 0 else None
+            utilisation = (
+                serving_integral[index] / (capacity[index] * window) * 100.0 if window > 0 else None
+            )
         avg_time = col_time_total[index] / col_entries[index] if col_entries[index] else None
         row = {
             "key": spec.key,
@@ -1669,7 +1704,7 @@ def _distribution_block(values: Sequence[float]) -> dict[str, Any]:
 
 
 def _weekly_series(finished: Sequence[_Live], horizon: float) -> list[dict[str, Any]]:
-    total_weeks = max(1, int(math.ceil(horizon / 7.0)))
+    total_weeks = max(1, math.ceil(horizon / 7.0))
     buckets = [0] * total_weeks
     for item in finished:
         if item.delivered_at is None or item.delivered_at > horizon:
@@ -1694,7 +1729,7 @@ def _config_kwargs(config: Mapping[str, Any], baseline_flow: int | None) -> dict
     flow_max = config.get("flow_wip_max")
     if flow_max is None and not unlimited and baseline_flow:
         factor = float(flow_scale) if flow_scale is not None else 1.0
-        flow_max = max(1, int(math.floor(baseline_flow * factor)))
+        flow_max = max(1, math.floor(baseline_flow * factor))
     return {
         "unlimited_wip": unlimited,
         "scale": float(scale) if scale is not None else None,
@@ -1705,7 +1740,9 @@ def _config_kwargs(config: Mapping[str, Any], baseline_flow: int | None) -> dict
     }
 
 
-def _experiment_row(name: str, result: SimulationResult, kwargs: Mapping[str, Any]) -> dict[str, Any]:
+def _experiment_row(
+    name: str, result: SimulationResult, kwargs: Mapping[str, Any]
+) -> dict[str, Any]:
     metrics = result.metrics
     lead = metrics["lead_time"]
     customer = metrics["customer_lead_time"]
@@ -1852,15 +1889,11 @@ def _wip_verdict(rows: Sequence[Mapping[str, Any]]) -> str:
     # throughput within 5% of the best any policy achieved. Anything below that
     # threshold is buying speed with delivery, which is not a trade worth making.
     healthy = [
-        row
-        for row in usable
-        if (row.get("throughput_per_week") or 0.0) >= best_throughput * 0.95
+        row for row in usable if (row.get("throughput_per_week") or 0.0) >= best_throughput * 0.95
     ]
     winner = min(healthy or usable, key=lambda row: row.get("lead_time_p85") or _INF)
     starved = [
-        row
-        for row in usable
-        if (row.get("throughput_per_week") or 0.0) < best_throughput * 0.95
+        row for row in usable if (row.get("throughput_per_week") or 0.0) < best_throughput * 0.95
     ]
 
     parts: list[str] = []
@@ -1960,7 +1993,7 @@ def class_of_service_experiment(
     rows: list[dict[str, Any]] = []
     for share in expedite_shares:
         share = min(1.0, max(0.0, float(share)))
-        promote = set(order[: int(round(share * len(order)))])
+        promote = set(order[: round(share * len(order))])
         cards = [
             DemandCard(
                 index=card.index,
@@ -2063,7 +2096,9 @@ def _class_verdict(rows: Sequence[Mapping[str, Any]]) -> str:
         return "Not enough standard-class deliveries to measure the cost of expediting."
     baseline = usable[0]
     worst = max(usable, key=lambda row: row.get("standard_lead_time_p85") or 0.0)
-    change = _pct_change(worst.get("standard_lead_time_p85"), baseline.get("standard_lead_time_p85"))
+    change = _pct_change(
+        worst.get("standard_lead_time_p85"), baseline.get("standard_lead_time_p85")
+    )
     parts = [
         f"Going from {baseline['expedite_share_pct']:.0f}% to {worst['expedite_share_pct']:.0f}% expedite "
         f"pushed the standard class's 85th-percentile lead time from "
@@ -2078,7 +2113,9 @@ def _class_verdict(rows: Sequence[Mapping[str, Any]]) -> str:
         )
     extra_items = (worst.get("expedite_cards") or 0) - (baseline.get("expedite_cards") or 0)
     if extra_items > 0 and change:
-        delay = (worst.get("standard_lead_time_p85") or 0) - (baseline.get("standard_lead_time_p85") or 0)
+        delay = (worst.get("standard_lead_time_p85") or 0) - (
+            baseline.get("standard_lead_time_p85") or 0
+        )
         per_item = delay / extra_items
         parts.append(
             f"That is roughly {per_item:.2f} days of delay imposed on the standard class for every "
@@ -2103,32 +2140,60 @@ def _class_verdict(rows: Sequence[Mapping[str, Any]]) -> str:
 def board_history(db: Any, board_id: str) -> dict[str, Any]:
     """Read the arrival pattern and observed dwell times of a real board.
 
-    ``db`` only has to expose ``q(sql, *args) -> list[dict]`` — the module stays
-    free of any import from the persistence layer.
+    ``db`` is a synchronous SQLAlchemy ``Session`` (routers hand one over through
+    ``AsyncSession.run_sync``); the persistence imports stay local to this reader.
     """
-    columns = db.q(
-        "SELECT id, name, position, segment, kind, wip_min, wip_max, "
-        "is_commitment_point, is_delivery_point FROM columns WHERE board_id = ? ORDER BY position",
-        board_id,
-    )
+    from sqlalchemy import select
+
+    from ..models import BoardColumn, Card, CardMovement
+
+    columns = [
+        dict(row._mapping)
+        for row in db.execute(
+            select(
+                BoardColumn.id,
+                BoardColumn.name,
+                BoardColumn.position,
+                BoardColumn.segment,
+                BoardColumn.kind,
+                BoardColumn.wip_min,
+                BoardColumn.wip_max,
+                BoardColumn.is_commitment_point,
+                BoardColumn.is_delivery_point,
+            )
+            .where(BoardColumn.board_id == board_id)
+            .order_by(BoardColumn.position)
+        )
+    ]
     if not columns:
         raise ValueError("That board has no columns to replay.")
-    creations = db.q(
-        "SELECT moved_at FROM card_movements WHERE board_id = ? AND from_column_id IS NULL "
-        "ORDER BY moved_at",
-        board_id,
-    )
-    dwells = db.q(
-        "SELECT from_column_id AS column_id, seconds_in_from_column AS seconds "
-        "FROM card_movements WHERE board_id = ? AND from_column_id IS NOT NULL "
-        "AND seconds_in_from_column IS NOT NULL AND seconds_in_from_column > 0",
-        board_id,
-    )
-    deliveries = db.q(
-        "SELECT delivered_at FROM cards WHERE board_id = ? AND delivered_at IS NOT NULL "
-        "ORDER BY delivered_at",
-        board_id,
-    )
+    creations = [
+        {"moved_at": moved_at}
+        for moved_at in db.scalars(
+            select(CardMovement.moved_at)
+            .where(CardMovement.board_id == board_id, CardMovement.from_column_id.is_(None))
+            .order_by(CardMovement.moved_at)
+        )
+    ]
+    dwells = [
+        {"column_id": column_id, "seconds": seconds}
+        for column_id, seconds in db.execute(
+            select(CardMovement.from_column_id, CardMovement.seconds_in_from_column).where(
+                CardMovement.board_id == board_id,
+                CardMovement.from_column_id.is_not(None),
+                CardMovement.seconds_in_from_column.is_not(None),
+                CardMovement.seconds_in_from_column > 0,
+            )
+        )
+    ]
+    deliveries = [
+        {"delivered_at": delivered_at}
+        for delivered_at in db.scalars(
+            select(Card.delivered_at)
+            .where(Card.board_id == board_id, Card.delivered_at.is_not(None))
+            .order_by(Card.delivered_at)
+        )
+    ]
 
     moments = [moment for moment in (_parse_iso(row["moved_at"]) for row in creations) if moment]
     moments.sort()
@@ -2207,8 +2272,12 @@ def replay(
     rows_config = list(policies) if policies else [dict(entry) for entry in DEFAULT_WIP_CONFIGS]
     baseline_flow = baseline_flow_wip_max
     if baseline_flow is None:
-        board = db.q("SELECT wip_max FROM boards WHERE id = ?", board_id)
-        baseline_flow = int(board[0]["wip_max"]) if board and board[0].get("wip_max") else None
+        from sqlalchemy import select
+
+        from ..models import Board
+
+        wip_max = db.scalar(select(Board.wip_max).where(Board.id == board_id))
+        baseline_flow = int(wip_max) if wip_max else None
 
     rows: list[dict[str, Any]] = []
     for index, config in enumerate(rows_config):
@@ -2310,7 +2379,9 @@ def _flatten_run(results: Mapping[str, Any]) -> dict[str, Any]:
             return {}
         best_throughput = max((row.get("throughput_per_week") or 0.0) for row in usable)
         healthy = [
-            row for row in usable if (row.get("throughput_per_week") or 0.0) >= best_throughput * 0.95
+            row
+            for row in usable
+            if (row.get("throughput_per_week") or 0.0) >= best_throughput * 0.95
         ]
         chosen = min(healthy or usable, key=lambda row: row.get("lead_time_p85") or _INF)
         flat = {key: chosen.get(key) for key, _, _, _ in COMPARABLE_METRICS}

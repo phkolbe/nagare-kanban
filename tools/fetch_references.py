@@ -28,38 +28,106 @@ VIEWPORT = {"width": 1440, "height": 900}
 # category: what part of Nagare this reference is the yardstick for.
 REFERENCES: list[dict] = [
     # ---- board UI ----
-    {"id": "kanbanflow_demo", "category": "board", "url": "https://kanbanflow.com/", "note": "KanbanFlow live board"},
-    {"id": "wekan", "category": "board", "url": "https://wekan.github.io/", "note": "Wekan open-source kanban"},
-    {"id": "vikunja", "category": "board", "url": "https://vikunja.io/features", "note": "Vikunja kanban view"},
-    {"id": "plane", "category": "board", "url": "https://plane.so/", "note": "Plane project boards"},
-    {"id": "linear", "category": "board", "url": "https://linear.app/", "note": "Linear -- the visual craft bar"},
+    {
+        "id": "kanbanflow_demo",
+        "category": "board",
+        "url": "https://kanbanflow.com/",
+        "note": "KanbanFlow live board",
+    },
+    {
+        "id": "wekan",
+        "category": "board",
+        "url": "https://wekan.github.io/",
+        "note": "Wekan open-source kanban",
+    },
+    {
+        "id": "vikunja",
+        "category": "board",
+        "url": "https://vikunja.io/features",
+        "note": "Vikunja kanban view",
+    },
+    {
+        "id": "plane",
+        "category": "board",
+        "url": "https://plane.so/",
+        "note": "Plane project boards",
+    },
+    {
+        "id": "linear",
+        "category": "board",
+        "url": "https://linear.app/",
+        "note": "Linear -- the visual craft bar",
+    },
     {"id": "height", "category": "board", "url": "https://height.app/", "note": "Height boards"},
     {"id": "taiga", "category": "board", "url": "https://taiga.io/", "note": "Taiga kanban"},
-    {"id": "jira_kanban", "category": "board",
-     "url": "https://www.atlassian.com/software/jira/features/kanban-boards", "note": "Jira kanban board"},
-    {"id": "kanbantool", "category": "board", "url": "https://kanbantool.com/", "note": "Kanban Tool"},
-
+    {
+        "id": "jira_kanban",
+        "category": "board",
+        "url": "https://www.atlassian.com/software/jira/features/kanban-boards",
+        "note": "Jira kanban board",
+    },
+    {
+        "id": "kanbantool",
+        "category": "board",
+        "url": "https://kanbantool.com/",
+        "note": "Kanban Tool",
+    },
     # ---- flow metrics / analytics ----
-    {"id": "businessmap_analytics", "category": "metrics",
-     "url": "https://businessmap.io/features/analytics", "note": "Businessmap (Kanbanize) flow analytics"},
-    {"id": "actionableagile", "category": "metrics", "url": "https://actionableagile.com/",
-     "note": "ActionableAgile -- the flow-metrics reference"},
-    {"id": "nave", "category": "metrics", "url": "https://getnave.com/", "note": "Nave flow analytics"},
-    {"id": "swiftkanban_metrics", "category": "metrics",
-     "url": "https://www.nimblework.com/kanban/kanban-metrics/", "note": "SwiftKanban metrics"},
-
+    {
+        "id": "businessmap_analytics",
+        "category": "metrics",
+        "url": "https://businessmap.io/features/analytics",
+        "note": "Businessmap (Kanbanize) flow analytics",
+    },
+    {
+        "id": "actionableagile",
+        "category": "metrics",
+        "url": "https://actionableagile.com/",
+        "note": "ActionableAgile -- the flow-metrics reference",
+    },
+    {
+        "id": "nave",
+        "category": "metrics",
+        "url": "https://getnave.com/",
+        "note": "Nave flow analytics",
+    },
+    {
+        "id": "swiftkanban_metrics",
+        "category": "metrics",
+        "url": "https://www.nimblework.com/kanban/kanban-metrics/",
+        "note": "SwiftKanban metrics",
+    },
     # ---- method documentation ----
-    {"id": "kanbanguides", "category": "docs", "url": "https://kanbanguides.org/english/",
-     "note": "The Kanban Guide"},
-    {"id": "businessmap_docs", "category": "docs",
-     "url": "https://businessmap.io/kanban-resources/getting-started/what-is-kanban",
-     "note": "Businessmap Kanban resources"},
-    {"id": "atlassian_kanban", "category": "docs", "url": "https://www.atlassian.com/agile/kanban",
-     "note": "Atlassian Kanban guide"},
-    {"id": "kanban_university", "category": "docs", "url": "https://kanban.university/kanban-guide/",
-     "note": "Kanban University (David J. Anderson)"},
-    {"id": "kmm", "category": "docs", "url": "https://kanban.university/kanban-maturity-model/",
-     "note": "Kanban Maturity Model"},
+    {
+        "id": "kanbanguides",
+        "category": "docs",
+        "url": "https://kanbanguides.org/english/",
+        "note": "The Kanban Guide",
+    },
+    {
+        "id": "businessmap_docs",
+        "category": "docs",
+        "url": "https://businessmap.io/kanban-resources/getting-started/what-is-kanban",
+        "note": "Businessmap Kanban resources",
+    },
+    {
+        "id": "atlassian_kanban",
+        "category": "docs",
+        "url": "https://www.atlassian.com/agile/kanban",
+        "note": "Atlassian Kanban guide",
+    },
+    {
+        "id": "kanban_university",
+        "category": "docs",
+        "url": "https://kanban.university/kanban-guide/",
+        "note": "Kanban University (David J. Anderson)",
+    },
+    {
+        "id": "kmm",
+        "category": "docs",
+        "url": "https://kanban.university/kanban-maturity-model/",
+        "note": "Kanban Maturity Model",
+    },
 ]
 
 # Consent / cookie banners: pick the most privacy-preserving option so the shot is clean.
@@ -91,10 +159,20 @@ def dismiss_banners(page) -> None:
 # renders large enough to pass a byte-size check, so it silently becomes an opponent that
 # any real interface beats, and the comparison reports a meaningless win.
 ERROR_MARKERS = (
-    "error 404", "404 error", "page not found", "page you are looking for does not exist",
-    "page doesn't exist", "page does not exist", "410 gone", "403 forbidden",
-    "500 internal server error", "service unavailable", "access denied",
-    "are you a robot", "verify you are human", "enable javascript",
+    "error 404",
+    "404 error",
+    "page not found",
+    "page you are looking for does not exist",
+    "page doesn't exist",
+    "page does not exist",
+    "410 gone",
+    "403 forbidden",
+    "500 internal server error",
+    "service unavailable",
+    "access denied",
+    "are you a robot",
+    "verify you are human",
+    "enable javascript",
 )
 
 
@@ -122,15 +200,20 @@ def _capture_once(ctx, ref: dict, path: pathlib.Path) -> dict:
             page.wait_for_load_state("networkidle", timeout=8_000)
         except PWTimeout:
             pass
-        page.mouse.wheel(0, 250)          # nudge lazy-loaded hero imagery into view
+        page.mouse.wheel(0, 250)  # nudge lazy-loaded hero imagery into view
         page.wait_for_timeout(1200)
         page.mouse.wheel(0, -250)
         page.wait_for_timeout(600)
 
         marker = looks_like_error_page(page)
         if marker:
-            return {**ref, "path": None, "bytes": 0, "ok": False,
-                    "error": f"error page (matched {marker!r}) at {page.url}"}
+            return {
+                **ref,
+                "path": None,
+                "bytes": 0,
+                "ok": False,
+                "error": f"error page (matched {marker!r}) at {page.url}",
+            }
 
         page.screenshot(path=str(path))
         size = path.stat().st_size
@@ -191,8 +274,10 @@ def main() -> int:
             res = capture(ctx, ref)
             results.append(res)
             flag = "OK  " if res["ok"] else "FAIL"
-            print(f"[{flag}] {res['category']:8} {res['id']:24} {res['bytes']:>9,} bytes"
-                  f"{'  ' + res.get('error', '') if not res['ok'] else ''}")
+            print(
+                f"[{flag}] {res['category']:8} {res['id']:24} {res['bytes']:>9,} bytes"
+                f"{'  ' + res.get('error', '') if not res['ok'] else ''}"
+            )
         browser.close()
 
     manifest = OUT / "manifest.json"
