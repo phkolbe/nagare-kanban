@@ -445,6 +445,14 @@ async def card_for_providencia(
     existing = await find_ref(s, providencia_id)
     if existing is not None:
         card = as_dict(await s.get(Card, existing["card_id"])) or {}
+        if card.get("product_id") != product_id:
+            # Providência ids are the Pampufa's UUIDs, so this should never happen; if it
+            # does, nothing of the other product leaks out.
+            raise Conflict(
+                "providencia_in_other_product",
+                "This providência already has a card in another product.",
+                details={"providencia_id": providencia_id},
+            )
         return card, False
 
     service_class = payload.get("classe_servico") or "standard"

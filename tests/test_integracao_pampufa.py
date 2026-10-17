@@ -800,3 +800,16 @@ def test_admin_and_simulator_are_not_reachable_through_the_pampufa(
     assert response.json()["error"]["code"] == "standalone_only"
     if method == "GET":
         assert client.get(f"{API}{path}", headers=auth("master")).status_code == 200
+
+
+def test_a_providencia_of_another_product_is_refused(client, pampufa) -> None:
+    service = pampufa.service()
+    body = providencia()
+    created = client.post(f"{API}/integration/providencias", json=body, headers=headers(service))
+    assert created.status_code == 201, created.text
+    elsewhere = client.post(
+        f"{API}/integration/providencias", json=body, headers=headers(service, OTHER)
+    )
+    assert elsewhere.status_code == 409, elsewhere.text
+    assert elsewhere.json()["error"]["code"] == "providencia_in_other_product"
+    assert created.json()["card"]["id"] not in elsewhere.text
