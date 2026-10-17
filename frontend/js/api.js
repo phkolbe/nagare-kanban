@@ -14,7 +14,11 @@
 
 import { toast } from "./ui.js";
 
-export const API_BASE = "/api/v1";
+/**
+ * Relative to the page, so the same build answers at the root (`:8770/`) and behind
+ * the platform gateway (`/nagare/`, prefix stripped by Caddy).
+ */
+export const API_BASE = new URL("api/v1", document.baseURI).pathname;
 const TOKEN_KEY = "nagare.token";
 
 /* ==========================================================================

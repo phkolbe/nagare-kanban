@@ -29,12 +29,17 @@ of them with the same code::
 from __future__ import annotations
 
 import math
-from bisect import bisect_left, bisect_right
-from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
-from typing import Any, Iterable, Mapping, Sequence
+from bisect import bisect_right
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
-from ..db import Database, parse_iso
+from sqlalchemy import func, or_, select
+from sqlalchemy.orm import Session
+
+from ..db import parse_iso
+from ..models import Blocker, Board, Card, Project, SimulationRun
 from .intervals import (
     ACTIVITY,
     DAY,
@@ -53,21 +58,21 @@ from .intervals import (
 )
 
 __all__ = [
-    "PERCENTILES",
     "LOW_CONFIDENCE_SAMPLE",
+    "PERCENTILES",
+    "MetricsContext",
+    "aging",
+    "blockers",
+    "cfd",
+    "demand",
+    "distribution",
+    "flow_efficiency",
+    "littles_law",
     "percentile",
     "percentile_set",
-    "MetricsContext",
-    "summary",
-    "cfd",
     "scatter",
+    "summary",
     "throughput",
-    "aging",
-    "flow_efficiency",
-    "distribution",
-    "blockers",
-    "demand",
-    "littles_law",
 ]
 
 #: The four percentiles SPEC §7.1 requires wherever a distribution exists.
@@ -211,7 +216,7 @@ def _pct(part: float, whole: float) -> float | None:
 
 
 def _utc(moment: datetime) -> datetime:
-    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+    return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
 
 
 def _parse_bound(value: str | datetime | None, *, end_of_day: bool) -> datetime | None:
@@ -255,7 +260,11 @@ def _next_period(moment: datetime, period: str) -> datetime:
         return moment + timedelta(days=7)
     if period == "month":
         year, month = moment.year, moment.month
-        return moment.replace(year=year + 1, month=1) if month == 12 else moment.replace(month=month + 1)
+        return (
+            moment.replace(year=year + 1, month=1)
+            if month == 12
+            else moment.replace(month=month + 1)
+        )
     return moment + timedelta(days=1)
 
 
@@ -326,13 +335,15 @@ class CardRecord:
 class MetricsContext:
     """One filtered snapshot of a board, shared by every metric function.
 
-    Reading the board costs three queries (columns, cards, movements) plus one
-    for blockers when a blocker metric is asked for. Nothing below re-queries.
+    Everything is read in the constructor — columns, cards, movements, blockers,
+    projects and the two workspace counts the maturity model needs — so the
+    context is plain data afterwards. Routers build it inside
+    ``AsyncSession.run_sync`` and then compute with no database in sight.
     """
 
     def __init__(
         self,
-        db: Database,
+        db: Session,
         board: Mapping[str, Any],
         *,
         frm: str | datetime | None = None,
@@ -343,13 +354,10 @@ class MetricsContext:
         include_envelope: bool | None = None,
         now: str | datetime | None = None,
     ) -> None:
-        self.db = db
         self.board = dict(board)
         self.board_id = str(board["id"])
 
-        self.now = _utc(parse_iso(now) or datetime.now(timezone.utc)) if now else datetime.now(
-            timezone.utc
-        )
+        self.now = _utc(parse_iso(now) or datetime.now(UTC)) if now else datetime.now(UTC)
         self.segment = segment if segment in {"upstream", "downstream", "unified"} else "unified"
         self.project_id = project_id or None
         self.service_class = service_class or None
@@ -402,8 +410,38 @@ class MetricsContext:
         # -- per-card snapshot ----------------------------------------------
         self.records: list[CardRecord] = [self._record(flow) for flow in flows]
         self.records_by_id: dict[str, CardRecord] = {r.id: r for r in self.records}
-        self._blockers: list[dict[str, Any]] | None = None
-        self._projects: dict[str, dict[str, Any]] | None = None
+        self._blockers: list[dict[str, Any]] = self._load_blockers(db)
+        self._projects: dict[str, dict[str, Any]] = {
+            project.id: {
+                "id": project.id,
+                "name": project.name,
+                "key": project.key,
+                "color": project.color,
+                "status": project.status,
+                "target_date": project.target_date,
+            }
+            for project in db.scalars(select(Project))
+        }
+        #: Read by the maturity model (KMM): operational boards in the workspace, and
+        #: WIP experiments run against this board or a clone of it.
+        self.operational_board_count = int(
+            db.scalar(
+                select(func.count()).where(Board.kind == "operational", Board.archived.is_(False))
+            )
+            or 0
+        )
+        self.wip_experiment_count = int(
+            db.scalar(
+                select(func.count())
+                .select_from(SimulationRun)
+                .join(Board, Board.id == SimulationRun.board_id)
+                .where(
+                    SimulationRun.kind == "wip_experiment",
+                    or_(Board.id == self.board_id, Board.source_board_id == self.board_id),
+                )
+            )
+            or 0
+        )
 
     # -- construction helpers ------------------------------------------------
 
@@ -442,37 +480,41 @@ class MetricsContext:
             due_date=parse_iso(card.get("due_date")),
         )
 
-    # -- lazy loads ----------------------------------------------------------
+    # -- loaded data ---------------------------------------------------------
+
+    def _load_blockers(self, db: Session) -> list[dict[str, Any]]:
+        """Blockers on this board's (filtered) cards, one query."""
+        query = (
+            select(
+                Blocker.id,
+                Blocker.card_id,
+                Blocker.reason,
+                Blocker.category,
+                Blocker.started_at,
+                Blocker.ended_at,
+                Card.key.label("card_key"),
+                Card.title.label("card_title"),
+                Card.service_class,
+                Card.project_id,
+            )
+            .join(Card, Card.id == Blocker.card_id)
+            .where(Card.board_id == self.board_id, Card.archived.is_(False))
+        )
+        if self.project_id:
+            query = query.where(Card.project_id == self.project_id)
+        if self.service_class:
+            query = query.where(Card.service_class == self.service_class)
+        rows = db.execute(query.order_by(Blocker.started_at, Blocker.id))
+        return [dict(row._mapping) for row in rows]
 
     @property
     def blocker_rows(self) -> list[dict[str, Any]]:
-        """Blockers on this board's (filtered) cards, one query, memoised."""
-        if self._blockers is None:
-            sql = [
-                "SELECT b.id, b.card_id, b.reason, b.category, b.started_at, b.ended_at, "
-                "c.key AS card_key, c.title AS card_title, c.service_class, c.project_id "
-                "FROM blockers b JOIN cards c ON c.id = b.card_id "
-                "WHERE c.board_id = ? AND c.archived = 0"
-            ]
-            args: list[Any] = [self.board_id]
-            if self.project_id:
-                sql.append("AND c.project_id = ?")
-                args.append(self.project_id)
-            if self.service_class:
-                sql.append("AND c.service_class = ?")
-                args.append(self.service_class)
-            sql.append("ORDER BY b.started_at")
-            self._blockers = self.db.q(" ".join(sql), args)
+        """Blockers on this board's (filtered) cards."""
         return self._blockers
 
     @property
     def projects(self) -> dict[str, dict[str, Any]]:
         """Projects referenced by this board's cards, keyed by id."""
-        if self._projects is None:
-            rows = self.db.q(
-                "SELECT id, name, key, color, status, target_date FROM projects"
-            )
-            self._projects = {row["id"]: row for row in rows}
         return self._projects
 
     # -- cohorts -------------------------------------------------------------
@@ -657,9 +699,7 @@ def _window_aggregate(
 
     lead_customer = [r.lead.customer_days for r in delivered if r.lead.customer_days is not None]
     lead_system = [r.lead.system_days for r in delivered if r.lead.system_days is not None]
-    lead_discovery = [
-        r.lead.discovery_days for r in delivered if r.lead.discovery_days is not None
-    ]
+    lead_discovery = [r.lead.discovery_days for r in delivered if r.lead.discovery_days is not None]
 
     touch = sum(r.split.touch_seconds for r in delivered)
     wait = sum(r.split.wait_seconds for r in delivered)
@@ -671,8 +711,7 @@ def _window_aggregate(
         sum(
             1
             for r in delivered
-            if r.delivered_at is not None
-            and week <= r.delivered_at < _next_period(week, "week")
+            if r.delivered_at is not None and week <= r.delivered_at < _next_period(week, "week")
         )
         for week in weeks
     ]
@@ -682,9 +721,7 @@ def _window_aggregate(
     wip_samples = [count for _, count in ctx.daily_wip(start, min(end, ctx.now))]
 
     sle_days = ctx.board.get("sle_days")
-    sle_ok = (
-        sum(1 for value in lead_customer if value <= float(sle_days)) if sle_days else 0
-    )
+    sle_ok = sum(1 for value in lead_customer if value <= float(sle_days)) if sle_days else 0
 
     fixed_date = [
         r for r in delivered if r.card.get("service_class") == "fixed_date" and r.due_date
@@ -704,9 +741,7 @@ def _window_aggregate(
             blocked_seconds += overlap
             blocked_cards.add(str(row["card_id"]))
 
-    lead_seconds_total = sum(
-        r.lead.customer for r in delivered if r.lead.customer is not None
-    )
+    lead_seconds_total = sum(r.lead.customer for r in delivered if r.lead.customer is not None)
     blocked_within_lead = 0.0
     delivered_ids = {r.id for r in delivered}
     for row in ctx.blocker_rows:
@@ -755,9 +790,7 @@ def _window_aggregate(
 def summary(ctx: MetricsContext) -> dict[str, Any]:
     """The headline KPI set of SPEC §7.1, each with its trend and sample size."""
     current = _window_aggregate(ctx, ctx.window_start, ctx.window_end, ctx.as_of)
-    previous = _window_aggregate(
-        ctx, ctx.previous_start, ctx.previous_end, ctx.previous_end
-    )
+    previous = _window_aggregate(ctx, ctx.previous_start, ctx.previous_end, ctx.previous_end)
 
     delivered_n = current["delivered_count"]
     customer = current["lead_customer"]
@@ -771,9 +804,7 @@ def summary(ctx: MetricsContext) -> dict[str, Any]:
     avg_wip = current["avg_wip"]
     throughput_per_day = delivered_n / current["window_days"] if current["window_days"] else 0.0
     mean_lead_system = _mean(system)
-    predicted_wip = (
-        throughput_per_day * mean_lead_system if mean_lead_system is not None else None
-    )
+    predicted_wip = throughput_per_day * mean_lead_system if mean_lead_system is not None else None
 
     metrics: dict[str, dict[str, Any]] = {
         "customer_lead_time": _metric(
@@ -1042,8 +1073,12 @@ def cfd(ctx: MetricsContext, interval: str = "auto") -> dict[str, Any]:
     columns = ctx.flow_columns
     if not columns:
         return ctx.envelope(
-            "cfd", [], meta={"render": "areas", "reason": "no_columns"},
-            x_label="Date", y_label="Cards", unit="count",
+            "cfd",
+            [],
+            meta={"render": "areas", "reason": "no_columns"},
+            x_label="Date",
+            y_label="Cards",
+            unit="count",
         )
 
     span_days = (ctx.window_end - ctx.window_start).total_seconds() / DAY
@@ -1062,8 +1097,10 @@ def cfd(ctx: MetricsContext, interval: str = "auto") -> dict[str, Any]:
         stride = math.ceil(len(stamps) / MAX_SERIES_POINTS)
         stamps = stamps[::stride]
     # Sample at the *end* of each bucket so a day's arrivals are included in it.
-    samples = [min(_next_period(stamp, interval) - timedelta(seconds=1), ctx.window_end)
-               for stamp in stamps]
+    samples = [
+        min(_next_period(stamp, interval) - timedelta(seconds=1), ctx.window_end)
+        for stamp in stamps
+    ]
 
     commitment_index = _index_of(ctx.flow_column_ids, ctx.commitment_column)
     delivery_index = _index_of(ctx.flow_column_ids, ctx.delivery_column)
@@ -1122,9 +1159,7 @@ def cfd(ctx: MetricsContext, interval: str = "auto") -> dict[str, Any]:
                 "approx_lead_time_days": _r(approx_lead, 2),
                 "arrived": cumulative_by_column[0][slot] if cumulative_by_column else 0,
                 "delivered": (
-                    cumulative_by_column[delivery_index][slot]
-                    if delivery_index is not None
-                    else 0
+                    cumulative_by_column[delivery_index][slot] if delivery_index is not None else 0
                 ),
             }
         )
@@ -1211,9 +1246,7 @@ def scatter(ctx: MetricsContext, metric: str = "customer") -> dict[str, Any]:
     metric = metric if metric in _SCATTER_METRICS else "customer"
     attribute, label = _SCATTER_METRICS[metric]
 
-    delivered = sorted(
-        ctx.delivered_between(), key=lambda record: record.delivered_at or ctx.now
-    )
+    delivered = sorted(ctx.delivered_between(), key=lambda record: record.delivered_at or ctx.now)
     points: list[dict[str, Any]] = []
     values: list[float] = []
     for record in delivered:
@@ -1249,9 +1282,7 @@ def scatter(ctx: MetricsContext, metric: str = "customer") -> dict[str, Any]:
         )
 
     percentiles = percentile_set(values)
-    series = [
-        _series("delivered", label, "accent", points, mark="dot", metric=metric)
-    ]
+    series = [_series("delivered", label, "accent", points, mark="dot", metric=metric)]
 
     # Percentile lines span the window so the chart can draw them as flat rules.
     x_from = _iso(ctx.window_start)
@@ -1311,9 +1342,7 @@ def scatter(ctx: MetricsContext, metric: str = "customer") -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def throughput(
-    ctx: MetricsContext, period: str = "week", rolling: int = 4
-) -> dict[str, Any]:
+def throughput(ctx: MetricsContext, period: str = "week", rolling: int = 4) -> dict[str, Any]:
     """Delivered counts per period with a rolling average and a CoV of variability."""
     period = period if period in {"day", "week", "month"} else "week"
     rolling = max(1, min(int(rolling or 4), 26))
@@ -1413,9 +1442,7 @@ def aging(ctx: MetricsContext) -> dict[str, Any]:
     """Every in-flight card plotted against the percentile bands it has crossed."""
     delivered = ctx.delivered_between()
     system_values = [r.lead.system_days for r in delivered if r.lead.system_days is not None]
-    customer_values = [
-        r.lead.customer_days for r in delivered if r.lead.customer_days is not None
-    ]
+    customer_values = [r.lead.customer_days for r in delivered if r.lead.customer_days is not None]
     system_bands = percentile_set(system_values)
     customer_bands = percentile_set(customer_values)
 
@@ -1667,14 +1694,26 @@ def flow_efficiency(ctx: MetricsContext) -> dict[str, Any]:
             "touch",
             "Touch time",
             "success",
-            [{"x": "flow", "y": _r(touch_total / DAY, 2), "pct": _r(_pct(touch_total, grand_total), 1)}],
+            [
+                {
+                    "x": "flow",
+                    "y": _r(touch_total / DAY, 2),
+                    "pct": _r(_pct(touch_total, grand_total), 1),
+                }
+            ],
             mark="bar",
         ),
         _series(
             "wait",
             "Wait time",
             "warning",
-            [{"x": "flow", "y": _r(wait_total / DAY, 2), "pct": _r(_pct(wait_total, grand_total), 1)}],
+            [
+                {
+                    "x": "flow",
+                    "y": _r(wait_total / DAY, 2),
+                    "pct": _r(_pct(wait_total, grand_total), 1),
+                }
+            ],
             mark="bar",
         ),
     ]
@@ -1775,7 +1814,7 @@ def distribution(
     points: list[dict[str, Any]] = []
     if values:
         highest = max(values)
-        bins = max(1, int(math.ceil((highest + 1e-9) / width)))
+        bins = max(1, math.ceil((highest + 1e-9) / width))
         bins = min(bins, 120)  # a histogram nobody can read is not a histogram
         width = max(width, (highest + 1e-9) / bins)
         counts = [0] * bins
@@ -1792,9 +1831,7 @@ def distribution(
                     "y": count,
                     "label": f"{low:g}–{high:g}d",
                     "pct": _r(_pct(count, len(values)), 1),
-                    "cumulative_pct": _r(
-                        _pct(sum(counts[: index + 1]), len(values)), 1
-                    ),
+                    "cumulative_pct": _r(_pct(sum(counts[: index + 1]), len(values)), 1),
                 }
             )
 
@@ -1902,9 +1939,7 @@ def blockers(ctx: MetricsContext) -> dict[str, Any]:
                 "is_open": ended is None,
                 "days": overlap / DAY,
                 "total_days": (
-                    max(0.0, (effective_end - started).total_seconds()) / DAY
-                    if started
-                    else 0.0
+                    max(0.0, (effective_end - started).total_seconds()) / DAY if started else 0.0
                 ),
             }
         )
@@ -1999,10 +2034,7 @@ def blockers(ctx: MetricsContext) -> dict[str, Any]:
                 "cumulative",
                 "Cumulative share",
                 "muted",
-                [
-                    {"x": bucket["label"], "y": bucket["cumulative_pct"]}
-                    for bucket in pareto
-                ],
+                [{"x": bucket["label"], "y": bucket["cumulative_pct"]} for bucket in pareto],
                 mark="line",
                 axis="right",
                 unit="percent",
@@ -2023,7 +2055,11 @@ def blockers(ctx: MetricsContext) -> dict[str, Any]:
             "top_blocked_cards": worst,
             "open_blockers": sorted(
                 (
-                    {**entry, "days": _r(entry["days"], 2), "total_days": _r(entry["total_days"], 2)}
+                    {
+                        **entry,
+                        "days": _r(entry["days"], 2),
+                        "total_days": _r(entry["total_days"], 2),
+                    }
                     for entry in open_now
                 ),
                 key=lambda entry: entry["days"] or 0,
@@ -2076,8 +2112,7 @@ def demand(ctx: MetricsContext) -> dict[str, Any]:
         values = [
             record.lead.customer_days
             for record in delivered
-            if record.card.get("service_class") == name
-            and record.lead.customer_days is not None
+            if record.card.get("service_class") == name and record.lead.customer_days is not None
         ]
         if not values:
             continue
@@ -2114,7 +2149,10 @@ def demand(ctx: MetricsContext) -> dict[str, Any]:
         )
         if record.start_at is not None and ctx.window_start <= record.start_at <= ctx.window_end:
             bucket["created"] += 1
-        if record.delivered_at is not None and ctx.window_start <= record.delivered_at <= ctx.window_end:
+        if (
+            record.delivered_at is not None
+            and ctx.window_start <= record.delivered_at <= ctx.window_end
+        ):
             bucket["delivered"] += 1
             if record.lead.customer_days is not None:
                 bucket["lead_times"].append(record.lead.customer_days)
@@ -2300,13 +2338,9 @@ def littles_law(ctx: MetricsContext) -> dict[str, Any]:
     throughput_per_day = len(delivered) / window_days if window_days else 0.0
     mean_system = _mean(system_values)
 
-    predicted_wip = (
-        throughput_per_day * mean_system if mean_system is not None else None
-    )
+    predicted_wip = throughput_per_day * mean_system if mean_system is not None else None
     implied_lead = avg_wip / throughput_per_day if avg_wip and throughput_per_day else None
-    coherence = (
-        avg_wip / predicted_wip if avg_wip is not None and predicted_wip else None
-    )
+    coherence = avg_wip / predicted_wip if avg_wip is not None and predicted_wip else None
 
     arrivals = len(ctx.arrived_between())
     conservation = arrivals - len(delivered)
@@ -2316,10 +2350,7 @@ def littles_law(ctx: MetricsContext) -> dict[str, Any]:
             "wip",
             "Work in progress",
             "accent",
-            [
-                {"x": _day_key(moment), "y": count, "t": _iso(moment)}
-                for moment, count in samples
-            ],
+            [{"x": _day_key(moment), "y": count, "t": _iso(moment)} for moment, count in samples],
             mark="line",
         )
     ]
@@ -2351,9 +2382,7 @@ def littles_law(ctx: MetricsContext) -> dict[str, Any]:
     )
 
 
-def _littles_law_verdict(
-    coherence: float | None, conservation: int, delivered: int
-) -> str:
+def _littles_law_verdict(coherence: float | None, conservation: int, delivered: int) -> str:
     if delivered == 0:
         return "Nothing was delivered in this window, so Little's Law cannot be evaluated."
     if coherence is None:

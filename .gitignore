@@ -32,3 +32,6 @@ shots/_focus/
 *.swp
 .DS_Store
 Thumbs.db
+
+# ---- environment (secrets) ----
+.env

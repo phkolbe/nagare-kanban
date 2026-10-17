@@ -10,14 +10,15 @@ is still being written, so this file stays a useful signal throughout the build.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
+from backend.app.db import parse_iso
 
-from backend.app.db import Database, parse_iso
+from sqlhelper import Database
 
-NOW = datetime.now(timezone.utc)
+NOW = datetime.now(UTC)
 
 
 def _skip_if_missing(response, what: str) -> None:
@@ -79,9 +80,7 @@ def test_unknown_page_falls_back_to_the_spa(client) -> None:
     ],
 )
 def test_login_succeeds_for_every_interactive_role(client, role: str, email: str) -> None:
-    response = client.post(
-        "/api/v1/auth/login", json={"email": email, "password": "nagare123"}
-    )
+    response = client.post("/api/v1/auth/login", json={"email": email, "password": "nagare123"})
     _skip_if_missing(response, "POST /auth/login")
     assert response.status_code == 200, response.text
     body = response.json()
@@ -168,9 +167,18 @@ def test_seed_creates_both_boards_with_the_spec_columns(
 ) -> None:
     names = [column["name"] for column in columns]
     assert names == [
-        "Envelope", "Ideas", "Discovery", "Options", "Ready to Commit",
-        "Analysis", "Analysis Done", "Build", "Build Done", "Verify",
-        "Ready to Deploy", "Delivered",
+        "Envelope",
+        "Ideas",
+        "Discovery",
+        "Options",
+        "Ready to Commit",
+        "Analysis",
+        "Analysis Done",
+        "Build",
+        "Build Done",
+        "Verify",
+        "Ready to Deploy",
+        "Delivered",
     ]
     commitment = [c for c in columns if c["is_commitment_point"]]
     delivery = [c for c in columns if c["is_delivery_point"]]
@@ -222,35 +230,35 @@ def test_committed_and_delivered_agree_with_the_movement_history(
     )
     assert mismatched_delivery == [], "delivered_at must equal the move into Delivered"
 
-    assert db.q(
-        "SELECT key FROM cards WHERE delivered_at IS NOT NULL AND committed_at IS NULL"
-    ) == [], "a delivered card must have been committed"
-    assert db.q(
-        "SELECT key FROM cards WHERE delivered_at IS NOT NULL AND delivered_at < committed_at"
-    ) == [], "delivery cannot precede commitment"
-    assert db.q(
-        "SELECT key FROM cards WHERE committed_at IS NOT NULL AND committed_at < created_at"
-    ) == [], "commitment cannot precede creation"
-    assert db.q(
-        "SELECT key FROM cards WHERE delivered_at IS NOT NULL AND column_id <> ?", delivery_id
-    ) == [], "delivered cards must sit in the delivery column"
-    assert db.q(
-        "SELECT key FROM cards WHERE column_id = ? AND delivered_at IS NULL", delivery_id
-    ) == [], "cards in the delivery column must carry delivered_at"
+    assert (
+        db.q("SELECT key FROM cards WHERE delivered_at IS NOT NULL AND committed_at IS NULL") == []
+    ), "a delivered card must have been committed"
+    assert (
+        db.q("SELECT key FROM cards WHERE delivered_at IS NOT NULL AND delivered_at < committed_at")
+        == []
+    ), "delivery cannot precede commitment"
+    assert (
+        db.q("SELECT key FROM cards WHERE committed_at IS NOT NULL AND committed_at < created_at")
+        == []
+    ), "commitment cannot precede creation"
+    assert (
+        db.q("SELECT key FROM cards WHERE delivered_at IS NOT NULL AND column_id <> ?", delivery_id)
+        == []
+    ), "delivered cards must sit in the delivery column"
+    assert (
+        db.q("SELECT key FROM cards WHERE column_id = ? AND delivered_at IS NULL", delivery_id)
+        == []
+    ), "cards in the delivery column must carry delivered_at"
 
 
 def test_seed_has_enough_delivered_work_for_throughput_and_forecasting(
     db: Database,
 ) -> None:
-    delivered = int(
-        db.scalar("SELECT COUNT(*) FROM cards WHERE delivered_at IS NOT NULL") or 0
-    )
+    delivered = int(db.scalar("SELECT COUNT(*) FROM cards WHERE delivered_at IS NOT NULL") or 0)
     assert delivered >= 120, f"only {delivered} delivered cards"
 
     cutoff = (NOW - timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    recent = int(
-        db.scalar("SELECT COUNT(*) FROM cards WHERE delivered_at >= ?", cutoff) or 0
-    )
+    recent = int(db.scalar("SELECT COUNT(*) FROM cards WHERE delivered_at >= ?", cutoff) or 0)
     assert recent >= 25, "the last quarter must carry enough signal for a forecast"
 
 
@@ -293,9 +301,7 @@ def test_demand_mix_matches_the_spec(db: Database) -> None:
     total = int(db.scalar("SELECT COUNT(*) FROM cards") or 0)
     mix = {
         row["service_class"]: row["n"]
-        for row in db.q(
-            "SELECT service_class, COUNT(*) AS n FROM cards GROUP BY service_class"
-        )
+        for row in db.q("SELECT service_class, COUNT(*) AS n FROM cards GROUP BY service_class")
     }
     assert set(mix) == {"expedite", "standard", "fixed_date", "intangible"}
     assert 0.03 <= mix["expedite"] / total <= 0.14
@@ -323,18 +329,16 @@ def test_blockers_carry_categories_and_some_are_still_open(db: Database) -> None
     assert all(blocker["category"] for blocker in blockers)
     open_blockers = [blocker for blocker in blockers if blocker["ended_at"] is None]
     assert open_blockers, "at least one card should be blocked right now"
-    blocked_cards = {row["id"] for row in db.q("SELECT id FROM cards WHERE is_blocked = 1")}
+    blocked_cards = {row["id"] for row in db.q("SELECT id FROM cards WHERE is_blocked = TRUE")}
     assert {blocker["card_id"] for blocker in open_blockers} <= blocked_cards
 
 
-def test_wip_limits_produce_an_at_limit_and_an_over_column(
-    db: Database, board_id: str
-) -> None:
+def test_wip_limits_produce_an_at_limit_and_an_over_column(db: Database, board_id: str) -> None:
     """The screenshots need a board that visibly demonstrates WIP policy."""
     rows = db.q(
         "SELECT col.name AS name, col.wip_min AS wip_min, col.wip_max AS wip_max, "
         "COUNT(c.id) AS count FROM columns col "
-        "LEFT JOIN cards c ON c.column_id = col.id AND c.archived = 0 "
+        "LEFT JOIN cards c ON c.column_id = col.id AND c.archived = FALSE "
         "WHERE col.board_id = ? GROUP BY col.id ORDER BY col.position",
         board_id,
     )
@@ -364,7 +368,7 @@ def test_feature_flags_and_plans_are_complete(db: Database) -> None:
     workspace = db.q1("SELECT * FROM workspace WHERE id = 'workspace'")
     assert workspace is not None
     assert workspace["name"] == "Nagare"
-    assert workspace["active_plan_id"] == plans["business"]["id"]
+    assert workspace["active_plan_id"] == plans["enterprise"]["id"]  # NG15
 
 
 def test_card_keys_follow_the_project_prefix(db: Database) -> None:
@@ -380,10 +384,12 @@ def test_card_keys_follow_the_project_prefix(db: Database) -> None:
 
 
 def test_seed_is_idempotent(db: Database) -> None:
-    from backend.app.seed import seed_if_empty
+    import asyncio
+
+    from backend.app.seed import migrate_and_seed
 
     before = int(db.scalar("SELECT COUNT(*) FROM cards") or 0)
-    summary = seed_if_empty(db)
+    summary = asyncio.run(migrate_and_seed(db.url))
     after = int(db.scalar("SELECT COUNT(*) FROM cards") or 0)
     assert summary["skipped"] is True
     assert before == after

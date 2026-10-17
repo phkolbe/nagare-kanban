@@ -20,14 +20,15 @@ from __future__ import annotations
 import base64
 import json
 import uuid
-from typing import Any, Callable, Iterator
+from collections.abc import Callable, Iterator
+from typing import Any
 
 import pytest
-
 from backend.app.config import ROLE_CAPABILITIES, ROLES
-from backend.app.db import Database
 from backend.app.routers.auth import MAX_FAILURES, reset_login_throttle
 from backend.app.security import encode_token
+
+from sqlhelper import Database
 
 API = "/api/v1"
 PASSWORD = "nagare123"
@@ -204,9 +205,7 @@ def test_login_succeeds_for_every_interactive_role(client, role: str) -> None:
     assert "password_hash" not in body["user"] and "password" not in body["user"]
 
     # The token really identifies that user against a protected route.
-    me = client.get(
-        f"{API}/auth/me", headers={"Authorization": f"Bearer {body['access_token']}"}
-    )
+    me = client.get(f"{API}/auth/me", headers={"Authorization": f"Bearer {body['access_token']}"})
     assert me.status_code == 200
     assert me.json()["id"] == body["user"]["id"]
 
@@ -220,9 +219,7 @@ def test_login_is_case_and_whitespace_insensitive_on_email(client) -> None:
 
 
 def test_login_stamps_last_login_at(client, db: Database) -> None:
-    before = db.scalar(
-        "SELECT last_login_at FROM users WHERE email = ?", ROLE_EMAILS["editor"]
-    )
+    before = db.scalar("SELECT last_login_at FROM users WHERE email = ?", ROLE_EMAILS["editor"])
     response = client.post(
         f"{API}/auth/login", json={"email": ROLE_EMAILS["editor"], "password": PASSWORD}
     )
@@ -267,9 +264,12 @@ def test_unknown_email_is_indistinguishable_from_a_wrong_password(client) -> Non
 
 def test_inactive_user_cannot_log_in(client, master, make_user) -> None:
     user = make_user("editor")
-    assert client.post(
-        f"{API}/auth/login", json={"email": user["email"], "password": user["password"]}
-    ).status_code == 200
+    assert (
+        client.post(
+            f"{API}/auth/login", json={"email": user["email"], "password": user["password"]}
+        ).status_code
+        == 200
+    )
 
     assert client.delete(f"{API}/users/{user['id']}", headers=master).status_code == 200
 
@@ -323,16 +323,19 @@ def test_repeated_failures_lock_the_address_then_release_it(client) -> None:
 def test_a_successful_login_clears_the_failure_counter(client) -> None:
     email = ROLE_EMAILS["simulator"]
     for _ in range(MAX_FAILURES - 1):
-        assert client.post(
-            f"{API}/auth/login", json={"email": email, "password": "wrong"}
-        ).status_code == 401
-    assert client.post(
-        f"{API}/auth/login", json={"email": email, "password": PASSWORD}
-    ).status_code == 200
+        assert (
+            client.post(f"{API}/auth/login", json={"email": email, "password": "wrong"}).status_code
+            == 401
+        )
+    assert (
+        client.post(f"{API}/auth/login", json={"email": email, "password": PASSWORD}).status_code
+        == 200
+    )
     for _ in range(MAX_FAILURES - 1):
-        assert client.post(
-            f"{API}/auth/login", json={"email": email, "password": "wrong"}
-        ).status_code == 401, "the counter must have restarted from zero"
+        assert (
+            client.post(f"{API}/auth/login", json={"email": email, "password": "wrong"}).status_code
+            == 401
+        ), "the counter must have restarted from zero"
 
 
 # ---------------------------------------------------------------------------
@@ -391,14 +394,13 @@ def test_refresh_returns_a_usable_token(client, master) -> None:
     assert response.status_code == 200, response.text
     token = response.json()["access_token"]
     assert response.json()["user"]["role"] == "master"
-    assert client.get(
-        f"{API}/auth/me", headers={"Authorization": f"Bearer {token}"}
-    ).status_code == 200
+    assert (
+        client.get(f"{API}/auth/me", headers={"Authorization": f"Bearer {token}"}).status_code
+        == 200
+    )
 
 
-def test_refresh_requires_a_valid_token_and_refuses_the_system_identity(
-    client, users
-) -> None:
+def test_refresh_requires_a_valid_token_and_refuses_the_system_identity(client, users) -> None:
     assert client.post(f"{API}/auth/refresh").status_code == 401
 
     system_token = encode_token(sub=users["system"]["id"], role="system")
@@ -457,12 +459,18 @@ def test_user_lifecycle_create_search_patch_soft_delete(
     assert patched.json()["role"] == "editor"
 
     # A password change takes effect immediately.
-    assert client.patch(
-        f"{API}/users/{user['id']}", json={"password": "another-secret"}, headers=master
-    ).status_code == 200
-    assert client.post(
-        f"{API}/auth/login", json={"email": user["email"], "password": "another-secret"}
-    ).status_code == 200
+    assert (
+        client.patch(
+            f"{API}/users/{user['id']}", json={"password": "another-secret"}, headers=master
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            f"{API}/auth/login", json={"email": user["email"], "password": "another-secret"}
+        ).status_code
+        == 200
+    )
 
     deleted = client.delete(f"{API}/users/{user['id']}", headers=master)
     assert deleted.status_code == 200 and deleted.json()["ok"] is True
@@ -479,7 +487,12 @@ def test_duplicate_email_is_a_conflict(client, master, make_user) -> None:
     user = make_user("viewer")
     response = client.post(
         f"{API}/users",
-        json={"email": user["email"].upper(), "name": "Clone", "password": PASSWORD, "role": "viewer"},
+        json={
+            "email": user["email"].upper(),
+            "name": "Clone",
+            "password": PASSWORD,
+            "role": "viewer",
+        },
         headers=master,
     )
     assert response.status_code == 409
@@ -487,9 +500,7 @@ def test_duplicate_email_is_a_conflict(client, master, make_user) -> None:
 
 
 def test_unknown_user_is_a_404(client, master) -> None:
-    response = client.patch(
-        f"{API}/users/{uuid.uuid4()}", json={"name": "Nobody"}, headers=master
-    )
+    response = client.patch(f"{API}/users/{uuid.uuid4()}", json={"name": "Nobody"}, headers=master)
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "user_not_found"
 
@@ -556,7 +567,9 @@ def test_nobody_may_deactivate_or_delete_themselves(client, auth, users) -> None
     )
     assert patched.status_code == 409
     assert patched.json()["error"]["code"] == "self_deactivation_blocked"
-    assert client.delete(f"{API}/users/{admin_id}", headers=auth("administrator")).status_code == 409
+    assert (
+        client.delete(f"{API}/users/{admin_id}", headers=auth("administrator")).status_code == 409
+    )
 
 
 def test_the_workspace_can_never_lose_its_last_master(
@@ -574,7 +587,7 @@ def test_the_workspace_can_never_lose_its_last_master(
     workspace, is asserted below.
     """
     seeded_id = users["master"]["id"]
-    assert db.scalar("SELECT COUNT(*) FROM users WHERE role='master' AND is_active=1") == 1
+    assert db.scalar("SELECT COUNT(*) FROM users WHERE role='master' AND is_active=TRUE") == 1
 
     # A non-master with manage_users may not touch a master account at all.
     for payload in ({"role": "editor"}, {"is_active": False}):
@@ -613,10 +626,8 @@ def test_the_workspace_can_never_lose_its_last_master(
     assert second.status_code == 201, second.text
     second_id = second.json()["id"]
     try:
-        assert db.scalar("SELECT COUNT(*) FROM users WHERE role='master' AND is_active=1") == 2
-        demoted = client.patch(
-            f"{API}/users/{second_id}", json={"role": "editor"}, headers=master
-        )
+        assert db.scalar("SELECT COUNT(*) FROM users WHERE role='master' AND is_active=TRUE") == 2
+        demoted = client.patch(f"{API}/users/{second_id}", json={"role": "editor"}, headers=master)
         assert demoted.status_code == 200, demoted.text
         assert demoted.json()["role"] == "editor"
     finally:
@@ -625,7 +636,7 @@ def test_the_workspace_can_never_lose_its_last_master(
     # Whatever happened above, the seeded master is still an active master.
     row = db.q1("SELECT role, is_active FROM users WHERE id = ?", seeded_id)
     assert row["role"] == "master" and row["is_active"] == 1
-    assert db.scalar("SELECT COUNT(*) FROM users WHERE role='master' AND is_active=1") >= 1
+    assert db.scalar("SELECT COUNT(*) FROM users WHERE role='master' AND is_active=TRUE") >= 1
 
 
 # ---------------------------------------------------------------------------
@@ -765,7 +776,8 @@ def test_flags_are_returned_raw_and_grouped_by_category(client, master) -> None:
     keys = {flag["key"] for flag in body["items"]}
     assert keys >= set(FREE_FLAGS) | set(TEAM_ONLY_FLAGS) | set(BUSINESS_ONLY_FLAGS)
     assert body["total"] == len(body["items"])
-    assert body["plan"]["slug"] == "business"
+    # NG15: the workspace runs on Enterprise, with everything on.
+    assert body["plan"]["slug"] == "enterprise"
 
     grouped = {flag["key"] for group in body["categories"] for flag in group["flags"]}
     assert grouped == keys, "every flag must appear in exactly one category group"
@@ -805,7 +817,15 @@ def test_disabling_a_flag_makes_it_ineffective_and_re_enabling_restores_it(
     assert restored.json()["effective"] is True
 
 
-def test_raising_a_flags_minimum_plan_locks_it(client, master, restore_workspace) -> None:
+def test_raising_a_flags_minimum_plan_locks_it(
+    client, master, db: Database, restore_workspace
+) -> None:
+    # Enterprise is the top tier, so step the workspace down to Business first.
+    business = db.q1("SELECT id FROM plans WHERE slug = 'business'")
+    switched = client.patch(
+        f"{API}/workspace", json={"active_plan_id": business["id"]}, headers=master
+    )
+    assert switched.status_code == 200, switched.text
     response = client.patch(
         f"{API}/flags/metrics_basic", json={"min_plan": "enterprise"}, headers=master
     )
@@ -825,7 +845,9 @@ def test_plan_catalogue_and_editing(client, master, restore_workspace) -> None:
     listed = client.get(f"{API}/plans", headers=master)
     assert listed.status_code == 200, listed.text
     slugs = [plan["slug"] for plan in listed.json()["items"]]
-    assert slugs == sorted(slugs, key=lambda s: {"free": 0, "team": 1, "business": 2, "enterprise": 3}[s])
+    assert slugs == sorted(
+        slugs, key=lambda s: {"free": 0, "team": 1, "business": 2, "enterprise": 3}[s]
+    )
     assert set(slugs) == {"free", "team", "business", "enterprise"}
 
     created = client.post(
@@ -871,7 +893,7 @@ def test_workspace_reports_its_plan_and_only_a_master_may_switch_it(
     workspace = client.get(f"{API}/workspace", headers=auth("viewer"))
     assert workspace.status_code == 200, workspace.text
     assert workspace.json()["name"] == "Nagare"
-    assert workspace.json()["plan"]["slug"] == "business"
+    assert workspace.json()["plan"]["slug"] == "enterprise"
 
     team = db.q1("SELECT id FROM plans WHERE slug = 'team'")
     denied = client.patch(
@@ -887,9 +909,7 @@ def test_workspace_reports_its_plan_and_only_a_master_may_switch_it(
     assert renamed.status_code == 200
     assert renamed.json()["name"] == "Nagare HQ"
 
-    switched = client.patch(
-        f"{API}/workspace", json={"active_plan_id": team["id"]}, headers=master
-    )
+    switched = client.patch(f"{API}/workspace", json={"active_plan_id": team["id"]}, headers=master)
     assert switched.status_code == 200, switched.text
     assert switched.json()["plan"]["slug"] == "team"
 

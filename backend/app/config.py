@@ -16,6 +16,13 @@ from typing import Any
 BASE_DIR: Path = Path(__file__).resolve().parents[2]
 APP_DIR: Path = Path(__file__).resolve().parent
 
+# The environment wins over the file; the file only fills in what is not set, like
+# the Pampufa services (``.env`` is environment only, never business settings).
+if (BASE_DIR / ".env").is_file() and not os.environ.get("NAGARE_IGNORE_DOTENV"):
+    from dotenv import load_dotenv
+
+    load_dotenv(BASE_DIR / ".env", override=False)
+
 
 def _env_bool(key: str, default: bool) -> bool:
     raw = os.environ.get(key)
@@ -42,13 +49,16 @@ class Settings:
     version: str = "1.0.0"
 
     # --- storage -----------------------------------------------------------
-    db_path: Path = field(
-        default_factory=lambda: Path(
-            os.environ.get("NAGARE_DB", str(BASE_DIR / "data" / "nagare.db"))
-        ).expanduser()
+    # PostgreSQL in development and production (postgresql+asyncpg://...). The
+    # default SQLite file keeps a cold clone runnable as a demo, as before.
+    database_url: str = field(
+        default_factory=lambda: os.environ.get(
+            "NAGARE_DATABASE_URL",
+            f"sqlite+aiosqlite:///{(BASE_DIR / 'data' / 'nagare.db').as_posix()}",
+        )
     )
-    schema_path: Path = field(default_factory=lambda: APP_DIR / "schema.sql")
-    sqlite_timeout: float = 30.0
+    #: Upgrade the schema on boot (the old behaviour). ``nagare migrar`` does it explicitly.
+    auto_migrate: bool = field(default_factory=lambda: _env_bool("NAGARE_AUTO_MIGRATE", True))
 
     # --- auth --------------------------------------------------------------
     # A dev default keeps a cold clone runnable; production must set the env var.
@@ -59,9 +69,7 @@ class Settings:
     )
     jwt_algorithm: str = "HS256"
     jwt_issuer: str = "nagare-kanban"
-    token_ttl_seconds: int = field(
-        default_factory=lambda: _env_int("NAGARE_TOKEN_TTL", 12 * 3600)
-    )
+    token_ttl_seconds: int = field(default_factory=lambda: _env_int("NAGARE_TOKEN_TTL", 12 * 3600))
     pbkdf2_iterations: int = 260_000
 
     # --- http --------------------------------------------------------------
@@ -71,6 +79,44 @@ class Settings:
 
     # --- frontend ----------------------------------------------------------
     frontend_dir: Path = field(default_factory=lambda: BASE_DIR / "frontend")
+
+    # --- Pampufa integration (NG1-NG17) ---------------------------------------
+    #: Base URL of the ``pampufa`` service. Empty: the Nagare runs standalone and
+    #: refuses Pampufa tokens.
+    pampufa_url: str = field(
+        default_factory=lambda: os.environ.get("NAGARE_PAMPUFA_URL", "").rstrip("/")
+    )
+    pampufa_issuer: str = field(
+        default_factory=lambda: os.environ.get("NAGARE_PAMPUFA_EMISSOR", "pampufa")
+    )
+    #: The audience Pampufa tokens must carry for the Nagare to accept them.
+    pampufa_audience: str = "nagare"
+    #: Service credential the Nagare uses to call the Pampufa (webhook of delivery).
+    pampufa_client_id: str = field(
+        default_factory=lambda: os.environ.get("NAGARE_PAMPUFA_CLIENTE_ID", "nagare")
+    )
+    pampufa_client_secret: str = field(
+        default_factory=lambda: os.environ.get("NAGARE_PAMPUFA_CLIENTE_SEGREDO", "")
+    )
+    #: Seconds between webhook delivery rounds.
+    webhook_interval_s: int = field(default_factory=lambda: _env_int("NAGARE_WEBHOOK_INTERVALO", 5))
+    #: Where people open a card (the link the Pampufa shows). The React screen of N2
+    #: will live under the platform's gateway; until then it is this server.
+    public_url: str = field(
+        default_factory=lambda: os.environ.get(
+            "NAGARE_URL_PUBLICA", "http://127.0.0.1:8770"
+        ).rstrip("/")
+    )
+
+    @property
+    def pampufa_enabled(self) -> bool:
+        return bool(self.pampufa_url)
+
+    @property
+    def pampufa_jwks_url(self) -> str:
+        return os.environ.get(
+            "NAGARE_PAMPUFA_JWKS_URL", f"{self.pampufa_url}/.well-known/jwks.json"
+        )
 
     # --- demo --------------------------------------------------------------
     demo_password: str = "nagare123"
@@ -88,8 +134,9 @@ class Settings:
         return origins
 
     def ensure_dirs(self) -> None:
-        """Create the directories the app writes to (the sqlite folder)."""
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        """Create the directories the app writes to (the SQLite folder, in the demo)."""
+        if self.database_url.startswith("sqlite"):
+            Path(self.database_url.split("///", 1)[-1]).parent.mkdir(parents=True, exist_ok=True)
 
 
 settings = Settings()

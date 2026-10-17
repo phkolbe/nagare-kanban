@@ -18,14 +18,15 @@ clock starts at ``created_at`` for every card.
 
 from __future__ import annotations
 
+import asyncio
 import re
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from typing import Any, Iterator
+from collections.abc import Iterator
+from datetime import datetime, timedelta
+from typing import Any
 
 import pytest
-
-from backend.app.db import Database, connect, new_id
+from backend.app.db import Database as AppDatabase
+from backend.app.db import new_id
 from backend.app.flow.kmm import compute_kmm
 from backend.app.flow.metrics import (
     LOW_CONFIDENCE_SAMPLE,
@@ -41,6 +42,8 @@ from backend.app.flow.metrics import (
     summary,
     throughput,
 )
+
+from sqlhelper import Database, connect
 
 # ---------------------------------------------------------------------------
 # the synthetic board
@@ -60,7 +63,10 @@ KIND_BY_COLUMN: dict[str, str] = {key: kind for key, _, _, kind, _ in COLUMN_DEF
 #: delivered so touch/wait, lead time and demand metrics have a real sample.
 CARD_DEFS: tuple[dict[str, Any], ...] = (
     {
-        "suffix": "A", "service_class": "standard", "demand_type": "value", "due_date": None,
+        "suffix": "A",
+        "service_class": "standard",
+        "demand_type": "value",
+        "due_date": None,
         "moves": (
             ("backlog", "2026-01-01T00:00:00Z"),
             ("doing", "2026-01-02T00:00:00Z"),
@@ -69,7 +75,10 @@ CARD_DEFS: tuple[dict[str, Any], ...] = (
         ),
     },
     {
-        "suffix": "B", "service_class": "standard", "demand_type": "value", "due_date": None,
+        "suffix": "B",
+        "service_class": "standard",
+        "demand_type": "value",
+        "due_date": None,
         "moves": (
             ("backlog", "2026-01-01T00:00:00Z"),
             ("doing", "2026-01-01T12:00:00Z"),
@@ -78,7 +87,10 @@ CARD_DEFS: tuple[dict[str, Any], ...] = (
         ),
     },
     {
-        "suffix": "C", "service_class": "expedite", "demand_type": "value", "due_date": None,
+        "suffix": "C",
+        "service_class": "expedite",
+        "demand_type": "value",
+        "due_date": None,
         "moves": (
             ("backlog", "2026-01-05T00:00:00Z"),
             ("doing", "2026-01-05T01:00:00Z"),
@@ -87,14 +99,19 @@ CARD_DEFS: tuple[dict[str, Any], ...] = (
     },
     {
         # In flight: committed, never delivered.
-        "suffix": "D", "service_class": "standard", "demand_type": "value", "due_date": None,
+        "suffix": "D",
+        "service_class": "standard",
+        "demand_type": "value",
+        "due_date": None,
         "moves": (
             ("backlog", "2026-01-10T00:00:00Z"),
             ("doing", "2026-01-10T06:00:00Z"),
         ),
     },
     {
-        "suffix": "E", "service_class": "fixed_date", "demand_type": "value",
+        "suffix": "E",
+        "service_class": "fixed_date",
+        "demand_type": "value",
         "due_date": "2026-01-03T00:00:00Z",  # delivered late
         "moves": (
             ("backlog", "2026-01-01T00:00:00Z"),
@@ -103,7 +120,9 @@ CARD_DEFS: tuple[dict[str, Any], ...] = (
         ),
     },
     {
-        "suffix": "F", "service_class": "fixed_date", "demand_type": "value",
+        "suffix": "F",
+        "service_class": "fixed_date",
+        "demand_type": "value",
         "due_date": "2026-01-10T00:00:00Z",  # delivered on time
         "moves": (
             ("backlog", "2026-01-01T00:00:00Z"),
@@ -112,7 +131,10 @@ CARD_DEFS: tuple[dict[str, Any], ...] = (
         ),
     },
     {
-        "suffix": "G", "service_class": "standard", "demand_type": "failure", "due_date": None,
+        "suffix": "G",
+        "service_class": "standard",
+        "demand_type": "failure",
+        "due_date": None,
         "moves": (
             ("backlog", "2026-01-02T00:00:00Z"),
             ("doing", "2026-01-02T06:00:00Z"),
@@ -120,7 +142,10 @@ CARD_DEFS: tuple[dict[str, Any], ...] = (
         ),
     },
     {
-        "suffix": "H", "service_class": "standard", "demand_type": "value", "due_date": None,
+        "suffix": "H",
+        "service_class": "standard",
+        "demand_type": "value",
+        "due_date": None,
         "moves": (
             ("backlog", "2026-01-01T00:00:00Z"),
             ("doing", "2026-01-01T06:00:00Z"),
@@ -161,11 +186,7 @@ def _card_lead_times(card_def: dict[str, Any]) -> tuple[float | None, float | No
     last_col, last_ts = moves[-1]
     delivered = _dt(last_ts) if last_col == "done" else None
     customer = (delivered - created).total_seconds() / 86400.0 if delivered else None
-    system = (
-        (delivered - committed).total_seconds() / 86400.0
-        if delivered and committed
-        else None
-    )
+    system = (delivered - committed).total_seconds() / 86400.0 if delivered and committed else None
     discovery = (committed - created).total_seconds() / 86400.0 if committed else None
     return customer, discovery, system
 
@@ -217,7 +238,9 @@ def _expected_weekly_counts(
     return counts
 
 
-def _expected_daily_wip_avg(card_defs: tuple[dict[str, Any], ...], start: datetime, end: datetime) -> float:
+def _expected_daily_wip_avg(
+    card_defs: tuple[dict[str, Any], ...], start: datetime, end: datetime
+) -> float:
     """Mirrors ``MetricsContext.daily_wip``'s one-sample-per-day loop exactly."""
     spans: list[tuple[datetime, datetime | None]] = []
     for card_def in card_defs:
@@ -232,7 +255,11 @@ def _expected_daily_wip_avg(card_defs: tuple[dict[str, Any], ...], start: dateti
     cursor = start
     while cursor <= end:
         counts.append(
-            sum(1 for committed, delivered in spans if committed <= cursor and (delivered is None or delivered > cursor))
+            sum(
+                1
+                for committed, delivered in spans
+                if committed <= cursor and (delivered is None or delivered > cursor)
+            )
         )
         cursor += timedelta(days=1)
     return sum(counts) / len(counts)
@@ -247,15 +274,27 @@ def _slugify(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-") or "board"
 
 
-def _insert_board(db: Database, name: str, *, sle_days: int | None = 10) -> tuple[str, dict[str, dict[str, Any]]]:
+def _insert_board(
+    db: Database, name: str, *, sle_days: int | None = 10
+) -> tuple[str, dict[str, dict[str, Any]]]:
     board_id = new_id()
     slug = f"{_slugify(name)}-{board_id[:8]}"
     db.ex(
         "INSERT INTO boards (id, name, slug, description, kind, source_board_id, "
         "count_envelope_in_metrics, confirm_moves, wip_min, wip_max, sle_days, "
-        "sle_percentile, created_at, archived) VALUES (?,?,?,?,?,NULL,?,?,?,?,?,?,?,0)",
-        board_id, name, slug, "Synthetic test fixture", "operational",
-        0, 0, None, None, sle_days, 85, "2020-01-01T00:00:00Z",
+        "sle_percentile, created_at, archived) VALUES (?,?,?,?,?,NULL,?,?,?,?,?,?,?,FALSE)",
+        board_id,
+        name,
+        slug,
+        "Synthetic test fixture",
+        "operational",
+        0,
+        0,
+        None,
+        None,
+        sle_days,
+        85,
+        "2020-01-01T00:00:00Z",
     )
     columns: dict[str, dict[str, Any]] = {}
     for key, col_name, segment, kind, position in COLUMN_DEFS:
@@ -264,7 +303,12 @@ def _insert_board(db: Database, name: str, *, sle_days: int | None = 10) -> tupl
             "INSERT INTO columns (id, board_id, group_id, name, position, segment, kind, "
             "wip_min, wip_max, is_commitment_point, is_delivery_point, color, description) "
             "VALUES (?,?,NULL,?,?,?,?,NULL,NULL,?,?,NULL,NULL)",
-            column_id, board_id, col_name, position, segment, kind,
+            column_id,
+            board_id,
+            col_name,
+            position,
+            segment,
+            kind,
             1 if key == "doing" else 0,
             1 if kind == "done" else 0,
         )
@@ -273,7 +317,11 @@ def _insert_board(db: Database, name: str, *, sle_days: int | None = 10) -> tupl
 
 
 def _insert_card(
-    db: Database, board_id: str, columns: dict[str, dict[str, Any]], card_def: dict[str, Any], key: str
+    db: Database,
+    board_id: str,
+    columns: dict[str, dict[str, Any]],
+    card_def: dict[str, Any],
+    key: str,
 ) -> str:
     card_id = new_id()
     moves = card_def["moves"]
@@ -291,29 +339,53 @@ def _insert_card(
         "position, envelope_state, is_blocked, tags, custom_fields, created_at, opened_at, "
         "committed_at, delivered_at, archived, created_by) "
         "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        card_id, board_id, current_column["id"], None, key, f"Synthetic card {key}", None,
-        card_def["service_class"], None, None, None, "feature", card_def["demand_type"],
-        card_def.get("due_date"), 0, "opened", is_blocked, "[]", "{}",
-        created_at, None, committed_at, delivered_at, 0, None,
+        card_id,
+        board_id,
+        current_column["id"],
+        None,
+        key,
+        f"Synthetic card {key}",
+        None,
+        card_def["service_class"],
+        None,
+        None,
+        None,
+        "feature",
+        card_def["demand_type"],
+        card_def.get("due_date"),
+        0,
+        "opened",
+        is_blocked,
+        "[]",
+        "{}",
+        created_at,
+        None,
+        committed_at,
+        delivered_at,
+        0,
+        None,
     )
 
     previous_key: str | None = None
     previous_ts: str | None = None
     for col_key, ts in moves:
         column = columns[col_key]
-        seconds_in_from = (
-            int((_dt(ts) - _dt(previous_ts)).total_seconds()) if previous_ts else None
-        )
+        seconds_in_from = int((_dt(ts) - _dt(previous_ts)).total_seconds()) if previous_ts else None
         db.ex(
             "INSERT INTO card_movements (id, card_id, board_id, from_column_id, to_column_id, "
             "from_segment, to_segment, moved_at, moved_by, seconds_in_from_column, note, "
-            "is_backward, source) VALUES (?,?,?,?,?,?,?,?,?,?,?,0,'seed')",
-            new_id(), card_id, board_id,
+            "is_backward, source) VALUES (?,?,?,?,?,?,?,?,?,?,?,FALSE,'seed')",
+            new_id(),
+            card_id,
+            board_id,
             columns[previous_key]["id"] if previous_key else None,
             column["id"],
             columns[previous_key]["segment"] if previous_key else None,
             column["segment"],
-            ts, None, seconds_in_from, None,
+            ts,
+            None,
+            seconds_in_from,
+            None,
         )
         previous_key, previous_ts = col_key, ts
 
@@ -321,8 +393,12 @@ def _insert_card(
         db.ex(
             "INSERT INTO blockers (id, card_id, reason, category, started_at, ended_at, "
             "created_by) VALUES (?,?,?,?,?,?,NULL)",
-            new_id(), card_id, blocker["reason"], blocker["category"],
-            blocker["started_at"], blocker.get("ended_at"),
+            new_id(),
+            card_id,
+            blocker["reason"],
+            blocker["category"],
+            blocker["started_at"],
+            blocker.get("ended_at"),
         )
     return card_id
 
@@ -333,7 +409,9 @@ def _build_board(
     board_id, columns = _insert_board(db, name, sle_days=sle_days)
     prefix = (re.sub(r"[^A-Z]", "", name.upper()) or "TST")[:4]
     card_ids = {
-        card_def["suffix"]: _insert_card(db, board_id, columns, card_def, f"{prefix}-{card_def['suffix']}")
+        card_def["suffix"]: _insert_card(
+            db, board_id, columns, card_def, f"{prefix}-{card_def['suffix']}"
+        )
         for card_def in card_defs
     }
     board = db.q1("SELECT * FROM boards WHERE id = ?", board_id)
@@ -349,15 +427,35 @@ def _build_board(
 # ---------------------------------------------------------------------------
 
 
+def build_context(url: str, board: dict[str, Any], **filters: Any) -> MetricsContext:
+    """A :class:`MetricsContext`, read the way the routers read it (``run_sync``).
+
+    The context loads everything in its constructor, so it is plain data once
+    built and the tests can call the metric functions on it outside any loop.
+    """
+
+    async def build() -> MetricsContext:
+        database = AppDatabase(url)
+        try:
+            async with database.sessions() as session:
+                return await session.run_sync(
+                    lambda sync_session: MetricsContext(sync_session, board, **filters)
+                )
+        finally:
+            await database.dispose()
+
+    return asyncio.run(build())
+
+
 @pytest.fixture(scope="module")
-def mdb(db_path: Path) -> Iterator[Database]:
+def mdb(database_url: str) -> Iterator[Database]:
     """A dedicated connection to the shared session database, at module scope.
 
     The synthetic boards below are additive (new rows, new board ids) and never
     touch the seeded "Nagare Flow" data, so building them once per module and
     sharing them across every test in this file is both safe and fast.
     """
-    database = Database(connect(db_path))
+    database = connect(database_url)
     try:
         yield database
     finally:
@@ -381,7 +479,7 @@ def synthetic(mdb: Database) -> Iterator[dict[str, Any]]:
 @pytest.fixture()
 def ctx(mdb: Database, synthetic: dict[str, Any]) -> MetricsContext:
     """A fresh, fully pinned :class:`MetricsContext` over the synthetic board."""
-    return MetricsContext(mdb, synthetic["board"], frm=WINDOW_FROM, to=WINDOW_TO, now=NOW)
+    return build_context(mdb.url, synthetic["board"], frm=WINDOW_FROM, to=WINDOW_TO, now=NOW)
 
 
 @pytest.fixture(scope="module")
@@ -407,11 +505,11 @@ def disable_flag(db: Database):
 
     def _disable(key: str) -> None:
         changed.append(key)
-        db.ex("UPDATE feature_flags SET is_enabled = 0 WHERE key = ?", key)
+        db.ex("UPDATE feature_flags SET is_enabled = FALSE WHERE key = ?", key)
 
     yield _disable
     for key in changed:
-        db.ex("UPDATE feature_flags SET is_enabled = 1 WHERE key = ?", key)
+        db.ex("UPDATE feature_flags SET is_enabled = TRUE WHERE key = ?", key)
 
 
 # ---------------------------------------------------------------------------
@@ -421,9 +519,7 @@ def disable_flag(db: Database):
 
 def test_summary_customer_lead_time_matches_reference(ctx: MetricsContext) -> None:
     data = summary(ctx)
-    values = [
-        _card_lead_times(c)[0] for c in CARD_DEFS if c["suffix"] in DELIVERED_SUFFIXES
-    ]
+    values = [_card_lead_times(c)[0] for c in CARD_DEFS if c["suffix"] in DELIVERED_SUFFIXES]
     metric = data["metrics"]["customer_lead_time"]
     assert metric["sample_size"] == len(values) == 7
     assert metric["value"] == pytest.approx(round(sum(values) / len(values), 2), abs=0.01)
@@ -438,7 +534,9 @@ def test_summary_wip_and_aging_reflect_the_one_in_flight_card(ctx: MetricsContex
     assert data["metrics"]["oldest_age"]["value"] == pytest.approx(4.75, abs=0.01)
 
     expected_avg_wip = _expected_daily_wip_avg(CARD_DEFS, _dt(WINDOW_FROM), _dt(WINDOW_TO))
-    assert data["metrics"]["avg_wip"]["value"] == pytest.approx(round(expected_avg_wip, 2), abs=0.01)
+    assert data["metrics"]["avg_wip"]["value"] == pytest.approx(
+        round(expected_avg_wip, 2), abs=0.01
+    )
 
 
 def test_summary_due_date_and_failure_demand(ctx: MetricsContext) -> None:
@@ -509,9 +607,7 @@ def test_scatter_matches_delivered_count_and_percentiles(ctx: MetricsContext) ->
 
 def test_throughput_weekly_bucketing_matches_reference(ctx: MetricsContext) -> None:
     data = throughput(ctx, period="week")
-    delivered_at = [
-        _dt(c["moves"][-1][1]) for c in CARD_DEFS if c["suffix"] in DELIVERED_SUFFIXES
-    ]
+    delivered_at = [_dt(c["moves"][-1][1]) for c in CARD_DEFS if c["suffix"] in DELIVERED_SUFFIXES]
     expected_counts = _expected_weekly_counts(delivered_at, _dt(WINDOW_FROM), _dt(WINDOW_TO))
     actual_counts = [point["y"] for point in data["series"][0]["points"]]
     assert actual_counts == expected_counts
@@ -618,7 +714,13 @@ def test_littles_law_avg_wip_matches_reference(ctx: MetricsContext) -> None:
 def test_kmm_ladder_on_the_synthetic_board(ctx: MetricsContext) -> None:
     result = compute_kmm(ctx)
     assert [level["level"] for level in result["levels"]] == [
-        "ML0", "ML1", "ML2", "ML3", "ML4", "ML5", "ML6",
+        "ML0",
+        "ML1",
+        "ML2",
+        "ML3",
+        "ML4",
+        "ML5",
+        "ML6",
     ]
     by_level = {level["level"]: level for level in result["levels"]}
 
@@ -662,8 +764,10 @@ def test_kmm_ladder_on_the_synthetic_board(ctx: MetricsContext) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_zero_data_board_does_not_crash_any_metric(mdb: Database, empty_board: dict[str, Any]) -> None:
-    context = MetricsContext(mdb, empty_board["board"], frm=WINDOW_FROM, to=WINDOW_TO, now=NOW)
+def test_zero_data_board_does_not_crash_any_metric(
+    mdb: Database, empty_board: dict[str, Any]
+) -> None:
+    context = build_context(mdb.url, empty_board["board"], frm=WINDOW_FROM, to=WINDOW_TO, now=NOW)
 
     summary_data = summary(context)
     assert summary_data["sample_size"] == 0
@@ -702,7 +806,7 @@ def test_zero_data_board_does_not_crash_any_metric(mdb: Database, empty_board: d
 
 def test_single_card_board_edge_cases(mdb: Database, single_card_board: dict[str, Any]) -> None:
     board = single_card_board["board"]
-    context = MetricsContext(mdb, board, frm=WINDOW_FROM, to=WINDOW_TO, now=NOW)
+    context = build_context(mdb.url, board, frm=WINDOW_FROM, to=WINDOW_TO, now=NOW)
     expected_customer, _, _ = _card_lead_times(CARD_DEFS[0])
 
     summary_data = summary(context)
@@ -738,10 +842,10 @@ def test_metrics_endpoint_requires_authentication(client, synthetic: dict[str, A
     assert response.json()["error"]["code"]
 
 
-@pytest.mark.parametrize(
-    "role", ["viewer", "editor", "simulator", "administrator", "master"]
-)
-def test_summary_endpoint_is_readable_by_every_role(client, auth, synthetic: dict[str, Any], role: str) -> None:
+@pytest.mark.parametrize("role", ["viewer", "editor", "simulator", "administrator", "master"])
+def test_summary_endpoint_is_readable_by_every_role(
+    client, auth, synthetic: dict[str, Any], role: str
+) -> None:
     board_id = synthetic["board"]["id"]
     response = client.get(
         f"/api/v1/boards/{board_id}/metrics/summary?from={WINDOW_FROM}&to={WINDOW_TO}",
@@ -791,8 +895,6 @@ def test_kmm_endpoint_is_guarded_by_its_feature_flag(
 
 
 def test_unknown_board_returns_404(client, auth) -> None:
-    response = client.get(
-        "/api/v1/boards/does-not-exist/metrics/summary", headers=auth("viewer")
-    )
+    response = client.get("/api/v1/boards/does-not-exist/metrics/summary", headers=auth("viewer"))
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "board_not_found"

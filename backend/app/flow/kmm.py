@@ -23,20 +23,37 @@ software has already left it.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, Callable, Sequence
+from typing import Any
 
 from ..db import iso
 from .metrics import (
     LOW_CONFIDENCE_SAMPLE,
     MetricsContext,
+)
+from .metrics import (
     blockers as _blockers,
+)
+from .metrics import (
     cfd as _cfd,
+)
+from .metrics import (
     demand as _demand,
+)
+from .metrics import (
     distribution as _distribution,
+)
+from .metrics import (
     flow_efficiency as _flow_efficiency,
+)
+from .metrics import (
     littles_law as _littles_law,
+)
+from .metrics import (
     summary as _summary,
+)
+from .metrics import (
     throughput as _throughput,
 )
 
@@ -70,21 +87,8 @@ class _Snapshot:
 
 
 def _build_snapshot(ctx: MetricsContext) -> _Snapshot:
-    board_count = int(
-        ctx.db.scalar(
-            "SELECT COUNT(*) FROM boards WHERE kind = 'operational' AND archived = 0"
-        )
-        or 0
-    )
-    wip_experiments = int(
-        ctx.db.scalar(
-            "SELECT COUNT(*) FROM simulation_runs sr JOIN boards b ON b.id = sr.board_id "
-            "WHERE sr.kind = 'wip_experiment' AND (b.id = ? OR b.source_board_id = ?)",
-            ctx.board_id,
-            ctx.board_id,
-        )
-        or 0
-    )
+    board_count = ctx.operational_board_count
+    wip_experiments = ctx.wip_experiment_count
     return _Snapshot(
         ctx=ctx,
         summary=_summary(ctx),
@@ -547,7 +551,8 @@ def _ml6_specs() -> list[_MetricSpec]:
             ),
             action="Deliver work under at least two distinct projects so a portfolio roll-up is possible.",
             check=lambda s: (
-                sum(1 for row in s.demand["meta"].get("per_project", []) if row.get("delivered")) >= 2,
+                sum(1 for row in s.demand["meta"].get("per_project", []) if row.get("delivered"))
+                >= 2,
                 len(s.demand["meta"].get("per_project", [])),
             ),
         ),

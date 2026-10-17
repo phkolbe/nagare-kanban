@@ -28,13 +28,13 @@ from .errors import ApiError
 
 __all__ = [
     "TokenError",
-    "hash_password",
-    "verify_password",
-    "needs_rehash",
-    "encode_token",
     "decode_token",
-    "token_expiry",
+    "encode_token",
     "generate_secret",
+    "hash_password",
+    "needs_rehash",
+    "token_expiry",
+    "verify_password",
 ]
 
 _PBKDF2_PREFIX = "pbkdf2"
@@ -61,6 +61,19 @@ def _b64e(raw: bytes) -> str:
 def _b64d(text: str) -> bytes:
     padding = "=" * (-len(text) % 4)
     return base64.urlsafe_b64decode(text + padding)
+
+
+def _b64d_canonical(text: str) -> bytes:
+    """Decode, refusing any encoding but the canonical one.
+
+    The last base64 character can carry unused bits; a decoder that ignores them
+    accepts several spellings of the same signature (malleability). Re-encoding and
+    comparing closes that: one signature, one token.
+    """
+    raw = _b64d(text)
+    if _b64e(raw) != text:
+        raise ValueError("non-canonical base64")
+    return raw
 
 
 # ---------------------------------------------------------------------------
@@ -96,9 +109,7 @@ def verify_password(password: str, stored: str | None) -> bool:
         return False
     if rounds <= 0 or not salt or not expected:
         return False
-    candidate = hashlib.pbkdf2_hmac(
-        "sha256", password.encode("utf-8"), salt, rounds, len(expected)
-    )
+    candidate = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, rounds, len(expected))
     return hmac.compare_digest(candidate, expected)
 
 
@@ -159,9 +170,7 @@ def encode_token(
         }
     )
     header = {"alg": settings.jwt_algorithm, "typ": "JWT"}
-    signing_input = f"{_b64e(_json_compact(header))}.{_b64e(_json_compact(claims))}".encode(
-        "ascii"
-    )
+    signing_input = f"{_b64e(_json_compact(header))}.{_b64e(_json_compact(claims))}".encode("ascii")
     signature = _sign(signing_input, secret or settings.jwt_secret)
     return f"{signing_input.decode('ascii')}.{_b64e(signature)}"
 
@@ -182,7 +191,7 @@ def decode_token(token: str, secret: str | None = None, verify_exp: bool = True)
     try:
         header = json.loads(_b64d(header_text))
         claims = json.loads(_b64d(claims_text))
-        signature = _b64d(signature_text)
+        signature = _b64d_canonical(signature_text)
     except (ValueError, TypeError, json.JSONDecodeError):
         raise TokenError("Malformed token.") from None
 

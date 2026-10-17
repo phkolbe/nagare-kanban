@@ -17,17 +17,29 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, status
+from sqlalchemy import case, func, or_, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..db import Database, new_id, seconds_between, utcnow
+from ..db import new_id, seconds_between, utcnow
 from ..deps import (
     CurrentUser,
+    assert_board_writable,
     get_board_or_404,
-    get_db,
+    get_session,
     require_capability,
     require_flag,
 )
 from ..errors import BadRequest, Conflict, Forbidden, NotFound
-from ..models import json_dumps
+from ..models import (
+    Board,
+    BoardColumn,
+    Card,
+    CardEvent,
+    CardMovement,
+    Project,
+    User,
+    as_dict,
+)
 from ..schemas import (
     CardOut,
     DemandCreate,
@@ -39,10 +51,10 @@ from ..schemas import (
     ProjectOut,
     ProjectUpdate,
 )
+from ..tenancy import in_product, product_for_new_rows, same_product
 from .boards import (
     board_wip_status,
     canonical_columns,
-    decorate_card,
     next_card_key,
     select_cards,
     wip_state,
@@ -57,20 +69,6 @@ __all__ = ["router"]
 # helpers
 # ---------------------------------------------------------------------------
 
-#: One pass over `cards` gives every roll-up a project card needs.
-_PROJECT_COUNTS_SQL = """
-SELECT project_id,
-       COUNT(*) AS card_count,
-       SUM(CASE WHEN envelope_state = 'sealed' THEN 1 ELSE 0 END) AS sealed_count,
-       SUM(CASE WHEN envelope_state = 'opened' THEN 1 ELSE 0 END) AS opened_count,
-       SUM(CASE WHEN delivered_at IS NOT NULL THEN 1 ELSE 0 END) AS delivered_count,
-       SUM(CASE WHEN committed_at IS NOT NULL AND delivered_at IS NULL THEN 1 ELSE 0 END)
-           AS in_flight_count
-FROM cards
-WHERE archived = 0 AND project_id IS NOT NULL
-GROUP BY project_id
-"""
-
 _ZERO_COUNTS: dict[str, int] = {
     "card_count": 0,
     "sealed_count": 0,
@@ -80,11 +78,42 @@ _ZERO_COUNTS: dict[str, int] = {
 }
 
 
-def _get_project_or_404(db: Database, project_id: str) -> dict[str, Any]:
+def _count_when(condition: Any) -> Any:
+    return func.coalesce(func.sum(case((condition, 1), else_=0)), 0)
+
+
+async def _project_counts(s: AsyncSession) -> dict[str, dict[str, int]]:
+    """One pass over ``cards`` gives every roll-up a project card needs."""
+    rows = await s.execute(
+        select(
+            Card.project_id,
+            func.count().label("card_count"),
+            _count_when(Card.envelope_state == "sealed").label("sealed_count"),
+            _count_when(Card.envelope_state == "opened").label("opened_count"),
+            _count_when(Card.delivered_at.is_not(None)).label("delivered_count"),
+            _count_when(Card.committed_at.is_not(None) & Card.delivered_at.is_(None)).label(
+                "in_flight_count"
+            ),
+        )
+        .where(Card.archived.is_(False), Card.project_id.is_not(None), *in_product(Card))
+        .group_by(Card.project_id)
+    )
+    return {
+        row.project_id: {key: int(row._mapping[key] or 0) for key in _ZERO_COUNTS} for row in rows
+    }
+
+
+async def _get_project_or_404(s: AsyncSession, project_id: str) -> dict[str, Any]:
     """Fetch a project by id or by its human key (``NGR``)."""
-    row = db.q1("SELECT * FROM projects WHERE id = ?", project_id)
+    row = same_product(as_dict(await s.get(Project, project_id)))
     if row is None:
-        row = db.q1("SELECT * FROM projects WHERE key = ?", str(project_id).upper())
+        row = as_dict(
+            await s.scalar(
+                select(Project)
+                .where(Project.key == str(project_id).upper(), *in_product(Project))
+                .limit(1)
+            )
+        )
     if row is None:
         raise NotFound("Project", project_id, code="project_not_found")
     return row
@@ -100,14 +129,18 @@ def _require_project_write(user: CurrentUser) -> None:
         )
 
 
-def _resolve_demand_board(db: Database, board_id: str | None) -> dict[str, Any]:
+async def _resolve_demand_board(s: AsyncSession, board_id: str | None) -> dict[str, Any]:
     """The board a new demand belongs to; the operational board when unambiguous."""
     if board_id:
-        return get_board_or_404(db, board_id)
-    rows = db.q(
-        "SELECT * FROM boards WHERE kind = 'operational' AND archived = 0 "
-        "ORDER BY created_at LIMIT 2"
-    )
+        return await get_board_or_404(s, board_id)
+    rows = (
+        await s.scalars(
+            select(Board)
+            .where(Board.kind == "operational", Board.archived.is_(False), *in_product(Board))
+            .order_by(Board.created_at)
+            .limit(2)
+        )
+    ).all()
     if not rows:
         raise Conflict(
             "no_operational_board",
@@ -118,13 +151,9 @@ def _resolve_demand_board(db: Database, board_id: str | None) -> dict[str, Any]:
         raise BadRequest(
             "This workspace has more than one board — name the board for the demand.",
             code="board_id_required",
-            details={"boards": [{"id": r["id"], "name": r["name"]} for r in rows]},
+            details={"boards": [{"id": r.id, "name": r.name} for r in rows]},
         )
-    board = dict(rows[0])
-    board["count_envelope_in_metrics"] = bool(board["count_envelope_in_metrics"])
-    board["confirm_moves"] = bool(board["confirm_moves"])
-    board["archived"] = bool(board["archived"])
-    return board
+    return as_dict(rows[0]) or {}
 
 
 def _first_open_column(columns: list[dict[str, Any]]) -> dict[str, Any]:
@@ -145,16 +174,22 @@ def _first_open_column(columns: list[dict[str, Any]]) -> dict[str, Any]:
     return target
 
 
-def _assert_column_capacity(
-    db: Database, column: dict[str, Any], service_class: str
+async def _occupancy(s: AsyncSession, column_id: str) -> int:
+    return int(
+        await s.scalar(
+            select(func.count()).where(Card.column_id == column_id, Card.archived.is_(False))
+        )
+        or 0
+    )
+
+
+async def _assert_column_capacity(
+    s: AsyncSession, column: dict[str, Any], service_class: str
 ) -> bool:
     """SPEC §6.6: a column WIP max blocks the move; ``expedite`` overrides it."""
     if column["wip_max"] is None:
         return False
-    count = int(
-        db.scalar("SELECT COUNT(*) FROM cards WHERE column_id = ? AND archived = 0", column["id"])
-        or 0
-    )
+    count = await _occupancy(s, column["id"])
     if count < int(column["wip_max"]):
         return False
     if service_class == "expedite":
@@ -173,20 +208,23 @@ def _assert_column_capacity(
     )
 
 
-def _next_position(db: Database, column_id: str) -> int:
-    return int(
-        db.scalar("SELECT COALESCE(MAX(position), -1) + 1 FROM cards WHERE column_id = ?", column_id)
-        or 0
+async def _next_position(s: AsyncSession, column_id: str) -> int:
+    highest = await s.scalar(
+        select(func.coalesce(func.max(Card.position), -1)).where(Card.column_id == column_id)
     )
+    return int(highest if highest is not None else -1) + 1
 
 
-def _card_out(db: Database, card_id: str) -> dict[str, Any]:
+async def _card_out(s: AsyncSession, card_id: str) -> dict[str, Any]:
     """Re-read a card through the shared projection so the client gets full shape."""
-    rows = select_cards(db, column_ids=None, archived=False, order_by="c.created_at")
-    for row in rows:
-        if row["id"] == card_id:
-            return row
+    rows = await select_cards(s, card_id=card_id, archived=False, order="created")
+    if rows:
+        return rows[0]
     raise NotFound("Card", card_id, code="card_not_found")
+
+
+async def _user_exists(s: AsyncSession, user_id: str) -> bool:
+    return (await s.scalar(select(User.id).where(User.id == user_id))) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -195,37 +233,33 @@ def _card_out(db: Database, card_id: str) -> dict[str, Any]:
 
 
 @router.get("/projects", response_model=ListResponse[ProjectOut], summary="List projects")
-def list_projects(
+async def list_projects(
     status_filter: str | None = Query(None, alias="status"),
     q: str | None = Query(None, description="Match the project name or key"),
     archived: bool = Query(False),
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("read_boards_metrics")),
 ) -> dict[str, Any]:
     """Projects with their demand roll-up, in two queries regardless of size."""
-    where = ["p.archived = ?"]
-    params: list[Any] = [1 if archived else 0]
+    conditions: list[Any] = [Project.archived.is_(bool(archived)), *in_product(Project)]
     if status_filter:
-        where.append("p.status = ?")
-        params.append(status_filter)
+        conditions.append(Project.status == status_filter)
     if q:
-        where.append("(p.name LIKE ? OR p.key LIKE ?)")
-        params.extend([f"%{q.strip()}%", f"%{q.strip()}%"])
+        needle = f"%{q.strip()}%"
+        conditions.append(or_(Project.name.ilike(needle), Project.key.ilike(needle)))
 
-    rows = db.q(
-        "SELECT p.*, u.name AS owner_name FROM projects p "
-        "LEFT JOIN users u ON u.id = p.owner_id "
-        f"WHERE {' AND '.join(where)} ORDER BY p.key",
-        params,
+    rows = await s.execute(
+        select(Project, User.name.label("owner_name"))
+        .outerjoin(User, User.id == Project.owner_id)
+        .where(*conditions)
+        .order_by(Project.key)
     )
-    counts = {row["project_id"]: row for row in db.q(_PROJECT_COUNTS_SQL)}
+    counts = await _project_counts(s)
     items = []
     for row in rows:
-        merged = dict(row)
-        merged.update({k: int(v or 0) for k, v in (counts.get(row["id"]) or _ZERO_COUNTS).items()
-                       if k != "project_id"})
-        for key, default in _ZERO_COUNTS.items():
-            merged.setdefault(key, default)
+        merged = as_dict(row[0]) or {}
+        merged["owner_name"] = row._mapping["owner_name"]
+        merged.update(counts.get(merged["id"], _ZERO_COUNTS))
         items.append(merged)
     return {"items": items, "total": len(items)}
 
@@ -237,43 +271,46 @@ def list_projects(
     summary="Create a project",
     dependencies=[Depends(require_flag("multi_project"))],
 )
-def create_project(
+async def create_project(
     payload: ProjectCreate,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("read_boards_metrics")),
 ) -> dict[str, Any]:
     """Create a project. The key becomes the prefix of every card key it owns."""
     _require_project_write(user)
-    if db.q1("SELECT id FROM projects WHERE key = ?", payload.key):
+    product_id = product_for_new_rows()
+    if await s.scalar(
+        select(Project.id).where(Project.key == payload.key, Project.product_id == product_id)
+    ):
         raise Conflict(
             "project_key_taken",
             f"The project key “{payload.key}” is already in use.",
             {"key": payload.key},
         )
-    if payload.owner_id and not db.q1("SELECT id FROM users WHERE id = ?", payload.owner_id):
+    if payload.owner_id and not await _user_exists(s, payload.owner_id):
         raise BadRequest(
             "That owner does not exist.",
             code="owner_not_found",
             details={"owner_id": payload.owner_id},
         )
 
-    project_id = new_id()
-    db.ex(
-        "INSERT INTO projects (id, name, key, color, description, status, owner_id, "
-        "started_at, target_date, created_at, archived) VALUES (?,?,?,?,?,?,?,?,?,?,0)",
-        project_id,
-        payload.name,
-        payload.key,
-        payload.color,
-        payload.description,
-        payload.status,
-        payload.owner_id,
-        payload.started_at,
-        payload.target_date,
-        utcnow(),
+    project = Project(
+        id=new_id(),
+        product_id=product_id,
+        name=payload.name,
+        key=payload.key,
+        color=payload.color,
+        description=payload.description,
+        status=payload.status,
+        owner_id=payload.owner_id,
+        started_at=payload.started_at,
+        target_date=payload.target_date,
+        created_at=utcnow(),
+        archived=False,
     )
-    row = _get_project_or_404(db, project_id)
-    return {**row, **_ZERO_COUNTS}
+    s.add(project)
+    await s.commit()
+    return {**(as_dict(project) or {}), **_ZERO_COUNTS}
 
 
 @router.get(
@@ -281,45 +318,46 @@ def create_project(
     response_model=ProjectDetailOut,
     summary="A project with its demand breakdown",
 )
-def get_project(
+async def get_project(
     id: str,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("read_boards_metrics")),
 ) -> dict[str, Any]:
     """Project, demand counts by envelope state **and** by column segment, and its cards."""
-    project = _get_project_or_404(db, id)
-    owner = (
-        db.q1("SELECT name FROM users WHERE id = ?", project["owner_id"])
+    project = await _get_project_or_404(s, id)
+    owner_name = (
+        await s.scalar(select(User.name).where(User.id == project["owner_id"]))
         if project["owner_id"]
         else None
     )
 
-    breakdown = db.q1(
-        "SELECT COUNT(*) AS total, "
-        "SUM(CASE WHEN c.envelope_state = 'sealed' THEN 1 ELSE 0 END) AS sealed, "
-        "SUM(CASE WHEN c.envelope_state = 'opened' THEN 1 ELSE 0 END) AS opened, "
-        "SUM(CASE WHEN col.segment = 'upstream' THEN 1 ELSE 0 END) AS upstream, "
-        "SUM(CASE WHEN col.segment = 'downstream' THEN 1 ELSE 0 END) AS downstream, "
-        "SUM(CASE WHEN c.delivered_at IS NOT NULL THEN 1 ELSE 0 END) AS delivered, "
-        "SUM(CASE WHEN c.committed_at IS NOT NULL AND c.delivered_at IS NULL THEN 1 ELSE 0 END) "
-        "AS in_flight, "
-        "SUM(CASE WHEN c.is_blocked = 1 THEN 1 ELSE 0 END) AS blocked "
-        "FROM cards c JOIN columns col ON col.id = c.column_id "
-        "WHERE c.project_id = ? AND c.archived = 0",
-        project["id"],
-    ) or {}
-    demands = {key: int(value or 0) for key, value in breakdown.items()}
+    breakdown = (
+        await s.execute(
+            select(
+                func.count().label("total"),
+                _count_when(Card.envelope_state == "sealed").label("sealed"),
+                _count_when(Card.envelope_state == "opened").label("opened"),
+                _count_when(BoardColumn.segment == "upstream").label("upstream"),
+                _count_when(BoardColumn.segment == "downstream").label("downstream"),
+                _count_when(Card.delivered_at.is_not(None)).label("delivered"),
+                _count_when(Card.committed_at.is_not(None) & Card.delivered_at.is_(None)).label(
+                    "in_flight"
+                ),
+                _count_when(Card.is_blocked.is_(True)).label("blocked"),
+            )
+            .select_from(Card)
+            .join(BoardColumn, BoardColumn.id == Card.column_id)
+            .where(Card.project_id == project["id"], Card.archived.is_(False))
+        )
+    ).first()
+    demands = {
+        key: int(value or 0) for key, value in (breakdown._mapping.items() if breakdown else [])
+    }
 
-    cards = select_cards(
-        db,
-        project_id=project["id"],
-        archived=False,
-        order_by="CASE c.envelope_state WHEN 'sealed' THEN 0 ELSE 1 END, "
-        "col.position, c.position, c.created_at",
-    )
+    cards = await select_cards(s, project_id=project["id"], archived=False, order="project")
     return {
         **project,
-        "owner_name": owner["name"] if owner else None,
+        "owner_name": owner_name,
         "card_count": demands.get("total", 0),
         "sealed_count": demands.get("sealed", 0),
         "opened_count": demands.get("opened", 0),
@@ -331,43 +369,41 @@ def get_project(
 
 
 @router.patch("/projects/{id}", response_model=ProjectOut, summary="Update a project")
-def update_project(
+async def update_project(
     id: str,
     payload: ProjectUpdate,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("read_boards_metrics")),
     _: None = Depends(require_flag("multi_project")),
 ) -> dict[str, Any]:
     """Change a project's name, colour, status, owner or dates."""
-    project = _get_project_or_404(db, id)
+    project = await _get_project_or_404(s, id)
     _require_project_write(user)
     fields = payload.model_dump(exclude_unset=True)
     if fields:
-        if fields.get("owner_id") and not db.q1(
-            "SELECT id FROM users WHERE id = ?", fields["owner_id"]
-        ):
+        if fields.get("owner_id") and not await _user_exists(s, fields["owner_id"]):
             raise BadRequest(
                 "That owner does not exist.",
                 code="owner_not_found",
                 details={"owner_id": fields["owner_id"]},
             )
-        assignments = ", ".join(f"{key} = ?" for key in fields)
-        values = [int(v) if isinstance(v, bool) else v for v in fields.values()]
-        db.ex(f"UPDATE projects SET {assignments} WHERE id = ?", values + [project["id"]])
-    return {**_get_project_or_404(db, project["id"]), **_ZERO_COUNTS}
+        await s.execute(update(Project).where(Project.id == project["id"]).values(**fields))
+        await s.commit()
+    return {**await _get_project_or_404(s, project["id"]), **_ZERO_COUNTS}
 
 
 @router.delete("/projects/{id}", response_model=OkResponse, summary="Archive a project")
-def delete_project(
+async def delete_project(
     id: str,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("read_boards_metrics")),
     _: None = Depends(require_flag("multi_project")),
 ) -> dict[str, Any]:
     """Archive a project. Its cards keep their history and their project key."""
-    project = _get_project_or_404(db, id)
+    project = await _get_project_or_404(s, id)
     _require_project_write(user)
-    db.ex("UPDATE projects SET archived = 1 WHERE id = ?", project["id"])
+    await s.execute(update(Project).where(Project.id == project["id"]).values(archived=True))
+    await s.commit()
     return {"ok": True, "id": project["id"], "message": "Project archived."}
 
 
@@ -383,10 +419,10 @@ def delete_project(
     summary="Capture a demand as a sealed envelope",
     dependencies=[Depends(require_flag("envelope"))],
 )
-def create_demand(
+async def create_demand(
     id: str,
     payload: DemandCreate,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("manage_cards")),
 ) -> dict[str, Any]:
     """Create a sealed card in the board's envelope column.
@@ -395,9 +431,10 @@ def create_demand(
     creation is still recorded as a movement (``from_column_id = NULL``, SPEC
     §2.7) so the envelope interval is measurable from the first second.
     """
-    project = _get_project_or_404(db, id)
-    board = _resolve_demand_board(db, payload.board_id)
-    columns = canonical_columns(db, board["id"])
+    project = await _get_project_or_404(s, id)
+    board = await _resolve_demand_board(s, payload.board_id)
+    assert_board_writable(board)
+    columns = await canonical_columns(s, board["id"])
     if not columns:
         raise Conflict(
             "board_has_no_columns",
@@ -419,69 +456,83 @@ def create_demand(
 
     now = utcnow()
     card_id = new_id()
-    with db.tx():
-        db.ex(
-            "INSERT INTO cards (id, board_id, column_id, project_id, key, title, description, "
-            "service_class, assignee_id, requester, size, value_area, demand_type, due_date, "
-            "position, envelope_state, is_blocked, tags, custom_fields, created_at, opened_at, "
-            "committed_at, delivered_at, archived, created_by) "
-            "VALUES (?,?,?,?,?,?,?,?,NULL,?,?,?,?,?,?,?,0,?,?,?,?,NULL,NULL,0,?)",
-            card_id,
-            board["id"],
-            column["id"],
-            project["id"],
-            next_card_key(db, project["key"]),
-            payload.title,
-            payload.description,
-            payload.service_class,
-            payload.requester,
-            payload.size,
-            payload.value_area,
-            payload.demand_type,
-            payload.due_date,
-            _next_position(db, column["id"]),
-            "sealed" if sealed else "opened",
-            json_dumps(payload.tags or []),
-            json_dumps(payload.custom_fields or {}),
-            now,
-            None if sealed else now,
-            user.get("id"),
+    s.add(
+        Card(
+            id=card_id,
+            product_id=board["product_id"],
+            board_id=board["id"],
+            column_id=column["id"],
+            project_id=project["id"],
+            key=await next_card_key(s, project["key"], board["product_id"]),
+            title=payload.title,
+            description=payload.description,
+            service_class=payload.service_class,
+            assignee_id=None,
+            requester=payload.requester,
+            size=payload.size,
+            value_area=payload.value_area,
+            demand_type=payload.demand_type,
+            due_date=payload.due_date,
+            position=await _next_position(s, column["id"]),
+            envelope_state="sealed" if sealed else "opened",
+            is_blocked=False,
+            tags=list(payload.tags or []),
+            custom_fields=dict(payload.custom_fields or {}),
+            created_at=now,
+            opened_at=None if sealed else now,
+            committed_at=None,
+            delivered_at=None,
+            archived=False,
+            created_by=user.get("id"),
         )
-        db.ex(
-            "INSERT INTO card_movements (id, card_id, board_id, from_column_id, to_column_id, "
-            "from_segment, to_segment, moved_at, moved_by, seconds_in_from_column, note, "
-            "is_backward, source) VALUES (?,?,?,NULL,?,NULL,?,?,?,NULL,?,0,'api')",
-            new_id(),
-            card_id,
-            board["id"],
-            column["id"],
-            column["segment"],
-            now,
-            user.get("id"),
-            "Demand captured" if sealed else "Demand captured and opened immediately",
+    )
+    await s.flush()
+    s.add(
+        CardMovement(
+            id=new_id(),
+            card_id=card_id,
+            board_id=board["id"],
+            from_column_id=None,
+            to_column_id=column["id"],
+            from_segment=None,
+            to_segment=column["segment"],
+            moved_at=now,
+            moved_by=user.get("id"),
+            seconds_in_from_column=None,
+            note="Demand captured" if sealed else "Demand captured and opened immediately",
+            is_backward=False,
+            source="api",
         )
-        db.ex(
-            "INSERT INTO card_events (id, card_id, board_id, actor_id, event_type, field, "
-            "old_value, new_value, created_at) VALUES (?,?,?,?,'created',NULL,NULL,?,?)",
-            new_id(),
-            card_id,
-            board["id"],
-            user.get("id"),
-            column["name"],
-            now,
+    )
+    s.add(
+        CardEvent(
+            id=new_id(),
+            card_id=card_id,
+            board_id=board["id"],
+            actor_id=user.get("id"),
+            event_type="created",
+            field=None,
+            old_value=None,
+            new_value=column["name"],
+            created_at=now,
         )
-        if not sealed:
-            db.ex(
-                "INSERT INTO card_events (id, card_id, board_id, actor_id, event_type, field, "
-                "old_value, new_value, created_at) "
-                "VALUES (?,?,?,?,'opened_envelope','envelope_state','sealed','opened',?)",
-                new_id(),
-                card_id,
-                board["id"],
-                user.get("id"),
-                now,
+    )
+    if not sealed:
+        s.add(
+            CardEvent(
+                id=new_id(),
+                card_id=card_id,
+                board_id=board["id"],
+                actor_id=user.get("id"),
+                event_type="opened_envelope",
+                field="envelope_state",
+                old_value="sealed",
+                new_value="opened",
+                created_at=now,
             )
-    return _card_out(db, card_id)
+        )
+    await s.commit()
+    return await _card_out(s, card_id)
 
 
 @router.post(
@@ -490,9 +541,9 @@ def create_demand(
     summary="Open a sealed demand",
     dependencies=[Depends(require_flag("envelope"))],
 )
-def open_envelope(
+async def open_envelope(
     id: str,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("manage_cards")),
 ) -> dict[str, Any]:
     """Unseal a demand and pull it into the first real upstream column.
@@ -501,9 +552,13 @@ def open_envelope(
     the seconds the demand spent sealed, which is exactly the interval the
     envelope toggle in SPEC §7 includes or excludes from customer lead time.
     """
-    card = db.q1("SELECT * FROM cards WHERE id = ?", id)
+    card = same_product(as_dict(await s.get(Card, id)))
     if card is None:
-        card = db.q1("SELECT * FROM cards WHERE key = ?", str(id).upper())
+        card = as_dict(
+            await s.scalar(
+                select(Card).where(Card.key == str(id).upper(), *in_product(Card)).limit(1)
+            )
+        )
     if card is None:
         raise NotFound("Card", id, code="card_not_found")
     if card["envelope_state"] != "sealed":
@@ -513,8 +568,9 @@ def open_envelope(
             {"card_id": card["id"], "opened_at": card["opened_at"]},
         )
 
-    board = get_board_or_404(db, card["board_id"])
-    columns = canonical_columns(db, board["id"])
+    board = await get_board_or_404(s, card["board_id"])
+    assert_board_writable(board)
+    columns = await canonical_columns(s, board["id"])
     source = next((c for c in columns if c["id"] == card["column_id"]), None)
     target = _first_open_column(columns)
     if source is not None and int(target["position"]) <= int(source["position"]):
@@ -524,55 +580,59 @@ def open_envelope(
             {"card_id": card["id"], "column_id": card["column_id"]},
         )
 
-    wip_override = _assert_column_capacity(db, target, card["service_class"])
+    wip_override = await _assert_column_capacity(s, target, card["service_class"])
     now = utcnow()
-    previous = db.q1(
-        "SELECT moved_at FROM card_movements WHERE card_id = ? ORDER BY moved_at DESC LIMIT 1",
-        card["id"],
+    previous = await s.scalar(
+        select(CardMovement.moved_at)
+        .where(CardMovement.card_id == card["id"])
+        .order_by(CardMovement.moved_at.desc(), CardMovement.id.desc())
+        .limit(1)
     )
-    dwell = seconds_between(previous["moved_at"], now) if previous else None
+    dwell = seconds_between(previous, now) if previous else None
     committed = bool(target["is_commitment_point"])
     movement_id = new_id()
 
-    with db.tx():
-        db.ex(
-            "UPDATE cards SET envelope_state = 'opened', opened_at = ?, column_id = ?, "
-            "position = ?, committed_at = COALESCE(committed_at, ?) WHERE id = ?",
-            now,
-            target["id"],
-            _next_position(db, target["id"]),
-            now if committed else None,
-            card["id"],
+    values: dict[str, Any] = {
+        "envelope_state": "opened",
+        "opened_at": now,
+        "column_id": target["id"],
+        "position": await _next_position(s, target["id"]),
+    }
+    if committed and not card["committed_at"]:
+        values["committed_at"] = now
+    await s.execute(update(Card).where(Card.id == card["id"]).values(**values))
+    movement = CardMovement(
+        id=movement_id,
+        card_id=card["id"],
+        board_id=board["id"],
+        from_column_id=card["column_id"],
+        to_column_id=target["id"],
+        from_segment=source["segment"] if source else None,
+        to_segment=target["segment"],
+        moved_at=now,
+        moved_by=user.get("id"),
+        seconds_in_from_column=int(dwell) if dwell is not None else None,
+        note="Envelope opened",
+        is_backward=False,
+        source="api",
+    )
+    s.add(movement)
+    s.add(
+        CardEvent(
+            id=new_id(),
+            card_id=card["id"],
+            board_id=board["id"],
+            actor_id=user.get("id"),
+            event_type="opened_envelope",
+            field="envelope_state",
+            old_value="sealed",
+            new_value="opened",
+            created_at=now,
         )
-        db.ex(
-            "INSERT INTO card_movements (id, card_id, board_id, from_column_id, to_column_id, "
-            "from_segment, to_segment, moved_at, moved_by, seconds_in_from_column, note, "
-            "is_backward, source) VALUES (?,?,?,?,?,?,?,?,?,?,?,0,'api')",
-            movement_id,
-            card["id"],
-            board["id"],
-            card["column_id"],
-            target["id"],
-            source["segment"] if source else None,
-            target["segment"],
-            now,
-            user.get("id"),
-            int(dwell) if dwell is not None else None,
-            "Envelope opened",
-        )
-        db.ex(
-            "INSERT INTO card_events (id, card_id, board_id, actor_id, event_type, field, "
-            "old_value, new_value, created_at) "
-            "VALUES (?,?,?,?,'opened_envelope','envelope_state','sealed','opened',?)",
-            new_id(),
-            card["id"],
-            board["id"],
-            user.get("id"),
-            now,
-        )
+    )
+    await s.commit()
 
-    movement = db.q1("SELECT * FROM card_movements WHERE id = ?", movement_id)
-    fresh = _card_out(db, card["id"])
+    fresh = await _card_out(s, card["id"])
     warnings: list[str] = []
     if wip_override:
         warnings.append(
@@ -580,21 +640,16 @@ def open_envelope(
             "was allowed past it."
         )
     if target["wip_min"] is not None:
-        occupancy = int(
-            db.scalar(
-                "SELECT COUNT(*) FROM cards WHERE column_id = ? AND archived = 0", target["id"]
-            )
-            or 0
-        )
+        occupancy = await _occupancy(s, target["id"])
         if occupancy < int(target["wip_min"]):
             warnings.append(f"“{target['name']}” is starving: {occupancy} below its minimum.")
 
     return {
         "card": fresh,
-        "movement": movement,
+        "movement": as_dict(movement),
         "wip_override": wip_override,
         "warnings": warnings,
-        "wip": board_wip_status(db, board, columns=columns),
+        "wip": await board_wip_status(s, board, columns=columns),
         "committed": committed,
         "delivered": bool(target["is_delivery_point"]),
     }

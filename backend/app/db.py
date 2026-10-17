@@ -1,62 +1,72 @@
-"""sqlite3 access layer.
+"""Database access: async SQLAlchemy engine, sessions, migrations and time helpers.
 
-There is no ORM in this product on purpose: the domain is a handful of tables and
-the metrics are hand-written SQL, so a thin, explicit helper beats a mapper.
+PostgreSQL is the database of record (``postgresql+asyncpg://...``); SQLite
+(``sqlite+aiosqlite://...``) runs the tests and the zero-setup demo, the same rule
+the Pampufa platform follows. The schema comes from Alembic
+(``backend/migrations``), never from ``create_all`` in production code.
 
 Usage from a router::
 
-    from backend.app.deps import get_db
+    from backend.app.deps import get_session
 
     @router.get("/things")
-    def list_things(db: Database = Depends(get_db)):
-        return db.q("SELECT * FROM cards WHERE board_id = ?", board_id)
+    async def list_things(s: AsyncSession = Depends(get_session)):
+        return (await s.scalars(select(Card).where(Card.board_id == board_id))).all()
 
-Usage from a script (seed, run.py, MCP server)::
-
-    from backend.app import db
-    db.migrate()
-    rows = db.q("SELECT * FROM users")
-
-Connections are per-thread: FastAPI runs sync endpoints in a worker thread pool,
-so a single shared connection would be unsafe. ``Database`` instances wrap one
-connection each; the module-level helpers use a thread-local connection.
+Writes are committed explicitly by the endpoint that owns them (``await
+s.commit()``); the dependency only rolls back when something escapes.
 """
 
 from __future__ import annotations
 
-import os
-import sqlite3
-import threading
-import uuid
-from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+import asyncio
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Sequence
+from typing import Any
 
-from .config import settings
+from sqlalchemy import event, func, select
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+from sqlalchemy.orm import ORMExecuteState, Session
+
+from .config import BASE_DIR, settings
+from .models import User, new_uuid
+from .sqltypes import from_iso, to_iso
+
+
+@event.listens_for(Session, "do_orm_execute")
+def _always_fresh(state: ORMExecuteState) -> None:
+    """Every ORM ``SELECT`` refreshes the instances it returns.
+
+    The routers mix ORM reads with bulk ``UPDATE`` statements (``COALESCE`` stamps,
+    position shuffles). Without this, a read after such an update could hand back
+    the instance already in the identity map with its old values.
+    """
+    if state.is_select:
+        state.update_execution_options(populate_existing=True)
+
 
 __all__ = [
     "Database",
-    "connect",
-    "get_database",
-    "close_thread_connection",
-    "migrate",
-    "reset_database",
-    "is_seeded",
-    "q",
-    "q1",
-    "ex",
-    "exmany",
-    "tx",
-    "new_id",
-    "utcnow",
-    "iso",
-    "parse_iso",
     "add_days",
+    "create_engine",
+    "is_seeded",
+    "iso",
+    "make_sessionmaker",
+    "migrate",
+    "new_id",
+    "parse_iso",
+    "reset_database",
     "seconds_between",
+    "utcnow",
 ]
 
-_local = threading.local()
+MIGRATIONS_DIR: Path = BASE_DIR / "backend" / "migrations"
 
 
 # ---------------------------------------------------------------------------
@@ -65,43 +75,31 @@ _local = threading.local()
 
 
 def new_id() -> str:
-    """A fresh uuid4 string — the id format for every table."""
-    return str(uuid.uuid4())
+    """A fresh UUID v7 string — the id format for every table."""
+    return new_uuid()
 
 
 def iso(dt: datetime) -> str:
     """Render a datetime as an ISO-8601 UTC string ending in ``Z``."""
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return to_iso(dt)
 
 
 def utcnow() -> str:
     """Current UTC instant as an ISO-8601 ``Z`` string."""
-    return iso(datetime.now(timezone.utc))
+    return iso(datetime.now(UTC))
 
 
 def parse_iso(value: str | datetime | None) -> datetime | None:
     """Parse any timestamp this app writes back into an aware UTC datetime."""
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-    text = str(value).strip()
-    if not text:
-        return None
-    if text.endswith("Z"):
-        text = text[:-1] + "+00:00"
     try:
-        parsed = datetime.fromisoformat(text)
+        return from_iso(value)
     except ValueError:
         return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 def add_days(value: str | datetime, days: float) -> str:
     """Shift an ISO timestamp by ``days`` (may be fractional/negative)."""
-    base = parse_iso(value) or datetime.now(timezone.utc)
+    base = parse_iso(value) or datetime.now(UTC)
     return iso(base + timedelta(days=days))
 
 
@@ -114,213 +112,53 @@ def seconds_between(start: str | datetime | None, end: str | datetime | None) ->
 
 
 # ---------------------------------------------------------------------------
-# connection
+# engine and sessions
 # ---------------------------------------------------------------------------
 
 
-def _dict_factory(cursor: sqlite3.Cursor, row: tuple) -> dict[str, Any]:
-    return {col[0]: row[idx] for idx, col in enumerate(cursor.description)}
+def _sqlite_pragmas(dbapi_connection: Any, _record: Any) -> None:
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys = ON")
+    cursor.execute("PRAGMA journal_mode = WAL")
+    cursor.execute("PRAGMA busy_timeout = 30000")
+    cursor.close()
 
 
-def connect(path: str | os.PathLike[str] | None = None) -> sqlite3.Connection:
-    """Open a configured sqlite3 connection.
+def create_engine(url: str | None = None) -> AsyncEngine:
+    """An async engine for ``url`` (default: ``settings.database_url``)."""
+    url = url or settings.database_url
+    if url.startswith("sqlite"):
+        path = url.split("///", 1)[-1]
+        if path and path != ":memory:":
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+        engine = create_async_engine(url, connect_args={"timeout": 30})
+        event.listen(engine.sync_engine, "connect", _sqlite_pragmas)
+        return engine
+    return create_async_engine(url, pool_pre_ping=True)
 
-    ``isolation_level=None`` puts the driver in autocommit mode; transactions are
-    explicit through :meth:`Database.tx`, which keeps write boundaries visible in
-    the code that owns them rather than hidden in the driver.
-    """
-    db_path = Path(path) if path is not None else settings.db_path
-    if str(db_path) != ":memory:":
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(
-        str(db_path),
-        timeout=settings.sqlite_timeout,
-        isolation_level=None,
-        check_same_thread=False,
-    )
-    conn.row_factory = _dict_factory
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA synchronous = NORMAL")
-    conn.execute("PRAGMA busy_timeout = 30000")
-    conn.execute("PRAGMA temp_store = MEMORY")
-    return conn
+
+def make_sessionmaker(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
+    """Sessions that keep attribute values after commit (routers read them back)."""
+    return async_sessionmaker(engine, expire_on_commit=False, autoflush=True)
 
 
 class Database:
-    """A connection plus the four query helpers every router uses."""
+    """One engine plus its session factory — what the app and the scripts hold."""
 
-    __slots__ = ("conn", "_tx_depth", "_owned")
+    def __init__(self, url: str | None = None) -> None:
+        self.url = url or settings.database_url
+        self.engine = create_engine(self.url)
+        self.sessions = make_sessionmaker(self.engine)
 
-    def __init__(self, conn: sqlite3.Connection, owned: bool = True) -> None:
-        self.conn = conn
-        self._tx_depth = 0
-        self._owned = owned
+    @property
+    def is_sqlite(self) -> bool:
+        return self.url.startswith("sqlite")
 
-    # -- reads --------------------------------------------------------------
-
-    def q(self, sql: str, *args: Any) -> list[dict[str, Any]]:
-        """Run a SELECT and return every row as a dict."""
-        cur = self.conn.execute(sql, _flatten(args))
-        try:
-            return cur.fetchall()
-        finally:
-            cur.close()
-
-    def q1(self, sql: str, *args: Any) -> dict[str, Any] | None:
-        """Run a SELECT and return the first row as a dict, or ``None``."""
-        cur = self.conn.execute(sql, _flatten(args))
-        try:
-            return cur.fetchone()
-        finally:
-            cur.close()
-
-    def scalar(self, sql: str, *args: Any) -> Any:
-        """Return the first column of the first row (``None`` when there is none)."""
-        row = self.q1(sql, *args)
-        if not row:
-            return None
-        return next(iter(row.values()))
-
-    # -- writes -------------------------------------------------------------
-
-    def ex(self, sql: str, *args: Any) -> int:
-        """Execute a write. Returns ``lastrowid`` for INSERTs, else ``rowcount``."""
-        cur = self.conn.execute(sql, _flatten(args))
-        try:
-            if cur.lastrowid and sql.lstrip()[:6].upper() == "INSERT":
-                return int(cur.lastrowid)
-            return int(cur.rowcount)
-        finally:
-            cur.close()
-
-    def exmany(self, sql: str, rows: Iterable[Sequence[Any]]) -> int:
-        """Execute a write for every row in ``rows``; returns affected row count."""
-        cur = self.conn.executemany(sql, rows)
-        try:
-            return int(cur.rowcount)
-        finally:
-            cur.close()
-
-    def executescript(self, script: str) -> None:
-        """Run a multi-statement SQL script (used by :func:`migrate`)."""
-        self.conn.executescript(script)
-
-    # -- transactions -------------------------------------------------------
-
-    @contextmanager
-    def tx(self) -> Iterator["Database"]:
-        """Explicit transaction; nests through SAVEPOINTs.
-
-        Commits on clean exit, rolls back on any exception, and re-raises.
-        """
-        if self._tx_depth == 0:
-            self.conn.execute("BEGIN IMMEDIATE")
-            self._tx_depth = 1
-            try:
-                yield self
-            except BaseException:
-                self.conn.execute("ROLLBACK")
-                self._tx_depth = 0
-                raise
-            else:
-                self.conn.execute("COMMIT")
-                self._tx_depth = 0
-        else:
-            name = f"sp_{self._tx_depth}"
-            self.conn.execute(f"SAVEPOINT {name}")
-            self._tx_depth += 1
-            try:
-                yield self
-            except BaseException:
-                self.conn.execute(f"ROLLBACK TO {name}")
-                self.conn.execute(f"RELEASE {name}")
-                self._tx_depth -= 1
-                raise
-            else:
-                self.conn.execute(f"RELEASE {name}")
-                self._tx_depth -= 1
-
-    # -- lifecycle ----------------------------------------------------------
-
-    def close(self) -> None:
-        """Close the underlying connection (no-op for borrowed connections)."""
-        if self._owned:
-            try:
-                self.conn.close()
-            except sqlite3.Error:  # pragma: no cover - closing twice is harmless
-                pass
-
-    # Convenience passthroughs so callers can drop to raw sqlite3 when needed.
-    def execute(self, sql: str, params: Sequence[Any] = ()) -> sqlite3.Cursor:
-        return self.conn.execute(sql, params)
-
-    def commit(self) -> None:
-        self.conn.commit()
-
-    def rollback(self) -> None:
-        self.conn.rollback()
+    async def dispose(self) -> None:
+        await self.engine.dispose()
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
-        return f"<Database {settings.db_path}>"
-
-
-def _flatten(args: tuple[Any, ...]) -> Sequence[Any]:
-    """Allow both ``q(sql, a, b)`` and ``q(sql, [a, b])`` / ``q(sql, {...})``."""
-    if len(args) == 1 and isinstance(args[0], (list, tuple)):
-        return list(args[0])
-    if len(args) == 1 and isinstance(args[0], dict):
-        return args[0]  # type: ignore[return-value]
-    return list(args)
-
-
-# ---------------------------------------------------------------------------
-# thread-local module-level connection (scripts, seed, MCP)
-# ---------------------------------------------------------------------------
-
-
-def get_database() -> Database:
-    """Return this thread's shared :class:`Database`, creating it on first use."""
-    existing: Database | None = getattr(_local, "database", None)
-    if existing is None:
-        existing = Database(connect())
-        _local.database = existing
-    return existing
-
-
-def close_thread_connection() -> None:
-    """Close and forget this thread's shared connection."""
-    existing: Database | None = getattr(_local, "database", None)
-    if existing is not None:
-        existing.close()
-        _local.database = None
-
-
-def q(sql: str, *args: Any) -> list[dict[str, Any]]:
-    """Module-level :meth:`Database.q` on the thread's shared connection."""
-    return get_database().q(sql, *args)
-
-
-def q1(sql: str, *args: Any) -> dict[str, Any] | None:
-    """Module-level :meth:`Database.q1` on the thread's shared connection."""
-    return get_database().q1(sql, *args)
-
-
-def ex(sql: str, *args: Any) -> int:
-    """Module-level :meth:`Database.ex` on the thread's shared connection."""
-    return get_database().ex(sql, *args)
-
-
-def exmany(sql: str, rows: Iterable[Sequence[Any]]) -> int:
-    """Module-level :meth:`Database.exmany` on the thread's shared connection."""
-    return get_database().exmany(sql, rows)
-
-
-@contextmanager
-def tx() -> Iterator[Database]:
-    """Module-level transaction on the thread's shared connection."""
-    with get_database().tx() as database:
-        yield database
+        return f"<Database {self.engine.url.render_as_string(hide_password=True)}>"
 
 
 # ---------------------------------------------------------------------------
@@ -328,33 +166,57 @@ def tx() -> Iterator[Database]:
 # ---------------------------------------------------------------------------
 
 
-def migrate(database: Database | None = None) -> Database:
-    """Apply ``schema.sql`` idempotently and return the database used."""
-    database = database or get_database()
-    script = settings.schema_path.read_text(encoding="utf-8")
-    database.executescript(script)
-    # executescript() implicitly commits and can drop the pragma state on some
-    # builds, so reassert the invariants the app relies on.
-    database.conn.execute("PRAGMA foreign_keys = ON")
-    return database
+def _alembic_config(url: str) -> Any:
+    from alembic.config import Config
+
+    config = Config()
+    config.set_main_option("script_location", str(MIGRATIONS_DIR))
+    config.set_main_option("sqlalchemy.url", url)
+    return config
 
 
-def is_seeded(database: Database | None = None) -> bool:
+def migrate_sync(url: str | None = None, revision: str = "head") -> None:
+    """Upgrade the schema to ``revision`` (blocking; scripts and tests)."""
+    from alembic import command
+
+    command.upgrade(_alembic_config(url or settings.database_url), revision)
+
+
+async def migrate(url: str | None = None, revision: str = "head") -> None:
+    """Upgrade the schema from inside a running event loop (Alembic runs its own)."""
+    await asyncio.to_thread(migrate_sync, url, revision)
+
+
+def downgrade_sync(url: str | None = None, revision: str = "base") -> None:
+    """Downgrade the schema (``reset`` on PostgreSQL)."""
+    from alembic import command
+
+    command.downgrade(_alembic_config(url or settings.database_url), revision)
+
+
+async def is_seeded(session: AsyncSession) -> bool:
     """True when the workspace already has users (SPEC §11 idempotency rule)."""
-    database = database or get_database()
-    row = database.q1(
-        "SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name='users'"
-    )
-    if not row or not row["n"]:
-        return False
-    return bool(database.scalar("SELECT COUNT(*) FROM users"))
+    return bool(await session.scalar(select(func.count()).select_from(User)))
 
 
-def reset_database(path: str | os.PathLike[str] | None = None) -> None:
-    """Delete the sqlite files (db + WAL sidecars). Used by ``run.py --reset``."""
-    close_thread_connection()
-    target = Path(path) if path is not None else settings.db_path
-    for suffix in ("", "-wal", "-shm"):
-        candidate = Path(str(target) + suffix)
-        if candidate.exists():
-            candidate.unlink()
+def reset_database(url: str | None = None) -> None:
+    """Start from an empty schema: delete the SQLite files, or downgrade PostgreSQL."""
+    url = url or settings.database_url
+    if url.startswith("sqlite"):
+        path = url.split("///", 1)[-1]
+        for suffix in ("", "-wal", "-shm"):
+            candidate = Path(path + suffix)
+            if candidate.exists():
+                candidate.unlink()
+        return
+    downgrade_sync(url)
+
+
+async def session_scope(database: Database) -> AsyncIterator[AsyncSession]:
+    """A session that rolls back anything left uncommitted (scripts)."""
+    async with database.sessions() as session:
+        try:
+            yield session
+        except BaseException:
+            await session.rollback()
+            raise

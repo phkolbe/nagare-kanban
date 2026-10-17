@@ -35,7 +35,7 @@ SHOTS = ROOT / "shots"
 REFS = ROOT / "refs"
 COMPARE = ROOT / "compare"
 
-PANEL_W = 1180          # each panel is normalised to this width
+PANEL_W = 1180  # each panel is normalised to this width
 GUTTER = 44
 MARGIN = 40
 HEADER = 78
@@ -63,8 +63,8 @@ ROUTE_CATEGORY = {
 # Regions (as fractions of panel size) wiped on BOTH panels so a wordmark can't leak
 # the identity of either side. Symmetric by construction -- the mask itself is no tell.
 BRAND_MASKS = [
-    (0.000, 0.000, 0.190, 0.062),   # top-left wordmark / logo
-    (0.780, 0.000, 1.000, 0.052),   # top-right account chrome
+    (0.000, 0.000, 0.190, 0.062),  # top-left wordmark / logo
+    (0.780, 0.000, 1.000, 0.052),  # top-right account chrome
 ]
 
 
@@ -95,8 +95,12 @@ def mask_branding(img: Image.Image) -> Image.Image:
     """Blur out the corners where product wordmarks live, on every panel equally."""
     out = img.copy()
     for fx0, fy0, fx1, fy1 in BRAND_MASKS:
-        box = (round(fx0 * img.width), round(fy0 * img.height),
-               round(fx1 * img.width), round(fy1 * img.height))
+        box = (
+            round(fx0 * img.width),
+            round(fy0 * img.height),
+            round(fx1 * img.width),
+            round(fy1 * img.height),
+        )
         if box[2] <= box[0] or box[3] <= box[1]:
             continue
         region = out.crop(box).filter(ImageFilter.GaussianBlur(18))
@@ -120,8 +124,9 @@ def compose(left: Image.Image, right: Image.Image, pair_id: str, prompt_note: st
 
     for x, panel in ((MARGIN, left), (MARGIN + PANEL_W + GUTTER, right)):
         canvas.paste(panel, (x, HEADER))
-        draw.rectangle([x - 1, HEADER - 1, x + PANEL_W, HEADER + panel.height],
-                       outline=(60, 60, 66), width=1)
+        draw.rectangle(
+            [x - 1, HEADER - 1, x + PANEL_W, HEADER + panel.height], outline=(60, 60, 66), width=1
+        )
     return canvas
 
 
@@ -184,25 +189,37 @@ def cmd_build(args: argparse.Namespace) -> int:
             img = compose(left, right, pair_id, note)
             dest = outdir / f"{pair_id}.png"
             img.save(dest, optimize=True)
-            keys.append({
-                "pair_id": pair_id,
-                "ours_panel": "A" if ours_is_a else "B",
-                "ours": str(shot.relative_to(ROOT)).replace("\\", "/"),
-                "theirs": str(ref.relative_to(ROOT)).replace("\\", "/"),
-                "route": route, "theme": theme, "category": cat,
-            })
+            keys.append(
+                {
+                    "pair_id": pair_id,
+                    "ours_panel": "A" if ours_is_a else "B",
+                    "ours": str(shot.relative_to(ROOT)).replace("\\", "/"),
+                    "theirs": str(ref.relative_to(ROOT)).replace("\\", "/"),
+                    "route": route,
+                    "theme": theme,
+                    "category": cat,
+                }
+            )
             pairs.append(dest)
 
     (outdir / "_key.json").write_text(json.dumps(keys, indent=2), encoding="utf-8")
-    manifest = [{"pair_id": k["pair_id"], "image": f"compare/round{args.round}/{k['pair_id']}.png",
-                 "category": k["category"]} for k in keys]
+    manifest = [
+        {
+            "pair_id": k["pair_id"],
+            "image": f"compare/round{args.round}/{k['pair_id']}.png",
+            "category": k["category"],
+        }
+        for k in keys
+    ]
     (outdir / "pairs.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     print(f"built {len(pairs)} blind pairs in {outdir}")
     print(f"  critic reads : {outdir / 'pairs.json'}")
-    print(f"  critic writes: {outdir / 'verdicts.json'}  "
-          '[{"pair_id":"pair-000","winner":"A","margin":"clear|slight|tie",'
-          '"reasons":["..."],"loser_fixes":["..."]}]')
+    print(
+        f"  critic writes: {outdir / 'verdicts.json'}  "
+        '[{"pair_id":"pair-000","winner":"A","margin":"clear|slight|tie",'
+        '"reasons":["..."],"loser_fixes":["..."]}]'
+    )
     print(f"  key (do NOT show the critic): {outdir / '_key.json'}")
     return 0
 
@@ -211,8 +228,10 @@ def cmd_reveal(args: argparse.Namespace) -> int:
     outdir = COMPARE / f"round{args.round}"
     key_path, verdict_path = outdir / "_key.json", outdir / "verdicts.json"
     if not key_path.exists() or not verdict_path.exists():
-        print(f"missing {key_path.name if not key_path.exists() else verdict_path.name}",
-              file=sys.stderr)
+        print(
+            f"missing {key_path.name if not key_path.exists() else verdict_path.name}",
+            file=sys.stderr,
+        )
         return 1
 
     keys = {k["pair_id"]: k for k in json.loads(key_path.read_text(encoding="utf-8"))}
@@ -233,19 +252,28 @@ def cmd_reveal(args: argparse.Namespace) -> int:
             verdict, wins = "NAGARE", wins + 1
         else:
             verdict, losses = "REFERENCE", losses + 1
-        rows.append({
-            "pair_id": k["pair_id"], "route": k["route"], "theme": k["theme"],
-            "category": k["category"], "opponent": pathlib.Path(k["theirs"]).stem,
-            "verdict": verdict, "margin": margin,
-            "reasons": v.get("reasons", []), "fixes": v.get("loser_fixes", []),
-        })
+        rows.append(
+            {
+                "pair_id": k["pair_id"],
+                "route": k["route"],
+                "theme": k["theme"],
+                "category": k["category"],
+                "opponent": pathlib.Path(k["theirs"]).stem,
+                "verdict": verdict,
+                "margin": margin,
+                "reasons": v.get("reasons", []),
+                "fixes": v.get("loser_fixes", []),
+            }
+        )
 
     total = wins + losses + ties
     print(f"\n{'pair':10} {'route':18} {'theme':6} {'opponent':22} {'winner':10} margin")
     print("-" * 84)
     for r in sorted(rows, key=lambda r: (r["verdict"] != "REFERENCE", r["route"])):
-        print(f"{r['pair_id']:10} {r['route']:18} {r['theme']:6} {r['opponent']:22} "
-              f"{r['verdict']:10} {r['margin']}")
+        print(
+            f"{r['pair_id']:10} {r['route']:18} {r['theme']:6} {r['opponent']:22} "
+            f"{r['verdict']:10} {r['margin']}"
+        )
 
     pct = (wins / total * 100) if total else 0.0
     print("-" * 84)
@@ -261,9 +289,16 @@ def cmd_reveal(args: argparse.Namespace) -> int:
                     for fix in r["fixes"]:
                         print(f"    - [{r['opponent']}] {fix}")
 
-    report = {"round": args.round, "wins": wins, "losses": losses, "ties": ties,
-              "win_pct": round(pct, 1), "passed": losses == 0 and wins >= max(1, total - ties),
-              "losing_routes": losing_routes, "rows": rows}
+    report = {
+        "round": args.round,
+        "wins": wins,
+        "losses": losses,
+        "ties": ties,
+        "win_pct": round(pct, 1),
+        "passed": losses == 0 and wins >= max(1, total - ties),
+        "losing_routes": losing_routes,
+        "rows": rows,
+    }
     (outdir / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(f"\nPASSED: {report['passed']}   -> {outdir / 'report.json'}")
     return 0 if report["passed"] else 2
@@ -282,15 +317,20 @@ def cmd_status(_: argparse.Namespace) -> int:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     b = sub.add_parser("build")
     b.add_argument("--round", type=int, default=1)
     b.add_argument("--seed", type=int, default=20260816)
-    b.add_argument("--per-route", type=int, default=2,
-                   help="how many references each Nagare route is pitted against")
+    b.add_argument(
+        "--per-route",
+        type=int,
+        default=2,
+        help="how many references each Nagare route is pitted against",
+    )
     b.set_defaults(fn=cmd_build)
 
     r = sub.add_parser("reveal")

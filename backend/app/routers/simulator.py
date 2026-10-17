@@ -33,16 +33,20 @@ forecasts additionally require ``monte_carlo`` (SPEC §3).
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from typing import Any, Sequence
+import json
+from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from fastapi import APIRouter, Depends, Query, status
+from sqlalchemy import delete, func, insert, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..db import Database, iso, new_id, utcnow
-from ..deps import CurrentUser, get_board_or_404, get_db, require_capability, require_flag
+from ..db import iso, new_id, utcnow
+from ..deps import CurrentUser, get_board_or_404, get_session, require_capability, require_flag
 from ..errors import BadRequest, NotFound
 from ..flow import forecast
-from ..models import Card, CardEvent, CardMovement, SimulationRun, insert, insert_many
+from ..models import Board, Card, CardEvent, CardMovement, SimulationRun, User, as_dict, json_dumps
 from ..schemas import (
     BoardCloneRequest,
     BoardOut,
@@ -55,6 +59,7 @@ from ..schemas import (
     SimRunCreate,
     SimRunOut,
 )
+from ..tenancy import in_product
 from .boards import (
     BoardCreateRequest,
     KeyAllocator,
@@ -78,13 +83,9 @@ _MONTE_CARLO_KINDS: frozenset[str] = frozenset({"monte_carlo_when", "monte_carlo
 # ---------------------------------------------------------------------------
 
 
-def _like(value: str) -> str:
-    return f"%{value.strip()}%"
-
-
-def _get_simulator_board(db: Database, board_id: str) -> dict[str, Any]:
+async def _get_simulator_board(s: AsyncSession, board_id: str) -> dict[str, Any]:
     """A board row, guaranteed ``kind == 'simulator'`` (every write path, SPEC §8)."""
-    board = get_board_or_404(db, board_id)
+    board = await get_board_or_404(s, board_id)
     if board["kind"] != "simulator":
         raise BadRequest(
             "That board is not a simulator board.",
@@ -94,17 +95,16 @@ def _get_simulator_board(db: Database, board_id: str) -> dict[str, Any]:
     return board
 
 
-def _clear_board_cards(db: Database, board_id: str) -> int:
+async def _clear_board_cards(s: AsyncSession, board_id: str) -> int:
     """Delete every card on a board. FK ``ON DELETE CASCADE`` takes the rest.
 
     ``card_movements``, ``card_events``, ``card_tasks``, ``blockers`` and
     ``comments`` all reference ``cards.id`` with ``ON DELETE CASCADE``, so one
     statement is enough — and, critically, it can never reach past the one
-    board it was asked to clear.
+    board it was asked to clear. Runs in the caller's transaction.
     """
-    count = int(db.scalar("SELECT COUNT(*) FROM cards WHERE board_id = ?", board_id) or 0)
-    with db.tx():
-        db.ex("DELETE FROM cards WHERE board_id = ?", board_id)
+    count = int(await s.scalar(select(func.count()).where(Card.board_id == board_id)) or 0)
+    await s.execute(delete(Card).where(Card.board_id == board_id))
     return count
 
 
@@ -114,20 +114,32 @@ def _board_key_prefix(board: dict[str, Any]) -> str:
     return letters.upper()[:4] or "SIM"
 
 
-def _run_row_out(row: dict[str, Any]) -> dict[str, Any]:
-    """Decode one ``simulation_runs`` row (params/results JSON -> dict)."""
-    created_by_name = row.pop("created_by_name", None)
-    out = SimulationRun.from_row(row).to_dict()
-    out["created_by_name"] = created_by_name
+def _as_json(value: Any) -> Any:
+    """Exactly what a JSON column will hand back (dates and other extras as text)."""
+    return json.loads(json_dumps(value))
+
+
+def _run_select() -> Any:
+    """Runs of the current product's boards, with the author's name."""
+    return (
+        select(SimulationRun, User.name.label("created_by_name"))
+        .join(Board, Board.id == SimulationRun.board_id)
+        .outerjoin(User, User.id == SimulationRun.created_by)
+        .where(*in_product(Board))
+    )
+
+
+def _run_row_out(row: Any) -> dict[str, Any]:
+    """One ``simulation_runs`` row with the author's name."""
+    out = as_dict(row[0]) or {}
+    out["params"] = dict(out.get("params") or {})
+    out["results"] = dict(out.get("results") or {})
+    out["created_by_name"] = row._mapping["created_by_name"]
     return out
 
 
-def _get_run_or_404(db: Database, run_id: str) -> dict[str, Any]:
-    row = db.q1(
-        "SELECT r.*, u.name AS created_by_name FROM simulation_runs r "
-        "LEFT JOIN users u ON u.id = r.created_by WHERE r.id = ?",
-        run_id,
-    )
+async def _get_run_or_404(s: AsyncSession, run_id: str) -> dict[str, Any]:
+    row = (await s.execute(_run_select().where(SimulationRun.id == run_id))).first()
     if row is None:
         raise NotFound("Simulation run", run_id, code="run_not_found")
     return _run_row_out(row)
@@ -143,28 +155,34 @@ def _get_run_or_404(db: Database, run_id: str) -> dict[str, Any]:
     response_model=ListResponse[BoardOut],
     summary="List simulator boards",
 )
-def list_simulator_boards(
+async def list_simulator_boards(
     q: str | None = Query(None, description="Match the board name or slug"),
     archived: bool = Query(False),
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("simulator_boards")),
 ) -> dict[str, Any]:
     """Every ``kind='simulator'`` board, newest first, with a live card count."""
-    where = ["b.kind = 'simulator'", "b.archived = ?"]
-    params: list[Any] = [1 if archived else 0]
+    conditions: list[Any] = [
+        Board.kind == "simulator",
+        Board.archived.is_(bool(archived)),
+        *in_product(Board),
+    ]
     if q:
-        where.append("(b.name LIKE ? OR b.slug LIKE ?)")
-        params.extend([_like(q), _like(q)])
-    rows = db.q(
-        "SELECT b.*, (SELECT COUNT(*) FROM cards c WHERE c.board_id = b.id AND c.archived = 0) "
-        f"AS card_count FROM boards b WHERE {' AND '.join(where)} ORDER BY b.created_at DESC",
-        params,
+        needle = f"%{q.strip()}%"
+        conditions.append(or_(Board.name.ilike(needle), Board.slug.ilike(needle)))
+    card_count = (
+        select(func.count())
+        .where(Card.board_id == Board.id, Card.archived.is_(False))
+        .correlate(Board)
+        .scalar_subquery()
     )
-    for row in rows:
-        row["count_envelope_in_metrics"] = bool(row["count_envelope_in_metrics"])
-        row["confirm_moves"] = bool(row["confirm_moves"])
-        row["archived"] = bool(row["archived"])
-    return {"items": rows, "total": len(rows)}
+    rows = await s.execute(
+        select(Board, card_count.label("card_count"))
+        .where(*conditions)
+        .order_by(Board.created_at.desc())
+    )
+    items = [{**(as_dict(row[0]) or {}), "card_count": int(row[1] or 0)} for row in rows]
+    return {"items": items, "total": len(items)}
 
 
 @router.post(
@@ -173,9 +191,9 @@ def list_simulator_boards(
     status_code=status.HTTP_201_CREATED,
     summary="Create a simulator board — blank/template, or a deep clone",
 )
-def create_simulator_board(
+async def create_simulator_board(
     payload: SimBoardCreate,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("simulator_boards")),
 ) -> dict[str, Any]:
     """Build an isolated ``kind='simulator'`` board (SPEC §8.1).
@@ -191,12 +209,12 @@ def create_simulator_board(
         clone_payload = BoardCloneRequest(
             name=payload.name, kind="simulator", copy_cards=payload.copy_cards
         )
-        return clone_board(payload.source_board_id, clone_payload, db=db, user=user)
+        return await clone_board(payload.source_board_id, clone_payload, s=s, user=user)
 
     create_payload = BoardCreateRequest(
         name=payload.name, kind="simulator", template=payload.template or "default"
     )
-    return create_board(create_payload, db=db, user=user)
+    return await create_board(create_payload, s=s, user=user)
 
 
 @router.post(
@@ -204,9 +222,9 @@ def create_simulator_board(
     response_model=OkResponse,
     summary="Wipe a simulator board's cards and movement history",
 )
-def reset_simulator_board(
+async def reset_simulator_board(
     id: str,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("simulator_boards")),
 ) -> dict[str, Any]:
     """Empty a simulator board so a fresh scenario can be generated onto it.
@@ -214,8 +232,9 @@ def reset_simulator_board(
     The board's columns, groups and policies are untouched — only the content
     that ``generate`` or a clone-with-cards would have written is removed.
     """
-    board = _get_simulator_board(db, id)
-    removed = _clear_board_cards(db, board["id"])
+    board = await _get_simulator_board(s, id)
+    removed = await _clear_board_cards(s, board["id"])
+    await s.commit()
     return {
         "ok": True,
         "id": board["id"],
@@ -227,10 +246,10 @@ def reset_simulator_board(
     "/simulator/boards/{id}/generate",
     summary="Materialise a synthetic demand stream onto a simulator board",
 )
-def generate_demand(
+async def generate_demand(
     id: str,
     payload: SimGenerateRequest,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("simulator_boards")),
 ) -> dict[str, Any]:
     """Run the deterministic pull simulator and write real cards + movements.
@@ -245,8 +264,8 @@ def generate_demand(
     work, while ``kind='simulator'`` (enforced by :func:`_get_simulator_board`)
     guarantees an operational board's own history is never touched.
     """
-    board = _get_simulator_board(db, id)
-    columns = canonical_columns(db, board["id"])
+    board = await _get_simulator_board(s, id)
+    columns = await canonical_columns(s, board["id"])
     if len(columns) < 2:
         raise BadRequest(
             "This board needs at least two columns before demand can flow through it.",
@@ -254,7 +273,7 @@ def generate_demand(
             details={"board_id": board["id"]},
         )
 
-    removed = _clear_board_cards(db, board["id"]) if payload.reset else 0
+    removed = await _clear_board_cards(s, board["id"]) if payload.reset else 0
 
     try:
         result = forecast.simulate_flow(
@@ -270,105 +289,107 @@ def generate_demand(
     except ValueError as exc:
         raise BadRequest(str(exc), code="simulation_failed") from exc
 
-    start_dt = datetime.now(timezone.utc) - timedelta(days=result.horizon_days)
+    start_dt = datetime.now(UTC) - timedelta(days=result.horizon_days)
     specs = result.specs
-    allocator = KeyAllocator(db)
+    allocator = KeyAllocator(s, board["product_id"])
     prefix = _board_key_prefix(board)
 
     def _at(day: float) -> str:
         return iso(start_dt + timedelta(days=day))
 
-    cards: list[Card] = []
-    events: list[CardEvent] = []
+    cards: list[dict[str, Any]] = []
+    events: list[dict[str, Any]] = []
     id_by_index: dict[int, str] = {}
     for record in result.cards:
         card_id = new_id()
         id_by_index[record["index"]] = card_id
         created_at = _at(record["arrival_day"])
         cards.append(
-            Card(
-                id=card_id,
-                board_id=board["id"],
-                column_id=specs[record["final_index"]].key,
-                project_id=None,
-                key=allocator.take(prefix),
-                title=f"Simulated {record['service_class']} demand #{record['index'] + 1}",
-                description=None,
-                service_class=record["service_class"],
-                assignee_id=None,
-                requester="Simulator",
-                size=record["size"],
-                value_area=record["value_area"],
-                demand_type=record["demand_type"],
-                due_date=_at(record["due_day"]) if record["due_day"] is not None else None,
-                position=0,
-                envelope_state="opened",
-                is_blocked=False,
-                tags=["simulated"],
-                custom_fields={},
-                created_at=created_at,
-                opened_at=created_at,
-                committed_at=(
+            {
+                "id": card_id,
+                "product_id": board["product_id"],
+                "board_id": board["id"],
+                "column_id": specs[record["final_index"]].key,
+                "project_id": None,
+                "key": await allocator.take(prefix),
+                "title": f"Simulated {record['service_class']} demand #{record['index'] + 1}",
+                "description": None,
+                "service_class": record["service_class"],
+                "assignee_id": None,
+                "requester": "Simulator",
+                "size": record["size"],
+                "value_area": record["value_area"],
+                "demand_type": record["demand_type"],
+                "due_date": _at(record["due_day"]) if record["due_day"] is not None else None,
+                "position": 0,
+                "envelope_state": "opened",
+                "is_blocked": False,
+                "tags": ["simulated"],
+                "custom_fields": {},
+                "created_at": created_at,
+                "opened_at": created_at,
+                "committed_at": (
                     _at(record["committed_day"]) if record["committed_day"] is not None else None
                 ),
-                delivered_at=(
+                "delivered_at": (
                     _at(record["delivered_day"]) if record["delivered_day"] is not None else None
                 ),
-                archived=False,
-                created_by=user.get("id"),
-            )
+                "archived": False,
+                "created_by": user.get("id"),
+            }
         )
         events.append(
-            CardEvent(
-                id=new_id(),
-                card_id=card_id,
-                board_id=board["id"],
-                actor_id=user.get("id"),
-                event_type="created",
-                field=None,
-                old_value=None,
-                new_value=None,
-                created_at=created_at,
-            )
+            {
+                "id": new_id(),
+                "card_id": card_id,
+                "board_id": board["id"],
+                "actor_id": user.get("id"),
+                "event_type": "created",
+                "field": None,
+                "old_value": None,
+                "new_value": None,
+                "created_at": created_at,
+            }
         )
 
     # Dense, deterministic per-column ordering — cosmetic only, but it keeps a
     # freshly generated board's card list as legible as a real one's.
     counters: dict[str, int] = {}
     for card in sorted(
-        cards, key=lambda c: (c.column_id, c.delivered_at or c.committed_at or c.created_at)
+        cards,
+        key=lambda c: (c["column_id"], c["delivered_at"] or c["committed_at"] or c["created_at"]),
     ):
-        card.position = counters.get(card.column_id, 0)
-        counters[card.column_id] = card.position + 1
+        card["position"] = counters.get(card["column_id"], 0)
+        counters[card["column_id"]] = card["position"] + 1
 
     spec_by_key = {spec.key: spec for spec in specs}
-    movements: list[CardMovement] = []
+    movements: list[dict[str, Any]] = []
     for m in result.movements:
         to_spec = spec_by_key[m["to_key"]]
         from_spec = spec_by_key.get(m["from_key"]) if m["from_key"] else None
         seconds = m["seconds_in_from_column"]
         movements.append(
-            CardMovement(
-                id=new_id(),
-                card_id=id_by_index[m["card_index"]],
-                board_id=board["id"],
-                from_column_id=m["from_key"],
-                to_column_id=m["to_key"],
-                from_segment=from_spec.segment if from_spec else None,
-                to_segment=to_spec.segment,
-                moved_at=_at(m["at_day"]),
-                moved_by=user.get("id"),
-                seconds_in_from_column=int(round(seconds)) if seconds is not None else None,
-                note=None,
-                is_backward=False,
-                source="simulation",
-            )
+            {
+                "id": new_id(),
+                "card_id": id_by_index[m["card_index"]],
+                "board_id": board["id"],
+                "from_column_id": m["from_key"],
+                "to_column_id": m["to_key"],
+                "from_segment": from_spec.segment if from_spec else None,
+                "to_segment": to_spec.segment,
+                "moved_at": _at(m["at_day"]),
+                "moved_by": user.get("id"),
+                "seconds_in_from_column": round(seconds) if seconds is not None else None,
+                "note": None,
+                "is_backward": False,
+                "source": "simulation",
+            }
         )
 
-    with db.tx():
-        insert_many(db, cards)
-        insert_many(db, movements)
-        insert_many(db, events)
+    for model, rows in ((Card, cards), (CardMovement, movements), (CardEvent, events)):
+        for start in range(0, len(rows), 1000):
+            await s.execute(insert(model), rows[start : start + 1000])
+    await s.commit()
 
     return {
         "board_id": board["id"],
@@ -390,29 +411,33 @@ def generate_demand(
 # ---------------------------------------------------------------------------
 
 
-def _observed_weekly_throughput(
-    db: Database, board_id: str, weeks: int | None
+async def _observed_weekly_throughput(
+    s: AsyncSession, board_id: str, weeks: int | None
 ) -> list[int]:
     """A board's own delivered-per-week history, for a Monte Carlo sample pool."""
-    rows = db.q(
-        "SELECT delivered_at FROM cards WHERE board_id = ? AND delivered_at IS NOT NULL "
-        "AND archived = 0",
-        board_id,
-    )
-    return forecast.weekly_throughput_from_deliveries(
-        (row["delivered_at"] for row in rows), weeks=weeks
-    )
+    delivered: Sequence[str] = (
+        await s.scalars(
+            select(Card.delivered_at).where(
+                Card.board_id == board_id,
+                Card.delivered_at.is_not(None),
+                Card.archived.is_(False),
+            )
+        )
+    ).all()
+    return forecast.weekly_throughput_from_deliveries(iter(delivered), weeks=weeks)
 
 
-def _run_kind(db: Database, board: dict[str, Any], kind: str, params: dict[str, Any]) -> dict[str, Any]:
+async def _run_kind(
+    s: AsyncSession, board: dict[str, Any], kind: str, params: dict[str, Any]
+) -> dict[str, Any]:
     """Dispatch one ``simulation_runs.kind`` onto its ``forecast`` function.
 
     ``params`` is exactly the caller's request body — untouched — so the same
     dict is what gets persisted back onto the stored run.
     """
     if kind in _MONTE_CARLO_KINDS:
-        samples = params.get("throughput_samples") or _observed_weekly_throughput(
-            db, board["id"], params.get("sample_weeks")
+        samples = params.get("throughput_samples") or await _observed_weekly_throughput(
+            s, board["id"], params.get("sample_weeks")
         )
         trials = int(params.get("trials", forecast.DEFAULT_TRIALS))
         seed = int(params.get("seed", 20260816))
@@ -442,7 +467,7 @@ def _run_kind(db: Database, board: dict[str, Any], kind: str, params: dict[str, 
             else board.get("wip_max")
         )
         return forecast.wip_experiment(
-            canonical_columns(db, board["id"]),
+            await canonical_columns(s, board["id"]),
             weeks=float(params.get("weeks", 16.0)),
             arrival_rate=float(params.get("arrival_rate", 8.0)),
             class_mix=params.get("class_mix"),
@@ -457,7 +482,7 @@ def _run_kind(db: Database, board: dict[str, Any], kind: str, params: dict[str, 
 
     if kind == "class_of_service_mix":
         return forecast.class_of_service_experiment(
-            canonical_columns(db, board["id"]),
+            await canonical_columns(s, board["id"]),
             weeks=float(params.get("weeks", 16.0)),
             arrival_rate=float(params.get("arrival_rate", 8.0)),
             seed=int(params.get("seed", 20260816)),
@@ -473,18 +498,21 @@ def _run_kind(db: Database, board: dict[str, Any], kind: str, params: dict[str, 
         )
 
     # kind == "replay" — SimulationKind covers exactly five values, so this is
-    # the last one; forecast.replay reads the board's own arrival history.
-    return forecast.replay(
-        db,
-        board["id"],
-        policies=params.get("policies"),
-        seed=int(params.get("seed", 20260816)),
-        weeks=params.get("weeks"),
-        use_observed_service_times=bool(params.get("use_observed_service_times", True)),
-        target_utilization=float(params.get("target_utilization", 0.85)),
-        baseline_flow_wip_max=params.get("baseline_flow_wip_max"),
-        class_mix=params.get("class_mix"),
-        warmup_weeks=params.get("warmup_weeks"),
+    # the last one; forecast.replay reads the board's own arrival history
+    # through the session's synchronous face.
+    return await s.run_sync(
+        lambda session: forecast.replay(
+            session,
+            board["id"],
+            policies=params.get("policies"),
+            seed=int(params.get("seed", 20260816)),
+            weeks=params.get("weeks"),
+            use_observed_service_times=bool(params.get("use_observed_service_times", True)),
+            target_utilization=float(params.get("target_utilization", 0.85)),
+            baseline_flow_wip_max=params.get("baseline_flow_wip_max"),
+            class_mix=params.get("class_mix"),
+            warmup_weeks=params.get("warmup_weeks"),
+        )
     )
 
 
@@ -494,9 +522,9 @@ def _run_kind(db: Database, board: dict[str, Any], kind: str, params: dict[str, 
     status_code=status.HTTP_201_CREATED,
     summary="Run a simulation and persist its parameters and results",
 )
-def create_run(
+async def create_run(
     payload: SimRunCreate,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("simulator_boards")),
 ) -> dict[str, Any]:
     """Compute one scenario and store ``{params, results}`` verbatim (SPEC §13).
@@ -508,12 +536,12 @@ def create_run(
     Determinism follows from ``forecast`` alone: identical ``params`` (same
     ``seed``, same everything) always produce byte-identical ``results``.
     """
-    board = get_board_or_404(db, payload.board_id)
+    board = await get_board_or_404(s, payload.board_id)
     if payload.kind in _MONTE_CARLO_KINDS:
-        require_flag("monte_carlo")(db)
+        await require_flag("monte_carlo")(s)
 
     try:
-        results = _run_kind(db, board, payload.kind, payload.params)
+        results = await _run_kind(s, board, payload.kind, payload.params)
     except (KeyError, TypeError) as exc:
         raise BadRequest(
             f"Missing or invalid parameter for '{payload.kind}': {exc}",
@@ -525,18 +553,21 @@ def create_run(
             str(exc), code="simulation_failed", details={"kind": payload.kind}
         ) from exc
 
-    run = SimulationRun(
-        id=new_id(),
-        board_id=board["id"],
-        name=payload.name or f"{payload.kind.replace('_', ' ').title()} — {utcnow()}",
-        kind=payload.kind,
-        params=payload.params,
-        results=results,
-        created_at=utcnow(),
-        created_by=user.get("id"),
+    run_id = new_id()
+    s.add(
+        SimulationRun(
+            id=run_id,
+            board_id=board["id"],
+            name=payload.name or f"{payload.kind.replace('_', ' ').title()} — {utcnow()}",
+            kind=payload.kind,
+            params=_as_json(payload.params),
+            results=_as_json(results),
+            created_at=utcnow(),
+            created_by=user.get("id"),
+        )
     )
-    insert(db, run)
-    return _get_run_or_404(db, run.id)
+    await s.commit()
+    return await _get_run_or_404(s, run_id)
 
 
 @router.get(
@@ -544,25 +575,19 @@ def create_run(
     response_model=ListResponse[SimRunOut],
     summary="List saved simulation runs",
 )
-def list_runs(
+async def list_runs(
     board_id: str | None = Query(None),
     kind: str | None = Query(None),
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("simulator_boards")),
 ) -> dict[str, Any]:
-    where: list[str] = []
-    params: list[Any] = []
+    conditions: list[Any] = []
     if board_id:
-        where.append("r.board_id = ?")
-        params.append(board_id)
+        conditions.append(SimulationRun.board_id == board_id)
     if kind:
-        where.append("r.kind = ?")
-        params.append(kind)
-    clause = f"WHERE {' AND '.join(where)}" if where else ""
-    rows = db.q(
-        "SELECT r.*, u.name AS created_by_name FROM simulation_runs r "
-        f"LEFT JOIN users u ON u.id = r.created_by {clause} ORDER BY r.created_at DESC",
-        params,
+        conditions.append(SimulationRun.kind == kind)
+    rows = await s.execute(
+        _run_select().where(*conditions).order_by(SimulationRun.created_at.desc())
     )
     items = [_run_row_out(row) for row in rows]
     return {"items": items, "total": len(items)}
@@ -573,12 +598,12 @@ def list_runs(
     response_model=SimRunOut,
     summary="One saved simulation run",
 )
-def get_run(
+async def get_run(
     id: str,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("simulator_boards")),
 ) -> dict[str, Any]:
-    return _get_run_or_404(db, id)
+    return await _get_run_or_404(s, id)
 
 
 @router.post(
@@ -586,18 +611,17 @@ def get_run(
     response_model=SimCompareOut,
     summary="Compare saved runs side by side, with deltas and a verdict",
 )
-def compare_runs(
+async def compare_runs(
     payload: SimCompareRequest,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("simulator_boards")),
 ) -> dict[str, Any]:
     """Align 2–8 saved runs into one table (SPEC §8.6): metrics, deltas, verdict."""
     runs: list[dict[str, Any]] = []
     for run_id in payload.run_ids:
-        row = db.q1("SELECT * FROM simulation_runs WHERE id = ?", run_id)
-        if row is None:
-            raise NotFound("Simulation run", run_id, code="run_not_found")
-        runs.append(SimulationRun.from_row(row).to_dict())
+        run = await _get_run_or_404(s, run_id)
+        run.pop("created_by_name", None)
+        runs.append(run)
 
     try:
         comparison = forecast.compare_runs(runs)
@@ -605,7 +629,7 @@ def compare_runs(
         raise BadRequest(str(exc), code="compare_failed") from exc
 
     return {
-        "runs": [_get_run_or_404(db, run["id"]) for run in runs],
+        "runs": [await _get_run_or_404(s, run["id"]) for run in runs],
         "metrics": comparison["metrics"],
         "rows": comparison["rows"],
         "deltas": comparison["deltas"],

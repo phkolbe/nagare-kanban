@@ -26,17 +26,38 @@ newly introduced flag appears without a database reset.
 
 from __future__ import annotations
 
+import asyncio
 import random
 import uuid
-from datetime import datetime, timedelta, timezone
-from typing import Any, Iterable, Sequence
+from collections.abc import Iterable, Sequence
+from datetime import UTC, datetime, timedelta
+from typing import Any, ClassVar
+
+from sqlalchemy import func, insert, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import FEATURE_FLAGS, PLANS, flags_for_plan, settings
-from .db import Database, get_database, iso, migrate
-from .models import json_dumps
+from .db import Database, iso, migrate
+from .models import (
+    Blocker,
+    Board,
+    BoardColumn,
+    Card,
+    CardEvent,
+    CardMovement,
+    CardTask,
+    ColumnGroup,
+    Comment,
+    FeatureFlag,
+    Plan,
+    Project,
+    User,
+    Workspace,
+    as_dict,
+)
 from .security import hash_password
 
-__all__ = ["seed", "seed_if_empty", "is_empty", "SeedSummary"]
+__all__ = ["SeedSummary", "is_empty", "seed", "seed_if_empty"]
 
 
 # ---------------------------------------------------------------------------
@@ -96,30 +117,98 @@ SIM_BOARD_SLUG = "scenario-lab"
 
 #: name, segment, kind, wip_min, wip_max, group, description
 BOARD_COLUMNS: list[tuple[str, str, str, int | None, int | None, str | None, str]] = [
-    ("Envelope", "upstream", "envelope", None, None, None,
-     "Demand captured but deliberately not yet examined. Sealed until someone opens it."),
-    ("Ideas", "upstream", "queue", 3, 14, "Discovery",
-     "Raw options waiting to be looked at. Pure queue time."),
-    ("Discovery", "upstream", "activity", 2, 6, "Discovery",
-     "Active problem framing: who wants this, what changes, what is the risk."),
-    ("Options", "upstream", "queue", 2, 10, "Discovery",
-     "Understood, shaped, and deferred until the last responsible moment."),
-    ("Ready to Commit", "upstream", "queue", 5, 8, "Discovery",
-     "Replenishment buffer feeding the commitment point."),
-    ("Analysis", "downstream", "activity", 2, 6, "Delivery",
-     "The commitment point. Once work enters here the team owes a delivery."),
-    ("Analysis Done", "downstream", "queue", None, 6, "Delivery",
-     "Analysed and waiting for build capacity."),
-    ("Build", "downstream", "activity", 3, 8, "Delivery",
-     "Implementation in progress."),
-    ("Build Done", "downstream", "queue", None, 6, "Delivery",
-     "Built and waiting for verification capacity."),
-    ("Verify", "downstream", "activity", 2, 5, "Delivery",
-     "Review, test and acceptance."),
-    ("Ready to Deploy", "downstream", "queue", None, 10, "Delivery",
-     "Verified and waiting on the release train."),
-    ("Delivered", "downstream", "done", None, None, None,
-     "Delivered to the customer. The delivery point."),
+    (
+        "Envelope",
+        "upstream",
+        "envelope",
+        None,
+        None,
+        None,
+        "Demand captured but deliberately not yet examined. Sealed until someone opens it.",
+    ),
+    (
+        "Ideas",
+        "upstream",
+        "queue",
+        3,
+        14,
+        "Discovery",
+        "Raw options waiting to be looked at. Pure queue time.",
+    ),
+    (
+        "Discovery",
+        "upstream",
+        "activity",
+        2,
+        6,
+        "Discovery",
+        "Active problem framing: who wants this, what changes, what is the risk.",
+    ),
+    (
+        "Options",
+        "upstream",
+        "queue",
+        2,
+        10,
+        "Discovery",
+        "Understood, shaped, and deferred until the last responsible moment.",
+    ),
+    (
+        "Ready to Commit",
+        "upstream",
+        "queue",
+        5,
+        8,
+        "Discovery",
+        "Replenishment buffer feeding the commitment point.",
+    ),
+    (
+        "Analysis",
+        "downstream",
+        "activity",
+        2,
+        6,
+        "Delivery",
+        "The commitment point. Once work enters here the team owes a delivery.",
+    ),
+    (
+        "Analysis Done",
+        "downstream",
+        "queue",
+        None,
+        6,
+        "Delivery",
+        "Analysed and waiting for build capacity.",
+    ),
+    ("Build", "downstream", "activity", 3, 8, "Delivery", "Implementation in progress."),
+    (
+        "Build Done",
+        "downstream",
+        "queue",
+        None,
+        6,
+        "Delivery",
+        "Built and waiting for verification capacity.",
+    ),
+    ("Verify", "downstream", "activity", 2, 5, "Delivery", "Review, test and acceptance."),
+    (
+        "Ready to Deploy",
+        "downstream",
+        "queue",
+        None,
+        10,
+        "Delivery",
+        "Verified and waiting on the release train.",
+    ),
+    (
+        "Delivered",
+        "downstream",
+        "done",
+        None,
+        None,
+        None,
+        "Delivered to the customer. The delivery point.",
+    ),
 ]
 
 #: name, position, wip_min, wip_max, color
@@ -149,7 +238,12 @@ DWELL: dict[str, tuple[float, float]] = {
 
 UPSTREAM_FLOW = ["Ideas", "Discovery", "Options", "Ready to Commit"]
 DOWNSTREAM_FLOW = [
-    "Analysis", "Analysis Done", "Build", "Build Done", "Verify", "Ready to Deploy",
+    "Analysis",
+    "Analysis Done",
+    "Build",
+    "Build Done",
+    "Verify",
+    "Ready to Deploy",
 ]
 
 #: Current occupancy targets, chosen against the WIP maxima above so the board
@@ -237,9 +331,16 @@ BLOCKER_REASONS: dict[str, list[str]] = {
 }
 
 REQUESTERS = [
-    "Finance Ops", "Customer Success", "Growth", "Risk & Compliance",
-    "Field Sales", "Support Tier 2", "Data Platform", "Security",
-    "Partner Integrations", "Executive Team",
+    "Finance Ops",
+    "Customer Success",
+    "Growth",
+    "Risk & Compliance",
+    "Field Sales",
+    "Support Tier 2",
+    "Data Platform",
+    "Security",
+    "Partner Integrations",
+    "Executive Team",
 ]
 
 TASK_TITLES = [
@@ -273,7 +374,11 @@ COMMENT_BODIES = [
 ]
 
 MOVE_NOTES = [
-    None, None, None, None, None,
+    None,
+    None,
+    None,
+    None,
+    None,
     "Pulled at the daily standup",
     "Replenishment meeting decision",
     "Capacity freed in the next column",
@@ -479,6 +584,18 @@ def _uid(rnd: random.Random) -> str:
     return str(uuid.UUID(int=rnd.getrandbits(128), version=4))
 
 
+#: Namespace of the catalogue ids, so a plan keeps its id across reseeds.
+_CATALOGUE_NS = uuid.UUID("6b1f2a4e-9c3d-4f5a-8e7b-0d2c4a6e8f10")
+
+
+def _plan_id(slug: str) -> str:
+    return str(uuid.uuid5(_CATALOGUE_NS, f"plan:{slug}"))
+
+
+async def _count(s: AsyncSession, model: Any) -> int:
+    return int(await s.scalar(select(func.count()).select_from(model)) or 0)
+
+
 def _pick(rnd: random.Random, mix: Sequence[tuple[str, float]]) -> str:
     """Weighted choice over ``[(value, weight), ...]``."""
     roll = rnd.random()
@@ -512,7 +629,9 @@ def _difficulty(rnd: random.Random) -> float:
 def _business_hour(rnd: random.Random, moment: datetime) -> datetime:
     """Nudge a timestamp into working hours and, usually, off the weekend."""
     moment = moment.replace(
-        hour=rnd.randint(9, 18), minute=rnd.choice([3, 11, 17, 24, 38, 46, 52]), second=0,
+        hour=rnd.randint(9, 18),
+        minute=rnd.choice([3, 11, 17, 24, 38, 46, 52]),
+        second=0,
         microsecond=0,
     )
     if moment.weekday() >= 5 and rnd.random() < 0.78:
@@ -558,68 +677,72 @@ class Cycler:
 # ---------------------------------------------------------------------------
 
 
-def _sync_plans_and_flags(db: Database) -> tuple[dict[str, str], int, int]:
+async def _sync_plans_and_flags(s: AsyncSession) -> tuple[dict[str, str], int, int]:
     """Insert missing plan/flag rows. Returns (plan ids by slug, n_plans, n_flags)."""
     plan_ids: dict[str, str] = {}
     written_plans = 0
     for spec in PLANS:
-        existing = db.q1("SELECT id FROM plans WHERE slug = ?", spec["slug"])
+        existing = await s.scalar(select(Plan.id).where(Plan.slug == spec["slug"]))
         if existing:
-            plan_ids[spec["slug"]] = existing["id"]
+            plan_ids[spec["slug"]] = existing
             # Keep the unlocked flag set in step with config.py without ever
             # overwriting pricing an operator may have edited.
-            db.ex(
-                "UPDATE plans SET flags = ? WHERE id = ?",
-                json_dumps(flags_for_plan(spec["slug"])),
-                existing["id"],
+            await s.execute(
+                update(Plan).where(Plan.id == existing).values(flags=flags_for_plan(spec["slug"]))
             )
             continue
-        plan_id = f"plan-{spec['slug']}"
-        db.ex(
-            "INSERT INTO plans (id, name, slug, price_month, price_year, currency, "
-            "tier_order, description, flags, is_active) VALUES (?,?,?,?,?,?,?,?,?,1)",
-            plan_id,
-            spec["name"],
-            spec["slug"],
-            float(spec["price_month"]),
-            float(spec["price_year"]),
-            spec["currency"],
-            int(spec["tier_order"]),
-            spec["description"],
-            json_dumps(flags_for_plan(spec["slug"])),
+        plan_id = _plan_id(spec["slug"])
+        s.add(
+            Plan(
+                id=plan_id,
+                name=spec["name"],
+                slug=spec["slug"],
+                price_month=float(spec["price_month"]),
+                price_year=float(spec["price_year"]),
+                currency=spec["currency"],
+                tier_order=int(spec["tier_order"]),
+                description=spec["description"],
+                flags=flags_for_plan(spec["slug"]),
+                is_active=True,
+            )
         )
         plan_ids[spec["slug"]] = plan_id
         written_plans += 1
 
     written_flags = 0
     for flag in FEATURE_FLAGS:
-        if db.q1("SELECT key FROM feature_flags WHERE key = ?", flag["key"]):
+        if await s.get(FeatureFlag, flag["key"]):
             continue
-        db.ex(
-            "INSERT INTO feature_flags (key, name, description, is_enabled, min_plan, "
-            "category) VALUES (?,?,?,1,?,?)",
-            flag["key"],
-            flag["name"],
-            flag["description"],
-            flag["min_plan"],
-            flag["category"],
+        s.add(
+            FeatureFlag(
+                key=flag["key"],
+                name=flag["name"],
+                description=flag["description"],
+                is_enabled=True,
+                min_plan=flag["min_plan"],
+                category=flag["category"],
+            )
         )
         written_flags += 1
 
+    await s.flush()
     return plan_ids, written_plans, written_flags
 
 
-def _ensure_workspace(db: Database, plan_ids: dict[str, str], now_iso: str) -> None:
-    """Create the singleton workspace row on the Business plan (SPEC §11)."""
-    if db.q1("SELECT id FROM workspace WHERE id = 'workspace'"):
+async def _ensure_workspace(s: AsyncSession, plan_ids: dict[str, str], now_iso: str) -> None:
+    """Create the singleton workspace row on the Enterprise plan (NG15: everything on)."""
+    if await s.get(Workspace, "workspace"):
         return
-    db.ex(
-        "INSERT INTO workspace (id, name, active_plan_id, timezone, updated_at) "
-        "VALUES ('workspace', ?, ?, 'UTC', ?)",
-        "Nagare",
-        plan_ids.get("business"),
-        now_iso,
+    s.add(
+        Workspace(
+            id="workspace",
+            name="Nagare",
+            active_plan_id=plan_ids.get("enterprise"),
+            timezone="UTC",
+            updated_at=now_iso,
+        )
     )
+    await s.flush()
 
 
 # ---------------------------------------------------------------------------
@@ -627,52 +750,50 @@ def _ensure_workspace(db: Database, plan_ids: dict[str, str], now_iso: str) -> N
 # ---------------------------------------------------------------------------
 
 
-def is_empty(db: Database | None = None) -> bool:
+async def is_empty(s: AsyncSession) -> bool:
     """True when the workspace has no users yet."""
-    db = db or get_database()
-    return not db.scalar("SELECT COUNT(*) FROM users")
+    return not await _count(s, User)
 
 
-def seed_if_empty(db: Database | None = None) -> SeedSummary:
-    """Seed only when ``users`` is empty; always re-sync flags and plans."""
-    db = db or get_database()
-    migrate(db)
-    if not is_empty(db):
-        with db.tx():
-            plan_ids, n_plans, n_flags = _sync_plans_and_flags(db)
-            _ensure_workspace(db, plan_ids, iso(datetime.now(timezone.utc)))
+async def seed_if_empty(s: AsyncSession) -> SeedSummary:
+    """Seed only when ``users`` is empty; always re-sync flags and plans.
+
+    The schema must already be migrated (``db.migrate``).
+    """
+    if not await is_empty(s):
+        plan_ids, n_plans, n_flags = await _sync_plans_and_flags(s)
+        await _ensure_workspace(s, plan_ids, iso(datetime.now(UTC)))
+        await s.commit()
         return SeedSummary(
             skipped=True,
             plans_added=n_plans,
             flags_added=n_flags,
-            users=int(db.scalar("SELECT COUNT(*) FROM users") or 0),
-            cards=int(db.scalar("SELECT COUNT(*) FROM cards") or 0),
+            users=await _count(s, User),
+            cards=await _count(s, Card),
         )
-    return seed(db)
+    return await seed(s)
 
 
-def seed(db: Database | None = None) -> SeedSummary:
-    """Build the whole demo workspace. Assumes an empty (migrated) database."""
-    db = db or get_database()
-    migrate(db)
+async def seed(s: AsyncSession) -> SeedSummary:
+    """Build the whole demo workspace in one transaction. Assumes an empty schema."""
     rnd = random.Random(settings.seed_random_seed)
-    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    now = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
 
-    with db.tx():
-        plan_ids, _, _ = _sync_plans_and_flags(db)
-        _ensure_workspace(db, plan_ids, iso(now))
-        users = _seed_users(db, rnd, now)
-        projects = _seed_projects(db, rnd, users, now)
-        board, columns = _seed_board(db, rnd, now)
-        _seed_simulator_board(db, rnd, board, now)
-        summary = _seed_cards(db, rnd, now, board, columns, projects, users)
+    plan_ids, _, _ = await _sync_plans_and_flags(s)
+    await _ensure_workspace(s, plan_ids, iso(now))
+    users = await _seed_users(s, rnd, now)
+    projects = await _seed_projects(s, rnd, users, now)
+    board, columns = await _seed_board(s, rnd, now)
+    await _seed_simulator_board(s, rnd, board, now)
+    summary = await _seed_cards(s, rnd, now, board, columns, projects, users)
+    await s.commit()
 
     summary.update(
         {
             "skipped": False,
             "users": len(users),
             "projects": len(projects),
-            "boards": int(db.scalar("SELECT COUNT(*) FROM boards") or 0),
+            "boards": await _count(s, Board),
             "columns": len(columns),
         }
     )
@@ -684,93 +805,102 @@ def seed(db: Database | None = None) -> SeedSummary:
 # ---------------------------------------------------------------------------
 
 
-def _seed_users(db: Database, rnd: random.Random, now: datetime) -> dict[str, dict[str, Any]]:
+async def _seed_users(
+    s: AsyncSession, rnd: random.Random, now: datetime
+) -> dict[str, dict[str, Any]]:
     """Create the six demo accounts; every account shares the demo password."""
     created_at = iso(now - timedelta(days=400))
+    password_hash = hash_password(settings.demo_password)
     out: dict[str, dict[str, Any]] = {}
     for index, spec in enumerate(USERS):
         user_id = _uid(rnd)
-        db.ex(
-            "INSERT INTO users (id, email, name, password_hash, role, is_active, "
-            "created_at, last_login_at) VALUES (?,?,?,?,?,1,?,?)",
-            user_id,
-            spec["email"],
-            spec["name"],
-            hash_password(settings.demo_password),
-            spec["role"],
-            created_at,
-            iso(now - timedelta(hours=index * 5 + 2)),
+        s.add(
+            User(
+                id=user_id,
+                email=spec["email"],
+                name=spec["name"],
+                password_hash=password_hash,
+                role=spec["role"],
+                is_active=True,
+                created_at=created_at,
+                last_login_at=iso(now - timedelta(hours=index * 5 + 2)),
+            )
         )
         out[spec["email"]] = {"id": user_id, **spec}
+    await s.flush()
     return out
 
 
-def _seed_projects(
-    db: Database, rnd: random.Random, users: dict[str, dict[str, Any]], now: datetime
+async def _seed_projects(
+    s: AsyncSession, rnd: random.Random, users: dict[str, dict[str, Any]], now: datetime
 ) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
     for index, spec in enumerate(PROJECTS):
         project_id = _uid(rnd)
-        db.ex(
-            "INSERT INTO projects (id, name, key, color, description, status, owner_id, "
-            "started_at, target_date, created_at, archived) VALUES (?,?,?,?,?,?,?,?,?,?,0)",
-            project_id,
-            spec["name"],
-            spec["key"],
-            spec["color"],
-            spec["description"],
-            spec["status"],
-            users[spec["owner"]]["id"],
-            iso(now - timedelta(days=380 - index * 22)),
-            iso(now + timedelta(days=60 + index * 45)),
-            iso(now - timedelta(days=390 - index * 20)),
+        s.add(
+            Project(
+                id=project_id,
+                name=spec["name"],
+                key=spec["key"],
+                color=spec["color"],
+                description=spec["description"],
+                status=spec["status"],
+                owner_id=users[spec["owner"]]["id"],
+                started_at=iso(now - timedelta(days=380 - index * 22)),
+                target_date=iso(now + timedelta(days=60 + index * 45)),
+                created_at=iso(now - timedelta(days=390 - index * 20)),
+                archived=False,
+            )
         )
         out[spec["key"]] = {"id": project_id, "counter": 100, **spec}
+    await s.flush()
     return out
 
 
-def _insert_columns(
-    db: Database, rnd: random.Random, board_id: str
+async def _insert_columns(
+    s: AsyncSession, rnd: random.Random, board_id: str
 ) -> dict[str, dict[str, Any]]:
     """Write the SPEC §11 group and column structure onto a board."""
     group_ids: dict[str, str] = {}
     for name, position, wip_min, wip_max, color in BOARD_GROUPS:
         group_id = _uid(rnd)
         group_ids[name] = group_id
-        db.ex(
-            "INSERT INTO column_groups (id, board_id, name, position, wip_min, wip_max, "
-            "color) VALUES (?,?,?,?,?,?,?)",
-            group_id,
-            board_id,
-            name,
-            position,
-            wip_min,
-            wip_max,
-            color,
+        s.add(
+            ColumnGroup(
+                id=group_id,
+                board_id=board_id,
+                name=name,
+                position=position,
+                wip_min=wip_min,
+                wip_max=wip_max,
+                color=color,
+            )
         )
+    # Groups first: without relationship() the unit of work does not order the
+    # inserts by foreign key, and the columns point at these rows.
+    await s.flush()
 
     columns: dict[str, dict[str, Any]] = {}
     for position, (name, segment, kind, wip_min, wip_max, group, description) in enumerate(
         BOARD_COLUMNS
     ):
         column_id = _uid(rnd)
-        db.ex(
-            "INSERT INTO columns (id, board_id, group_id, name, position, segment, kind, "
-            "wip_min, wip_max, is_commitment_point, is_delivery_point, color, description) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            column_id,
-            board_id,
-            group_ids.get(group) if group else None,
-            name,
-            position,
-            segment,
-            kind,
-            wip_min,
-            wip_max,
-            1 if name == COMMITMENT_COLUMN else 0,
-            1 if name == DELIVERY_COLUMN else 0,
-            None,
-            description,
+        s.add(
+            BoardColumn(
+                id=column_id,
+                board_id=board_id,
+                group_id=group_ids.get(group) if group else None,
+                name=name,
+                position=position,
+                segment=segment,
+                kind=kind,
+                wip_min=wip_min,
+                wip_max=wip_max,
+                is_commitment_point=name == COMMITMENT_COLUMN,
+                is_delivery_point=name == DELIVERY_COLUMN,
+                color=None,
+                description=description,
+            )
         )
         columns[name] = {
             "id": column_id,
@@ -779,59 +909,66 @@ def _insert_columns(
             "kind": kind,
             "position": position,
         }
+    await s.flush()
     return columns
 
 
-def _seed_board(
-    db: Database, rnd: random.Random, now: datetime
+async def _seed_board(
+    s: AsyncSession, rnd: random.Random, now: datetime
 ) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
     """Create the "Nagare Flow" operational board with its groups and columns."""
-    board_id = _uid(rnd)
-    db.ex(
-        "INSERT INTO boards (id, name, slug, description, kind, source_board_id, "
-        "count_envelope_in_metrics, confirm_moves, wip_min, wip_max, sle_days, "
-        "sle_percentile, created_at, archived) "
-        "VALUES (?,?,?,?,'operational',NULL,0,1,?,?,?,?,?,0)",
-        board_id,
-        "Nagare Flow",
-        BOARD_SLUG,
-        "The end-to-end value stream: discovery upstream, delivery downstream, with an "
-        "explicit commitment point at Analysis.",
-        10,
-        45,
-        25,
-        85,
-        iso(now - timedelta(days=395)),
+    board = Board(
+        id=_uid(rnd),
+        name="Nagare Flow",
+        slug=BOARD_SLUG,
+        description=(
+            "The end-to-end value stream: discovery upstream, delivery downstream, with an "
+            "explicit commitment point at Analysis."
+        ),
+        kind="operational",
+        source_board_id=None,
+        count_envelope_in_metrics=False,
+        confirm_moves=True,
+        wip_min=10,
+        wip_max=45,
+        sle_days=25,
+        sle_percentile=85,
+        created_at=iso(now - timedelta(days=395)),
+        archived=False,
     )
-    columns = _insert_columns(db, rnd, board_id)
-    board = db.q1("SELECT * FROM boards WHERE id = ?", board_id) or {"id": board_id}
-    return board, columns
+    s.add(board)
+    await s.flush()
+    columns = await _insert_columns(s, rnd, board.id)
+    return as_dict(board) or {"id": board.id}, columns
 
 
-def _seed_simulator_board(
-    db: Database, rnd: random.Random, source_board: dict[str, Any], now: datetime
+async def _seed_simulator_board(
+    s: AsyncSession, rnd: random.Random, source_board: dict[str, Any], now: datetime
 ) -> str:
     """Clone the operational column structure into an empty simulator board."""
-    board_id = _uid(rnd)
-    db.ex(
-        "INSERT INTO boards (id, name, slug, description, kind, source_board_id, "
-        "count_envelope_in_metrics, confirm_moves, wip_min, wip_max, sle_days, "
-        "sle_percentile, created_at, archived) "
-        "VALUES (?,?,?,?,'simulator',?,0,0,?,?,?,?,?,0)",
-        board_id,
-        "Scenario Lab",
-        SIM_BOARD_SLUG,
-        "An isolated copy of Nagare Flow for WIP experiments, class-of-service mixes and "
-        "Monte Carlo replays. Nothing here touches operational metrics.",
-        source_board["id"],
-        6,
-        24,
-        25,
-        85,
-        iso(now - timedelta(days=120)),
+    board = Board(
+        id=_uid(rnd),
+        name="Scenario Lab",
+        slug=SIM_BOARD_SLUG,
+        description=(
+            "An isolated copy of Nagare Flow for WIP experiments, class-of-service mixes and "
+            "Monte Carlo replays. Nothing here touches operational metrics."
+        ),
+        kind="simulator",
+        source_board_id=source_board["id"],
+        count_envelope_in_metrics=False,
+        confirm_moves=False,
+        wip_min=6,
+        wip_max=24,
+        sle_days=25,
+        sle_percentile=85,
+        created_at=iso(now - timedelta(days=120)),
+        archived=False,
     )
-    _insert_columns(db, rnd, board_id)
-    return board_id
+    s.add(board)
+    await s.flush()
+    await _insert_columns(s, rnd, board.id)
+    return board.id
 
 
 # ---------------------------------------------------------------------------
@@ -850,46 +987,102 @@ class _Builder:
         self.blockers: list[tuple] = []
         self.comments: list[tuple] = []
 
-    def flush(self, db: Database) -> None:
-        db.exmany(
-            "INSERT INTO cards (id, board_id, column_id, project_id, key, title, "
-            "description, service_class, assignee_id, requester, size, value_area, "
-            "demand_type, due_date, position, envelope_state, is_blocked, tags, "
-            "custom_fields, created_at, opened_at, committed_at, delivered_at, archived, "
-            "created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            self.cards,
-        )
-        db.exmany(
-            "INSERT INTO card_movements (id, card_id, board_id, from_column_id, "
-            "to_column_id, from_segment, to_segment, moved_at, moved_by, "
-            "seconds_in_from_column, note, is_backward, source) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            self.movements,
-        )
-        db.exmany(
-            "INSERT INTO card_events (id, card_id, board_id, actor_id, event_type, field, "
-            "old_value, new_value, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-            self.events,
-        )
-        db.exmany(
-            "INSERT INTO card_tasks (id, card_id, title, is_done, assignee_id, position, "
-            "created_at, completed_at) VALUES (?,?,?,?,?,?,?,?)",
-            self.tasks,
-        )
-        db.exmany(
-            "INSERT INTO blockers (id, card_id, reason, category, started_at, ended_at, "
-            "created_by) VALUES (?,?,?,?,?,?,?)",
-            self.blockers,
-        )
-        db.exmany(
-            "INSERT INTO comments (id, card_id, author_id, body, created_at) "
-            "VALUES (?,?,?,?,?)",
-            self.comments,
-        )
+    #: Column order of each accumulated tuple, per table.
+    COLUMNS: ClassVar[dict[str, tuple[str, ...]]] = {
+        "cards": (
+            "id",
+            "board_id",
+            "column_id",
+            "project_id",
+            "key",
+            "title",
+            "description",
+            "service_class",
+            "assignee_id",
+            "requester",
+            "size",
+            "value_area",
+            "demand_type",
+            "due_date",
+            "position",
+            "envelope_state",
+            "is_blocked",
+            "tags",
+            "custom_fields",
+            "created_at",
+            "opened_at",
+            "committed_at",
+            "delivered_at",
+            "archived",
+            "created_by",
+        ),
+        "movements": (
+            "id",
+            "card_id",
+            "board_id",
+            "from_column_id",
+            "to_column_id",
+            "from_segment",
+            "to_segment",
+            "moved_at",
+            "moved_by",
+            "seconds_in_from_column",
+            "note",
+            "is_backward",
+            "source",
+        ),
+        "events": (
+            "id",
+            "card_id",
+            "board_id",
+            "actor_id",
+            "event_type",
+            "field",
+            "old_value",
+            "new_value",
+            "created_at",
+        ),
+        "tasks": (
+            "id",
+            "card_id",
+            "title",
+            "is_done",
+            "assignee_id",
+            "position",
+            "created_at",
+            "completed_at",
+        ),
+        "blockers": ("id", "card_id", "reason", "category", "started_at", "ended_at", "created_by"),
+        "comments": ("id", "card_id", "author_id", "body", "created_at"),
+    }
+    MODELS: ClassVar[dict[str, Any]] = {
+        "cards": Card,
+        "movements": CardMovement,
+        "events": CardEvent,
+        "tasks": CardTask,
+        "blockers": Blocker,
+        "comments": Comment,
+    }
+    BOOLEANS: ClassVar[frozenset[str]] = frozenset(
+        {"is_blocked", "archived", "is_backward", "is_done"}
+    )
+
+    async def flush(self, s: AsyncSession) -> None:
+        for name, model in self.MODELS.items():
+            columns = self.COLUMNS[name]
+            rows = [
+                {
+                    column: bool(value) if column in self.BOOLEANS else value
+                    for column, value in zip(columns, row, strict=True)
+                }
+                for row in getattr(self, name)
+            ]
+            for start in range(0, len(rows), 1000):
+                await s.execute(insert(model), rows[start : start + 1000])
 
 
-def _seed_cards(
-    db: Database,
+async def _seed_cards(
+    s: AsyncSession,
     rnd: random.Random,
     now: datetime,
     board: dict[str, Any],
@@ -906,7 +1099,7 @@ def _seed_cards(
         users["admin@nagare.app"]["id"],
         users["editor@nagare.app"]["id"],
     ]
-    movers = workers + [users["system@nagare.app"]["id"]]
+    movers = [*workers, users["system@nagare.app"]["id"]]
 
     title_pools = {
         (project_key, bucket): TitlePool(rnd, titles)
@@ -1065,8 +1258,8 @@ def _seed_cards(
                 0,  # rewritten once every card exists
                 envelope_state,
                 1 if is_blocked else 0,
-                json_dumps(identity["tags"]),
-                json_dumps({}),
+                list(identity["tags"]),
+                {},
                 iso(created_at),
                 iso(opened_at) if opened_at else None,
                 iso(committed_at) if committed_at else None,
@@ -1174,12 +1367,14 @@ def _seed_cards(
         progress = (weeks - 1 - week) / (weeks - 1)
         # Mild upward trend plus week-to-week noise: real throughput is lumpy.
         base = 2.0 + 2.4 * progress
-        count = max(0, int(round(base + rnd.choice([-1, -1, 0, 0, 0, 1, 1, 2]))))
+        count = max(0, round(base + rnd.choice([-1, -1, 0, 0, 0, 1, 1, 2])))
         window_end = now - timedelta(days=week * 7)
         for _ in range(count):
             delivered_at = window_end - timedelta(days=rnd.uniform(0.05, 6.95))
             delivered_at = delivered_at.replace(
-                hour=rnd.randint(9, 18), minute=rnd.choice([5, 20, 35, 50]), second=0,
+                hour=rnd.randint(9, 18),
+                minute=rnd.choice([5, 20, 35, 50]),
+                second=0,
                 microsecond=0,
             )
             if delivered_at >= now:
@@ -1200,16 +1395,14 @@ def _seed_cards(
                 dwells[rnd.randrange(len(dwells))] *= rnd.uniform(2.0, 4.5)
 
             moments = shift(plan_timeline(path, dwells), delivered_at)
-            entries = dict(zip(path, moments))
+            entries = dict(zip(path, moments, strict=False))
             created_at = moments[0]
             committed_at = entries[COMMITMENT_COLUMN]
             opened_at = entries["Ideas"]
 
             due_date = None
             if identity["service_class"] == "fixed_date":
-                offset = (
-                    rnd.uniform(0.5, 7.0) if rnd.random() < 0.80 else -rnd.uniform(0.5, 5.0)
-                )
+                offset = rnd.uniform(0.5, 7.0) if rnd.random() < 0.80 else -rnd.uniform(0.5, 5.0)
                 due_date = iso(delivered_at + timedelta(days=offset))
 
             card_id = add_card(
@@ -1258,7 +1451,7 @@ def _seed_cards(
 
             entered_current = now - timedelta(days=current_dwell)
             moments = shift(plan_timeline(path, dwells), entered_current)
-            entries = dict(zip(path, moments))
+            entries = dict(zip(path, moments, strict=False))
             created_at = moments[0]
             committed_at = entries[COMMITMENT_COLUMN]
 
@@ -1310,7 +1503,7 @@ def _seed_cards(
             entered_current = now - timedelta(days=_dwell_days(rnd, column_name, difficulty))
 
             moments = shift(plan_timeline(path, dwells), entered_current)
-            entries = dict(zip(path, moments))
+            entries = dict(zip(path, moments, strict=False))
 
             due_date = (
                 iso(now + timedelta(days=rnd.uniform(14.0, 60.0)))
@@ -1369,10 +1562,10 @@ def _seed_cards(
         for index, (_, card_id) in enumerate(sorted(entries_list, key=lambda item: item[0])):
             position_by_card[card_id] = index
     builder.cards = [
-        row[:14] + (position_by_card.get(row[0], 0),) + row[15:] for row in builder.cards
+        (*row[:14], position_by_card.get(row[0], 0), *row[15:]) for row in builder.cards
     ]
 
-    builder.flush(db)
+    await builder.flush(s)
 
     return SeedSummary(
         cards=len(builder.cards),
@@ -1388,10 +1581,20 @@ def _seed_cards(
     )
 
 
+async def migrate_and_seed(url: str | None = None) -> SeedSummary:
+    """Migrate the configured database and seed it when empty."""
+    database = Database(url)
+    try:
+        await migrate(database.url)
+        async with database.sessions() as s:
+            return await seed_if_empty(s)
+    finally:
+        await database.dispose()
+
+
 def main() -> None:  # pragma: no cover - convenience entry point
     """``python -m backend.app.seed`` — migrate and seed the configured database."""
-    database = get_database()
-    summary = seed_if_empty(database)
+    summary = asyncio.run(migrate_and_seed())
     print("Nagare seed: " + ", ".join(f"{k}={v}" for k, v in sorted(summary.items())))
 
 

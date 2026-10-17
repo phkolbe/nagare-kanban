@@ -26,22 +26,41 @@ produce a flow dashboard that disagrees with itself.
 from __future__ import annotations
 
 import re
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from fastapi import APIRouter, Depends, Query, status
 from pydantic import Field, field_validator
+from sqlalchemy import String, case, cast, delete, func, insert, or_, select, type_coerce, update
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..db import Database, new_id, seconds_between, utcnow
+from ..db import new_id, seconds_between, utcnow
 from ..deps import (
     CurrentUser,
+    assert_board_writable,
     get_board_or_404,
-    get_db,
+    get_session,
     is_flag_effective,
+    is_product_board,
     require_capability,
     require_flag,
     require_roles,
 )
 from ..errors import BadRequest, Conflict, Forbidden, NotFound
+from ..models import (
+    Blocker,
+    Board,
+    BoardColumn,
+    Card,
+    CardEvent,
+    CardMovement,
+    CardTask,
+    ColumnGroup,
+    Project,
+    User,
+    as_dict,
+)
 from ..schemas import (
     BoardCloneRequest,
     BoardCreate,
@@ -61,22 +80,23 @@ from ..schemas import (
     SegmentQuery,
     WipStatusOut,
 )
+from ..tenancy import in_product, product_for_new_rows
 
 router = APIRouter(tags=["boards"])
 
 __all__ = [
-    "router",
     "TEMPLATES",
+    "KeyAllocator",
     "board_wip_status",
     "canonical_columns",
-    "normalize_structure",
-    "wip_state",
-    "select_cards",
     "decorate_card",
-    "KeyAllocator",
     "next_card_key",
+    "normalize_structure",
     "require_structure_role",
     "require_structure_write",
+    "router",
+    "select_cards",
+    "wip_state",
 ]
 
 
@@ -102,30 +122,98 @@ TEMPLATES: dict[str, dict[str, Any]] = {
             ("Delivery", 12, 40, "#3b7ea1"),
         ],
         "columns": [
-            ("Envelope", "upstream", "envelope", None, None, None,
-             "Demand captured but deliberately not yet examined. Sealed until someone opens it."),
-            ("Ideas", "upstream", "queue", 3, 14, "Discovery",
-             "Raw options waiting to be looked at. Pure queue time."),
-            ("Discovery", "upstream", "activity", 2, 6, "Discovery",
-             "Active problem framing: who wants this, what changes, what is the risk."),
-            ("Options", "upstream", "queue", 2, 10, "Discovery",
-             "Understood, shaped, and deferred until the last responsible moment."),
-            ("Ready to Commit", "upstream", "queue", 5, 8, "Discovery",
-             "Replenishment buffer feeding the commitment point."),
-            ("Analysis", "downstream", "activity", 2, 6, "Delivery",
-             "The commitment point. Once work enters here the team owes a delivery."),
-            ("Analysis Done", "downstream", "queue", None, 6, "Delivery",
-             "Analysed and waiting for build capacity."),
-            ("Build", "downstream", "activity", 3, 8, "Delivery",
-             "Implementation in progress."),
-            ("Build Done", "downstream", "queue", None, 6, "Delivery",
-             "Built and waiting for verification capacity."),
-            ("Verify", "downstream", "activity", 2, 5, "Delivery",
-             "Review, test and acceptance."),
-            ("Ready to Deploy", "downstream", "queue", None, 10, "Delivery",
-             "Verified and waiting on the release train."),
-            ("Delivered", "downstream", "done", None, None, None,
-             "Delivered to the customer. The delivery point."),
+            (
+                "Envelope",
+                "upstream",
+                "envelope",
+                None,
+                None,
+                None,
+                "Demand captured but deliberately not yet examined. Sealed until someone opens it.",
+            ),
+            (
+                "Ideas",
+                "upstream",
+                "queue",
+                3,
+                14,
+                "Discovery",
+                "Raw options waiting to be looked at. Pure queue time.",
+            ),
+            (
+                "Discovery",
+                "upstream",
+                "activity",
+                2,
+                6,
+                "Discovery",
+                "Active problem framing: who wants this, what changes, what is the risk.",
+            ),
+            (
+                "Options",
+                "upstream",
+                "queue",
+                2,
+                10,
+                "Discovery",
+                "Understood, shaped, and deferred until the last responsible moment.",
+            ),
+            (
+                "Ready to Commit",
+                "upstream",
+                "queue",
+                5,
+                8,
+                "Discovery",
+                "Replenishment buffer feeding the commitment point.",
+            ),
+            (
+                "Analysis",
+                "downstream",
+                "activity",
+                2,
+                6,
+                "Delivery",
+                "The commitment point. Once work enters here the team owes a delivery.",
+            ),
+            (
+                "Analysis Done",
+                "downstream",
+                "queue",
+                None,
+                6,
+                "Delivery",
+                "Analysed and waiting for build capacity.",
+            ),
+            ("Build", "downstream", "activity", 3, 8, "Delivery", "Implementation in progress."),
+            (
+                "Build Done",
+                "downstream",
+                "queue",
+                None,
+                6,
+                "Delivery",
+                "Built and waiting for verification capacity.",
+            ),
+            ("Verify", "downstream", "activity", 2, 5, "Delivery", "Review, test and acceptance."),
+            (
+                "Ready to Deploy",
+                "downstream",
+                "queue",
+                None,
+                10,
+                "Delivery",
+                "Verified and waiting on the release train.",
+            ),
+            (
+                "Delivered",
+                "downstream",
+                "done",
+                None,
+                None,
+                None,
+                "Delivered to the customer. The delivery point.",
+            ),
         ],
     },
     "simple_delivery": {
@@ -134,14 +222,34 @@ TEMPLATES: dict[str, dict[str, Any]] = {
         "board": {"wip_min": 2, "wip_max": 12, "sle_days": 14, "sle_percentile": 85},
         "groups": [("Delivery", 2, 12, "#3b7ea1")],
         "columns": [
-            ("Backlog", "upstream", "queue", None, None, None,
-             "Everything requested and not yet committed to. No promise has been made."),
-            ("In Progress", "downstream", "activity", 1, 5, "Delivery",
-             "The commitment point. Work here is owed to someone."),
-            ("Review", "downstream", "queue", None, 3, "Delivery",
-             "Waiting for review and acceptance."),
-            ("Done", "downstream", "done", None, None, None,
-             "Delivered. The delivery point."),
+            (
+                "Backlog",
+                "upstream",
+                "queue",
+                None,
+                None,
+                None,
+                "Everything requested and not yet committed to. No promise has been made.",
+            ),
+            (
+                "In Progress",
+                "downstream",
+                "activity",
+                1,
+                5,
+                "Delivery",
+                "The commitment point. Work here is owed to someone.",
+            ),
+            (
+                "Review",
+                "downstream",
+                "queue",
+                None,
+                3,
+                "Delivery",
+                "Waiting for review and acceptance.",
+            ),
+            ("Done", "downstream", "done", None, None, None, "Delivered. The delivery point."),
         ],
     },
     "discovery_only": {
@@ -153,19 +261,111 @@ TEMPLATES: dict[str, dict[str, Any]] = {
         "board": {"wip_min": 4, "wip_max": 24, "sle_days": 30, "sle_percentile": 85},
         "groups": [("Discovery", 4, 24, "#7d8ba1")],
         "columns": [
-            ("Envelope", "upstream", "envelope", None, None, None,
-             "Demand captured but deliberately not yet examined. Sealed until someone opens it."),
-            ("Ideas", "upstream", "queue", 3, 12, "Discovery",
-             "Raw options waiting to be looked at."),
-            ("Discovery", "upstream", "activity", 2, 5, "Discovery",
-             "Active problem framing and option shaping."),
-            ("Options", "upstream", "queue", None, 10, "Discovery",
-             "Shaped and deferred until the last responsible moment."),
-            ("Ready to Commit", "upstream", "queue", 3, 8, "Discovery",
-             "Replenishment buffer feeding the commitment point."),
-            ("Committed", "downstream", "done", None, None, None,
-             "Handed over to delivery. Both the commitment point and the terminal state "
-             "of a discovery-only board."),
+            (
+                "Envelope",
+                "upstream",
+                "envelope",
+                None,
+                None,
+                None,
+                "Demand captured but deliberately not yet examined. Sealed until someone opens it.",
+            ),
+            (
+                "Ideas",
+                "upstream",
+                "queue",
+                3,
+                12,
+                "Discovery",
+                "Raw options waiting to be looked at.",
+            ),
+            (
+                "Discovery",
+                "upstream",
+                "activity",
+                2,
+                5,
+                "Discovery",
+                "Active problem framing and option shaping.",
+            ),
+            (
+                "Options",
+                "upstream",
+                "queue",
+                None,
+                10,
+                "Discovery",
+                "Shaped and deferred until the last responsible moment.",
+            ),
+            (
+                "Ready to Commit",
+                "upstream",
+                "queue",
+                3,
+                8,
+                "Discovery",
+                "Replenishment buffer feeding the commitment point.",
+            ),
+            (
+                "Committed",
+                "downstream",
+                "done",
+                None,
+                None,
+                None,
+                "Handed over to delivery. Both the commitment point and the terminal state "
+                "of a discovery-only board.",
+            ),
+        ],
+    },
+    # The board every Pampufa product gets for its providências (NG12). Editable
+    # until the first card arrives; locked afterwards (NG13).
+    "providencias": {
+        "label": "Providências (Pampufa)",
+        "description": (
+            "Providências da plataforma Pampufa: cada uma chega como cartão na Entrada e "
+            "a sua entrega conclui a providência na plataforma."
+        ),
+        "board": {"wip_min": None, "wip_max": None, "sle_days": 14, "sle_percentile": 85},
+        "groups": [],
+        "columns": [
+            (
+                "Entrada",
+                "upstream",
+                "queue",
+                None,
+                None,
+                None,
+                "Providências que chegaram da plataforma e ainda não foram assumidas.",
+            ),
+            (
+                "A fazer",
+                "downstream",
+                "queue",
+                None,
+                None,
+                None,
+                "O ponto de compromisso: daqui em diante alguém deve uma resposta.",
+            ),
+            ("Fazendo", "downstream", "activity", None, 3, None, "Em tratamento agora."),
+            (
+                "Aguardando terceiro",
+                "downstream",
+                "queue",
+                None,
+                None,
+                None,
+                "Depende de alguém de fora: cliente, contador, fornecedor, banco.",
+            ),
+            (
+                "Entregue",
+                "downstream",
+                "done",
+                None,
+                None,
+                None,
+                "Resolvida. Entregar o cartão conclui a providência na Pampufa.",
+            ),
         ],
     },
     "blank": {
@@ -198,9 +398,7 @@ def resolve_template(value: str | None) -> str:
     key = str(value).strip().lower().replace("-", "_").replace(" ", "_")
     key = TEMPLATE_ALIASES.get(key, key)
     if key not in TEMPLATES:
-        raise ValueError(
-            "Unknown board template. Choose one of: " + ", ".join(sorted(TEMPLATES))
-        )
+        raise ValueError("Unknown board template. Choose one of: " + ", ".join(sorted(TEMPLATES)))
     return key
 
 
@@ -303,6 +501,39 @@ def require_structure_write(user: dict[str, Any], board: dict[str, Any]) -> None
     )
 
 
+#: Column and group fields that are *policy*, not structure: they stay editable after
+#: a product board received its first card (NG13, decision of 15/10/2026).
+_COLUMN_POLICY_FIELDS = frozenset({"name", "color", "description", "wip_min", "wip_max"})
+_GROUP_POLICY_FIELDS = frozenset({"name", "color", "wip_min", "wip_max"})
+
+
+async def flow_locked(s: AsyncSession, board: dict[str, Any]) -> bool:
+    """A product board's flow is fixed once it holds (or held) a card."""
+    if not is_product_board(board):
+        return False
+    first = await s.scalar(select(Card.id).where(Card.board_id == board["id"]).limit(1))
+    return first is not None
+
+
+async def assert_structure_unlocked(s: AsyncSession, board: dict[str, Any], change: str) -> None:
+    """Refuse a structural change on a locked product board (NG13).
+
+    Locked: creating, deleting or reordering columns and groups, changing a
+    column's segment or kind, and therefore the commitment and delivery points.
+    Still free: WIP limits, the SLE and column names and colours. A new flow is a
+    new project linked to the product (NG14).
+    """
+    assert_board_writable(board)
+    if await flow_locked(s, board):
+        raise Conflict(
+            "flow_locked",
+            "This board's flow is locked: it already holds work. WIP limits, the SLE and "
+            "column names and colours can still change; for a different flow, link a new "
+            "project to the product.",
+            {"board_id": board["id"], "product_id": board.get("product_id"), "change": change},
+        )
+
+
 def _column_sort_key(column: dict[str, Any]) -> tuple[int, int, int, str]:
     """Canonical flow order: upstream before downstream, envelope always first."""
     return (
@@ -313,10 +544,23 @@ def _column_sort_key(column: dict[str, Any]) -> tuple[int, int, int, str]:
     )
 
 
-def canonical_columns(db: Database, board_id: str) -> list[dict[str, Any]]:
+async def _columns_of(s: AsyncSession, board_id: str) -> list[dict[str, Any]]:
+    rows = await s.scalars(select(BoardColumn).where(BoardColumn.board_id == board_id))
+    return [as_dict(row) or {} for row in rows]
+
+
+async def _groups_of(s: AsyncSession, board_id: str) -> list[dict[str, Any]]:
+    rows = await s.scalars(
+        select(ColumnGroup)
+        .where(ColumnGroup.board_id == board_id)
+        .order_by(ColumnGroup.position, ColumnGroup.id)
+    )
+    return [as_dict(row) or {} for row in rows]
+
+
+async def canonical_columns(s: AsyncSession, board_id: str) -> list[dict[str, Any]]:
     """Every column of a board in flow order (does not write)."""
-    rows = db.q("SELECT * FROM columns WHERE board_id = ?", board_id)
-    return sorted(rows, key=_column_sort_key)
+    return sorted(await _columns_of(s, board_id), key=_column_sort_key)
 
 
 def _assert_order_valid(ordered: Sequence[dict[str, Any]]) -> None:
@@ -346,8 +590,8 @@ def _assert_order_valid(ordered: Sequence[dict[str, Any]]) -> None:
                 )
 
 
-def _sync_group_positions(
-    db: Database,
+async def _sync_group_positions(
+    s: AsyncSession,
     board_id: str,
     ordered: Sequence[dict[str, Any]],
     groups: Sequence[dict[str, Any]] | None = None,
@@ -359,18 +603,17 @@ def _sync_group_positions(
         if group_id and group_id not in first_index:
             first_index[group_id] = index
     if groups is None:
-        groups = db.q(
-            "SELECT id, position FROM column_groups WHERE board_id = ? ORDER BY position, rowid",
-            board_id,
-        )
+        groups = await _groups_of(s, board_id)
     # Groups that currently span no column keep their relative order at the end.
     ranked = sorted(
         groups,
-        key=lambda g: (first_index.get(g["id"], len(ordered) + int(g["position"] or 0))),
+        key=lambda g: first_index.get(g["id"], len(ordered) + int(g["position"] or 0)),
     )
     for position, group in enumerate(ranked):
         if int(group["position"] or 0) != position:
-            db.ex("UPDATE column_groups SET position = ? WHERE id = ?", position, group["id"])
+            await s.execute(
+                update(ColumnGroup).where(ColumnGroup.id == group["id"]).values(position=position)
+            )
 
 
 def assert_groups_contiguous(
@@ -409,7 +652,7 @@ def assert_groups_contiguous(
                 "column_ids": [column["id"] for column in members],
                 "columns": [
                     {"id": column["id"], "name": column["name"], "position": index}
-                    for index, column in zip(indexes, members)
+                    for index, column in zip(indexes, members, strict=True)
                 ],
                 "separated_by": [
                     {"id": column["id"], "name": column["name"], "position": column["position"]}
@@ -419,8 +662,8 @@ def assert_groups_contiguous(
         )
 
 
-def recompute_points(
-    db: Database, board_id: str, ordered: Sequence[dict[str, Any]]
+async def recompute_points(
+    s: AsyncSession, board_id: str, ordered: Sequence[dict[str, Any]]
 ) -> tuple[str | None, str | None]:
     """Re-derive the commitment and delivery points; returns their column ids.
 
@@ -430,35 +673,38 @@ def recompute_points(
     commitment_id = next((c["id"] for c in ordered if c["segment"] == "downstream"), None)
     delivery_id = next((c["id"] for c in reversed(ordered) if c["kind"] == "done"), None)
 
-    db.ex(
-        "UPDATE columns SET is_commitment_point = CASE WHEN id = ? THEN 1 ELSE 0 END "
-        "WHERE board_id = ?",
-        commitment_id,
-        board_id,
+    await s.execute(
+        update(BoardColumn)
+        .where(BoardColumn.board_id == board_id)
+        .values(is_commitment_point=False, is_delivery_point=False)
     )
-    db.ex(
-        "UPDATE columns SET is_delivery_point = CASE WHEN id = ? THEN 1 ELSE 0 END "
-        "WHERE board_id = ?",
-        delivery_id,
-        board_id,
-    )
+    if commitment_id:
+        await s.execute(
+            update(BoardColumn)
+            .where(BoardColumn.id == commitment_id)
+            .values(is_commitment_point=True)
+        )
+    if delivery_id:
+        await s.execute(
+            update(BoardColumn).where(BoardColumn.id == delivery_id).values(is_delivery_point=True)
+        )
     for column in ordered:
-        column["is_commitment_point"] = 1 if column["id"] == commitment_id else 0
-        column["is_delivery_point"] = 1 if column["id"] == delivery_id else 0
+        column["is_commitment_point"] = column["id"] == commitment_id
+        column["is_delivery_point"] = column["id"] == delivery_id
     return commitment_id, delivery_id
 
 
-def normalize_structure(
-    db: Database, board_id: str, order: Sequence[str] | None = None
+async def normalize_structure(
+    s: AsyncSession, board_id: str, order: Sequence[str] | None = None
 ) -> list[dict[str, Any]]:
     """Rewrite positions densely, re-derive the points, validate the groups.
 
     Every structural mutation ends here, so the invariants hold after a create, a
     delete, a reorder and a segment change alike. Pass ``order`` to impose an
     explicit sequence (the reorder endpoint); omit it to fall back on the
-    canonical sort.
+    canonical sort. Runs in the caller's transaction; the caller commits.
     """
-    rows = db.q("SELECT * FROM columns WHERE board_id = ?", board_id)
+    rows = await _columns_of(s, board_id)
     by_id = {row["id"]: row for row in rows}
 
     if order is None:
@@ -497,18 +743,15 @@ def normalize_structure(
 
     for position, column in enumerate(ordered):
         if int(column["position"] or 0) != position:
-            db.ex("UPDATE columns SET position = ? WHERE id = ?", position, column["id"])
+            await s.execute(
+                update(BoardColumn).where(BoardColumn.id == column["id"]).values(position=position)
+            )
             column["position"] = position
 
-    recompute_points(db, board_id, ordered)
-    groups = db.q(
-        "SELECT id, name, position FROM column_groups WHERE board_id = ? ORDER BY position, rowid",
-        board_id,
-    )
-    assert_groups_contiguous(
-        board_id, ordered, {group["id"]: group["name"] for group in groups}
-    )
-    _sync_group_positions(db, board_id, ordered, groups)
+    await recompute_points(s, board_id, ordered)
+    groups = await _groups_of(s, board_id)
+    assert_groups_contiguous(board_id, ordered, {group["id"]: group["name"] for group in groups})
+    await _sync_group_positions(s, board_id, ordered, groups)
     return ordered
 
 
@@ -571,8 +814,8 @@ def _assert_envelope_placement(kind: str, position: int | None) -> None:
         )
 
 
-def _assert_delivery_point_survives(
-    db: Database, board_id: str, column: dict[str, Any], kind: str
+async def _assert_delivery_point_survives(
+    s: AsyncSession, board_id: str, column: dict[str, Any], kind: str
 ) -> None:
     """Refuse a re-kind that would leave the board with nowhere to deliver.
 
@@ -583,10 +826,12 @@ def _assert_delivery_point_survives(
     """
     if column["kind"] != "done" or kind == "done":
         return
-    survivor = db.q1(
-        "SELECT id, name FROM columns WHERE board_id = ? AND kind = 'done' AND id != ?",
-        board_id,
-        column["id"],
+    survivor = await s.scalar(
+        select(BoardColumn.id).where(
+            BoardColumn.board_id == board_id,
+            BoardColumn.kind == "done",
+            BoardColumn.id != column["id"],
+        )
     )
     if survivor is not None:
         return
@@ -635,8 +880,8 @@ def _cell(count: int, wip_min: Any, wip_max: Any, label: str | None = None) -> d
     return {"count": count, "min": minimum, "max": maximum, "state": state, "label": label}
 
 
-def board_wip_status(
-    db: Database,
+async def board_wip_status(
+    s: AsyncSession,
     board: dict[str, Any],
     columns: Sequence[dict[str, Any]] | None = None,
     groups: Sequence[dict[str, Any]] | None = None,
@@ -649,25 +894,33 @@ def board_wip_status(
     """
     board_id = board["id"]
     if columns is None:
-        columns = canonical_columns(db, board_id)
+        columns = await canonical_columns(s, board_id)
     if groups is None:
-        groups = db.q(
-            "SELECT * FROM column_groups WHERE board_id = ? ORDER BY position", board_id
-        )
+        groups = [
+            as_dict(group) or {}
+            for group in await s.scalars(
+                select(ColumnGroup)
+                .where(ColumnGroup.board_id == board_id)
+                .order_by(ColumnGroup.position)
+            )
+        ]
 
     occupancy = {
-        row["column_id"]: int(row["n"])
-        for row in db.q(
-            "SELECT column_id, COUNT(*) AS n FROM cards "
-            "WHERE board_id = ? AND archived = 0 GROUP BY column_id",
-            board_id,
+        column_id: int(n)
+        for column_id, n in await s.execute(
+            select(Card.column_id, func.count())
+            .where(Card.board_id == board_id, Card.archived.is_(False))
+            .group_by(Card.column_id)
         )
     }
     flow_count = int(
-        db.scalar(
-            "SELECT COUNT(*) FROM cards WHERE board_id = ? AND archived = 0 "
-            "AND committed_at IS NOT NULL AND delivered_at IS NULL",
-            board_id,
+        await s.scalar(
+            select(func.count()).where(
+                Card.board_id == board_id,
+                Card.archived.is_(False),
+                Card.committed_at.is_not(None),
+                Card.delivered_at.is_(None),
+            )
         )
         or 0
     )
@@ -681,13 +934,13 @@ def board_wip_status(
             per_group[column["group_id"]] = per_group.get(column["group_id"], 0) + count
 
     group_cells: dict[str, dict[str, Any]] = {}
-    if is_flag_effective(db, "wip_group"):
+    if await is_flag_effective(s, "wip_group"):
         for group in groups:
             group_cells[group["id"]] = _cell(
                 per_group.get(group["id"], 0), group["wip_min"], group["wip_max"]
             )
 
-    if is_flag_effective(db, "wip_flow"):
+    if await is_flag_effective(s, "wip_flow"):
         flow_cell = _cell(flow_count, board.get("wip_min"), board.get("wip_max"))
     else:
         # The count is still true and useful; only the policy is plan-locked.
@@ -705,37 +958,61 @@ def board_wip_status(
 # card projection shared with the projects router
 # ---------------------------------------------------------------------------
 
-CARD_SELECT = """
-SELECT c.*,
-       p.key   AS project_key,
-       p.name  AS project_name,
-       p.color AS project_color,
-       u.name  AS assignee_name,
-       COALESCE(t.total, 0) AS task_total,
-       COALESCE(t.done, 0)  AS task_done,
-       bl.started_at        AS blocked_since,
-       col.position         AS column_position
-FROM cards c
-JOIN columns col ON col.id = c.column_id
-LEFT JOIN projects p ON p.id = c.project_id
-LEFT JOIN users u ON u.id = c.assignee_id
-LEFT JOIN (
-    SELECT card_id, COUNT(*) AS total, SUM(is_done) AS done
-    FROM card_tasks GROUP BY card_id
-) t ON t.card_id = c.id
-LEFT JOIN (
-    SELECT card_id, MIN(started_at) AS started_at
-    FROM blockers WHERE ended_at IS NULL GROUP BY card_id
-) bl ON bl.card_id = c.id
-"""
+#: Named orderings for :func:`select_cards` (the board, a project page, a lookup).
+CARD_ORDERS: dict[str, Any] = {
+    "board": lambda: (BoardColumn.position, Card.position, Card.created_at),
+    "created": lambda: (Card.created_at,),
+    "project": lambda: (
+        case((Card.envelope_state == "sealed", 0), else_=1),
+        BoardColumn.position,
+        Card.position,
+        Card.created_at,
+    ),
+}
 
 
-def _like(value: str) -> str:
-    """Escape nothing, wrap everything: sqlite LIKE with ``%`` on both ends."""
-    return f"%{value.strip()}%"
+def _card_projection() -> Any:
+    task_total = (
+        select(func.count()).where(CardTask.card_id == Card.id).correlate(Card).scalar_subquery()
+    )
+    task_done = (
+        select(func.count())
+        .where(CardTask.card_id == Card.id, CardTask.is_done.is_(True))
+        .correlate(Card)
+        .scalar_subquery()
+    )
+    blocked_since = (
+        select(func.min(Blocker.started_at))
+        .where(Blocker.card_id == Card.id, Blocker.ended_at.is_(None))
+        .correlate(Card)
+        .scalar_subquery()
+    )
+    return (
+        select(
+            Card,
+            Project.key.label("project_key"),
+            Project.name.label("project_name"),
+            Project.color.label("project_color"),
+            User.name.label("assignee_name"),
+            task_total.label("task_total"),
+            task_done.label("task_done"),
+            blocked_since.label("blocked_since"),
+        )
+        .join(BoardColumn, BoardColumn.id == Card.column_id)
+        .outerjoin(Project, Project.id == Card.project_id)
+        .outerjoin(User, User.id == Card.assignee_id)
+    )
+
+
+def _tag_condition(s: AsyncSession, tag: str) -> Any:
+    """``tags`` holds a JSON array of strings: match the element, never a substring."""
+    if s.get_bind().dialect.name == "postgresql":
+        return type_coerce(Card.tags, JSONB).contains([tag])
+    return cast(Card.tags, String).like(f'%"{tag}"%')
 
 
 def card_filter_clauses(
+    s: AsyncSession,
     *,
     project_id: str | None = None,
     service_class: str | None = None,
@@ -749,53 +1026,42 @@ def card_filter_clauses(
     size: str | None = None,
     due_before: str | None = None,
     envelope_state: str | None = None,
-) -> tuple[list[str], list[Any]]:
-    """Translate the SPEC §5 card query string into SQL fragments."""
-    where: list[str] = []
-    params: list[Any] = []
+) -> list[Any]:
+    """Translate the SPEC §5 card query string into SQL conditions."""
+    conditions: list[Any] = []
     if project_id:
-        where.append("c.project_id = ?")
-        params.append(project_id)
+        conditions.append(Card.project_id == project_id)
     if service_class:
-        where.append("c.service_class = ?")
-        params.append(service_class)
+        conditions.append(Card.service_class == service_class)
     if assignee_id:
-        where.append("c.assignee_id = ?")
-        params.append(assignee_id)
+        conditions.append(Card.assignee_id == assignee_id)
     if column_id:
-        where.append("c.column_id = ?")
-        params.append(column_id)
+        conditions.append(Card.column_id == column_id)
     if tag:
-        # `tags` is a JSON array of strings; matching the quoted token avoids the
-        # JSON1 extension while still refusing partial-word collisions.
-        where.append("c.tags LIKE ?")
-        params.append(f'%"{tag.strip()}"%')
+        conditions.append(_tag_condition(s, tag.strip()))
     if q:
-        where.append("(c.title LIKE ? OR c.key LIKE ? OR c.description LIKE ?)")
-        params.extend([_like(q), _like(q), _like(q)])
+        needle = f"%{q.strip()}%"
+        conditions.append(
+            or_(Card.title.ilike(needle), Card.key.ilike(needle), Card.description.ilike(needle))
+        )
     if is_blocked is not None:
-        where.append("c.is_blocked = ?")
-        params.append(1 if is_blocked else 0)
+        conditions.append(Card.is_blocked.is_(bool(is_blocked)))
     if demand_type:
-        where.append("c.demand_type = ?")
-        params.append(demand_type)
+        conditions.append(Card.demand_type == demand_type)
     if value_area:
-        where.append("c.value_area = ?")
-        params.append(value_area)
+        conditions.append(Card.value_area == value_area)
     if size:
-        where.append("c.size = ?")
-        params.append(size)
+        conditions.append(Card.size == size)
     if due_before:
-        where.append("c.due_date IS NOT NULL AND c.due_date <= ?")
-        params.append(due_before)
+        conditions.append(Card.due_date.is_not(None))
+        conditions.append(Card.due_date <= due_before)
     if envelope_state:
-        where.append("c.envelope_state = ?")
-        params.append(envelope_state)
-    return where, params
+        conditions.append(Card.envelope_state == envelope_state)
+    return conditions
 
 
 def decorate_card(row: dict[str, Any], now_iso: str) -> dict[str, Any]:
-    """Add the derived fields a compact card renders, drop internal columns."""
+    """Add the derived fields a compact card renders."""
     row = dict(row)
     row.pop("column_position", None)
     committed = row.get("committed_at")
@@ -812,34 +1078,49 @@ def decorate_card(row: dict[str, Any], now_iso: str) -> dict[str, Any]:
     return row
 
 
-def select_cards(
-    db: Database,
+async def select_cards(
+    s: AsyncSession,
     *,
     board_id: str | None = None,
     column_ids: Sequence[str] | None = None,
+    card_id: str | None = None,
     archived: bool = False,
-    order_by: str = "col.position, c.position, c.created_at",
+    order: str = "board",
     limit: int | None = None,
     **filters: Any,
 ) -> list[dict[str, Any]]:
     """One query for every card the caller can see, already decorated."""
-    where, params = card_filter_clauses(**filters)
+    conditions = card_filter_clauses(s, **filters)
     if board_id:
-        where.insert(0, "c.board_id = ?")
-        params.insert(0, board_id)
-    where.append("c.archived = ?")
-    params.append(1 if archived else 0)
+        conditions.insert(0, Card.board_id == board_id)
+    if card_id:
+        conditions.append(Card.id == card_id)
+    conditions.append(Card.archived.is_(bool(archived)))
     if column_ids is not None:
         if not column_ids:
             return []
-        where.append(f"c.column_id IN ({', '.join('?' for _ in column_ids)})")
-        params.extend(column_ids)
+        conditions.append(Card.column_id.in_(list(column_ids)))
 
-    sql = f"{CARD_SELECT} WHERE {' AND '.join(where)} ORDER BY {order_by}"
+    query = _card_projection().where(*conditions).order_by(*CARD_ORDERS[order]())
     if limit is not None:
-        sql += f" LIMIT {int(limit)}"
+        query = query.limit(int(limit))
     now_iso = utcnow()
-    return [decorate_card(row, now_iso) for row in db.q(sql, params)]
+    out = []
+    for row in await s.execute(query):
+        data = as_dict(row[0]) or {}
+        mapping = row._mapping
+        for label in (
+            "project_key",
+            "project_name",
+            "project_color",
+            "assignee_name",
+            "task_total",
+            "task_done",
+            "blocked_since",
+        ):
+            data[label] = mapping[label]
+        out.append(decorate_card(data, now_iso))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -847,11 +1128,14 @@ def select_cards(
 # ---------------------------------------------------------------------------
 
 
-def next_card_key(db: Database, prefix: str) -> str:
+async def next_card_key(s: AsyncSession, prefix: str, product_id: str | None = None) -> str:
     """The next free ``PREFIX-n`` card key. Numbering starts at 101 like the seed."""
+    query = select(Card.key).where(Card.key.like(f"{prefix}-%"))
+    if product_id is not None:
+        query = query.where(Card.product_id == product_id)
     highest = 100
-    for row in db.q("SELECT key FROM cards WHERE key LIKE ?", f"{prefix}-%"):
-        tail = str(row["key"]).rsplit("-", 1)[-1]
+    for key in await s.scalars(query):
+        tail = str(key).rsplit("-", 1)[-1]
         if tail.isdigit():
             highest = max(highest, int(tail))
     return f"{prefix}-{highest + 1}"
@@ -860,14 +1144,16 @@ def next_card_key(db: Database, prefix: str) -> str:
 class KeyAllocator:
     """Hands out unique card keys during a bulk write (clone, demand import)."""
 
-    def __init__(self, db: Database) -> None:
-        self._db = db
+    def __init__(self, s: AsyncSession, product_id: str | None = None) -> None:
+        self._s = s
+        self._product_id = product_id
         self._next: dict[str, int] = {}
 
-    def take(self, prefix: str) -> str:
+    async def take(self, prefix: str) -> str:
         prefix = (prefix or "CARD").upper()
         if prefix not in self._next:
-            self._next[prefix] = int(next_card_key(self._db, prefix).rsplit("-", 1)[-1])
+            key = await next_card_key(self._s, prefix, self._product_id)
+            self._next[prefix] = int(key.rsplit("-", 1)[-1])
         number = self._next[prefix]
         self._next[prefix] = number + 1
         return f"{prefix}-{number}"
@@ -883,50 +1169,65 @@ def _slugify(value: str) -> str:
     return slug or "board"
 
 
-def _unique_slug(db: Database, base: str) -> str:
+async def _unique_slug(s: AsyncSession, base: str, product_id: str) -> str:
     slug = _slugify(base)
     candidate = slug
     suffix = 2
-    while db.q1("SELECT id FROM boards WHERE slug = ?", candidate):
+    while await s.scalar(
+        select(Board.id).where(Board.slug == candidate, Board.product_id == product_id)
+    ):
         candidate = f"{slug}-{suffix}"
         suffix += 1
     return candidate
 
 
-def _board_out(db: Database, board: dict[str, Any], *, structure: bool = True) -> dict[str, Any]:
-    """Board row plus (optionally) its groups, columns and card count."""
-    out = dict(board)
-    out["card_count"] = int(
-        db.scalar("SELECT COUNT(*) FROM cards WHERE board_id = ? AND archived = 0", board["id"])
+async def _card_count(s: AsyncSession, board_id: str) -> int:
+    return int(
+        await s.scalar(
+            select(func.count()).where(Card.board_id == board_id, Card.archived.is_(False))
+        )
         or 0
     )
+
+
+async def _board_out(
+    s: AsyncSession, board: dict[str, Any], *, structure: bool = True
+) -> dict[str, Any]:
+    """Board row plus (optionally) its groups, columns and card count."""
+    out = dict(board)
+    out["card_count"] = await _card_count(s, board["id"])
     if structure:
-        out["columns"] = canonical_columns(db, board["id"])
-        out["groups"] = db.q(
-            "SELECT * FROM column_groups WHERE board_id = ? ORDER BY position", board["id"]
-        )
+        out["columns"] = await canonical_columns(s, board["id"])
+        out["groups"] = [
+            as_dict(group) or {}
+            for group in await s.scalars(
+                select(ColumnGroup)
+                .where(ColumnGroup.board_id == board["id"])
+                .order_by(ColumnGroup.position)
+            )
+        ]
     return out
 
 
-def _get_column_or_404(db: Database, column_id: str) -> dict[str, Any]:
-    row = db.q1("SELECT * FROM columns WHERE id = ?", column_id)
+async def _get_column_or_404(s: AsyncSession, column_id: str) -> dict[str, Any]:
+    row = as_dict(await s.get(BoardColumn, column_id))
     if row is None:
         raise NotFound("Column", column_id, code="column_not_found")
     return row
 
 
-def _get_group_or_404(db: Database, group_id: str) -> dict[str, Any]:
-    row = db.q1("SELECT * FROM column_groups WHERE id = ?", group_id)
+async def _get_group_or_404(s: AsyncSession, group_id: str) -> dict[str, Any]:
+    row = as_dict(await s.get(ColumnGroup, group_id))
     if row is None:
         raise NotFound("Column group", group_id, code="group_not_found")
     return row
 
 
-def _assert_group_on_board(db: Database, board_id: str, group_id: str | None) -> None:
+async def _assert_group_on_board(s: AsyncSession, board_id: str, group_id: str | None) -> None:
     if not group_id:
         return
-    row = db.q1(
-        "SELECT id FROM column_groups WHERE id = ? AND board_id = ?", group_id, board_id
+    row = await s.scalar(
+        select(ColumnGroup.id).where(ColumnGroup.id == group_id, ColumnGroup.board_id == board_id)
     )
     if row is None:
         raise BadRequest(
@@ -952,18 +1253,20 @@ def _validate_column_shape(segment: str, kind: str) -> None:
         )
 
 
-def _assert_single_envelope(db: Database, board_id: str, exclude_id: str | None = None) -> None:
-    sql = "SELECT id, name FROM columns WHERE board_id = ? AND kind = 'envelope'"
-    params: list[Any] = [board_id]
+async def _assert_single_envelope(
+    s: AsyncSession, board_id: str, exclude_id: str | None = None
+) -> None:
+    query = select(BoardColumn).where(
+        BoardColumn.board_id == board_id, BoardColumn.kind == "envelope"
+    )
     if exclude_id:
-        sql += " AND id != ?"
-        params.append(exclude_id)
-    existing = db.q1(sql, params)
-    if existing:
+        query = query.where(BoardColumn.id != exclude_id)
+    existing = await s.scalar(query.limit(1))
+    if existing is not None:
         raise Conflict(
             "envelope_column_exists",
             "A board has at most one envelope column, and it is always the first one.",
-            {"column_id": existing["id"], "name": existing["name"]},
+            {"column_id": existing.id, "name": existing.name},
         )
 
 
@@ -982,9 +1285,7 @@ def _assert_derived_points(
             "column's segment or position instead of setting the flag.",
             {"column_id": column["id"], "is_commitment_point": bool(column["is_commitment_point"])},
         )
-    if payload_delivery is not None and bool(payload_delivery) != bool(
-        column["is_delivery_point"]
-    ):
+    if payload_delivery is not None and bool(payload_delivery) != bool(column["is_delivery_point"]):
         raise Conflict(
             "delivery_point_is_derived",
             "The delivery point is always the last 'done' column. Change the column's "
@@ -993,41 +1294,63 @@ def _assert_derived_points(
         )
 
 
-def _apply_template(db: Database, board_id: str, template: str) -> None:
+async def _apply_template(s: AsyncSession, board_id: str, template: str) -> None:
     """Write a template's groups and columns onto a freshly created board."""
     spec = TEMPLATES[template]
     group_ids: dict[str, str] = {}
     for position, (name, wip_min, wip_max, color) in enumerate(spec["groups"]):
         group_id = new_id()
         group_ids[name] = group_id
-        db.ex(
-            "INSERT INTO column_groups (id, board_id, name, position, wip_min, wip_max, color) "
-            "VALUES (?,?,?,?,?,?,?)",
-            group_id,
-            board_id,
-            name,
-            position,
-            wip_min,
-            wip_max,
-            color,
+        s.add(
+            ColumnGroup(
+                id=group_id,
+                board_id=board_id,
+                name=name,
+                position=position,
+                wip_min=wip_min,
+                wip_max=wip_max,
+                color=color,
+            )
         )
+    await s.flush()
     for position, (name, segment, kind, wip_min, wip_max, group, description) in enumerate(
         spec["columns"]
     ):
-        db.ex(
-            "INSERT INTO columns (id, board_id, group_id, name, position, segment, kind, "
-            "wip_min, wip_max, is_commitment_point, is_delivery_point, color, description) "
-            "VALUES (?,?,?,?,?,?,?,?,?,0,0,NULL,?)",
-            new_id(),
-            board_id,
-            group_ids.get(group) if group else None,
-            name,
-            position,
-            segment,
-            kind,
-            wip_min,
-            wip_max,
-            description,
+        s.add(
+            BoardColumn(
+                id=new_id(),
+                board_id=board_id,
+                group_id=group_ids.get(group) if group else None,
+                name=name,
+                position=position,
+                segment=segment,
+                kind=kind,
+                wip_min=wip_min,
+                wip_max=wip_max,
+                is_commitment_point=False,
+                is_delivery_point=False,
+                color=None,
+                description=description,
+            )
+        )
+    await s.flush()
+
+
+async def _assert_may_create(s: AsyncSession, user: CurrentUser, kind: str) -> None:
+    """Simulator boards for the simulator roles (flag-gated); the rest for structure roles."""
+    if kind == "simulator":
+        if user.get("role") not in {"master", "administrator", "simulator"}:
+            raise Forbidden(
+                "Your role cannot create simulator boards.",
+                code="insufficient_role",
+                details={"role": user.get("role")},
+            )
+        await require_flag("simulator")(s)
+    elif user.get("role") not in STRUCTURE_ROLES:
+        raise Forbidden(
+            "Your role cannot create boards.",
+            code="insufficient_role",
+            details={"role": user.get("role"), "required": sorted(STRUCTURE_ROLES)},
         )
 
 
@@ -1037,29 +1360,33 @@ def _apply_template(db: Database, board_id: str, template: str) -> None:
 
 
 @router.get("/boards", response_model=ListResponse[BoardOut], summary="List boards")
-def list_boards(
+async def list_boards(
     kind: str | None = Query(None, pattern="^(operational|simulator)$"),
     q: str | None = Query(None, description="Match the board name or slug"),
     archived: bool = Query(False),
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("read_boards_metrics")),
 ) -> dict[str, Any]:
     """Every board the workspace has, newest first, with a live card count."""
-    where = ["b.archived = ?"]
-    params: list[Any] = [1 if archived else 0]
+    conditions: list[Any] = [Board.archived.is_(bool(archived)), *in_product(Board)]
     if kind:
-        where.append("b.kind = ?")
-        params.append(kind)
+        conditions.append(Board.kind == kind)
     if q:
-        where.append("(b.name LIKE ? OR b.slug LIKE ?)")
-        params.extend([_like(q), _like(q)])
-    rows = db.q(
-        "SELECT b.*, (SELECT COUNT(*) FROM cards c WHERE c.board_id = b.id AND c.archived = 0) "
-        f"AS card_count FROM boards b WHERE {' AND '.join(where)} "
-        "ORDER BY b.kind, b.created_at DESC",
-        params,
+        needle = f"%{q.strip()}%"
+        conditions.append(or_(Board.name.ilike(needle), Board.slug.ilike(needle)))
+    card_count = (
+        select(func.count())
+        .where(Card.board_id == Board.id, Card.archived.is_(False))
+        .correlate(Board)
+        .scalar_subquery()
     )
-    return {"items": rows, "total": len(rows)}
+    rows = await s.execute(
+        select(Board, card_count.label("card_count"))
+        .where(*conditions)
+        .order_by(Board.kind, Board.created_at.desc())
+    )
+    items = [{**(as_dict(row[0]) or {}), "card_count": int(row[1] or 0)} for row in rows]
+    return {"items": items, "total": len(items)}
 
 
 @router.post(
@@ -1068,59 +1395,80 @@ def list_boards(
     status_code=status.HTTP_201_CREATED,
     summary="Create a board from a template",
 )
-def create_board(
+async def create_board(
     payload: BoardCreateRequest,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("read_boards_metrics")),
 ) -> dict[str, Any]:
     """Create a board and lay out the chosen template's groups and columns."""
-    if payload.kind == "simulator":
-        if user.get("role") not in {"master", "administrator", "simulator"}:
-            raise Forbidden(
-                "Your role cannot create simulator boards.",
-                code="insufficient_role",
-                details={"role": user.get("role")},
-            )
-        require_flag("simulator")(db)
-    elif user.get("role") not in STRUCTURE_ROLES:
-        raise Forbidden(
-            "Your role cannot create boards.",
-            code="insufficient_role",
-            details={"role": user.get("role"), "required": sorted(STRUCTURE_ROLES)},
-        )
+    await _assert_may_create(s, user, payload.kind)
+    board_id = await create_board_from_template(
+        s,
+        product_id=product_for_new_rows(),
+        name=payload.name,
+        template=payload.template or "blank",
+        kind=payload.kind,
+        description=payload.description,
+        count_envelope_in_metrics=bool(payload.count_envelope_in_metrics),
+        confirm_moves=bool(payload.confirm_moves),
+        wip_min=payload.wip_min,
+        wip_max=payload.wip_max,
+        sle_days=payload.sle_days,
+        sle_percentile=payload.sle_percentile,
+    )
+    await s.commit()
 
-    template = payload.template or "blank"
+    board = await get_board_or_404(s, board_id)
+    return await _board_out(s, board)
+
+
+async def create_board_from_template(
+    s: AsyncSession,
+    *,
+    product_id: str,
+    name: str,
+    template: str,
+    kind: str = "operational",
+    description: str | None = None,
+    count_envelope_in_metrics: bool = False,
+    confirm_moves: bool = True,
+    wip_min: int | None = None,
+    wip_max: int | None = None,
+    sle_days: int | None = None,
+    sle_percentile: int | None = None,
+) -> str:
+    """Write a board and its template's structure in the caller's transaction."""
     defaults = TEMPLATES[template]["board"]
     board_id = new_id()
-    with db.tx():
-        db.ex(
-            "INSERT INTO boards (id, name, slug, description, kind, source_board_id, "
-            "count_envelope_in_metrics, confirm_moves, wip_min, wip_max, sle_days, "
-            "sle_percentile, created_at, archived) VALUES (?,?,?,?,?,NULL,?,?,?,?,?,?,?,0)",
-            board_id,
-            payload.name,
-            _unique_slug(db, payload.name),
-            payload.description or TEMPLATES[template]["description"],
-            payload.kind,
-            1 if payload.count_envelope_in_metrics else 0,
-            1 if payload.confirm_moves else 0,
-            payload.wip_min if payload.wip_min is not None else defaults["wip_min"],
-            payload.wip_max if payload.wip_max is not None else defaults["wip_max"],
-            payload.sle_days if payload.sle_days is not None else defaults["sle_days"],
-            payload.sle_percentile
-            if payload.sle_percentile is not None
+    s.add(
+        Board(
+            id=board_id,
+            product_id=product_id,
+            name=name,
+            slug=await _unique_slug(s, name, product_id),
+            description=description or TEMPLATES[template]["description"],
+            kind=kind,
+            source_board_id=None,
+            count_envelope_in_metrics=count_envelope_in_metrics,
+            confirm_moves=confirm_moves,
+            wip_min=wip_min if wip_min is not None else defaults["wip_min"],
+            wip_max=wip_max if wip_max is not None else defaults["wip_max"],
+            sle_days=sle_days if sle_days is not None else defaults["sle_days"],
+            sle_percentile=sle_percentile
+            if sle_percentile is not None
             else defaults["sle_percentile"],
-            utcnow(),
+            created_at=utcnow(),
+            archived=False,
         )
-        _apply_template(db, board_id, template)
-        normalize_structure(db, board_id)
-
-    board = get_board_or_404(db, board_id)
-    return _board_out(db, board)
+    )
+    await s.flush()
+    await _apply_template(s, board_id, template)
+    await normalize_structure(s, board_id)
+    return board_id
 
 
 @router.get("/boards/templates", summary="Board templates available to POST /boards")
-def list_templates(
+async def list_templates(
     user: CurrentUser = Depends(require_capability("read_boards_metrics")),
 ) -> dict[str, Any]:
     """The template catalogue, so the "new board" dialog needs no hard-coded copy."""
@@ -1130,9 +1478,7 @@ def list_templates(
             "label": spec["label"],
             "description": spec["description"],
             "column_count": len(spec["columns"]),
-            "columns": [
-                {"name": c[0], "segment": c[1], "kind": c[2]} for c in spec["columns"]
-            ],
+            "columns": [{"name": c[0], "segment": c[1], "kind": c[2]} for c in spec["columns"]],
             "groups": [g[0] for g in spec["groups"]],
         }
         for key, spec in TEMPLATES.items()
@@ -1141,29 +1487,30 @@ def list_templates(
 
 
 @router.get("/boards/{id}", response_model=BoardOut, summary="One board with its structure")
-def get_board(
+async def get_board(
     id: str,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("read_boards_metrics")),
 ) -> dict[str, Any]:
     """The board row plus its groups and columns, including every WIP policy."""
-    return _board_out(db, get_board_or_404(db, id))
+    return await _board_out(s, await get_board_or_404(s, id))
 
 
 @router.patch("/boards/{id}", response_model=BoardOut, summary="Update board policies")
-def update_board(
+async def update_board(
     id: str,
     payload: BoardUpdate,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("read_boards_metrics")),
 ) -> dict[str, Any]:
     """Rename a board or change its WIP, SLE, envelope and confirmation policies."""
-    board = get_board_or_404(db, id)
+    board = await get_board_or_404(s, id)
     require_structure_write(user, board)
+    assert_board_writable(board)
 
     fields = payload.model_dump(exclude_unset=True)
     if not fields:
-        return _board_out(db, board)
+        return await _board_out(s, board)
     if (
         fields.get("wip_min") is not None
         and fields.get("wip_max") is not None
@@ -1174,21 +1521,16 @@ def update_board(
             code="invalid_wip_range",
             details=fields,
         )
-    assignments = []
-    params: list[Any] = []
-    for key, value in fields.items():
-        assignments.append(f"{key} = ?")
-        params.append(int(value) if isinstance(value, bool) else value)
-    params.append(board["id"])
-    db.ex(f"UPDATE boards SET {', '.join(assignments)} WHERE id = ?", params)
-    return _board_out(db, get_board_or_404(db, board["id"]))
+    await s.execute(update(Board).where(Board.id == board["id"]).values(**fields))
+    await s.commit()
+    return await _board_out(s, await get_board_or_404(s, board["id"]))
 
 
 @router.delete("/boards/{id}", response_model=OkResponse, summary="Archive or delete a board")
-def delete_board(
+async def delete_board(
     id: str,
     hard: bool = Query(False, description="Master only: destroy the board and its history"),
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("read_boards_metrics")),
 ) -> dict[str, Any]:
     """Archive a board by default; ``?hard=true`` (master) deletes it outright.
@@ -1197,7 +1539,7 @@ def delete_board(
     record of how the system behaved — deleting it silently destroys every metric
     computed from it.
     """
-    board = get_board_or_404(db, id)
+    board = await get_board_or_404(s, id)
     require_structure_write(user, board)
     if hard:
         if user.get("role") != "master":
@@ -1206,9 +1548,11 @@ def delete_board(
                 code="insufficient_role",
                 details={"role": user.get("role")},
             )
-        db.ex("DELETE FROM boards WHERE id = ?", board["id"])
+        await s.execute(delete(Board).where(Board.id == board["id"]))
+        await s.commit()
         return {"ok": True, "id": board["id"], "message": "Board deleted with its history."}
-    db.ex("UPDATE boards SET archived = 1 WHERE id = ?", board["id"])
+    await s.execute(update(Board).where(Board.id == board["id"]).values(archived=True))
+    await s.commit()
     return {"ok": True, "id": board["id"], "message": "Board archived."}
 
 
@@ -1218,10 +1562,10 @@ def delete_board(
     status_code=status.HTTP_201_CREATED,
     summary="Deep clone a board",
 )
-def clone_board(
+async def clone_board(
     id: str,
     payload: BoardCloneRequest,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("read_boards_metrics")),
 ) -> dict[str, Any]:
     """Copy a board's structure — and optionally its cards and movement history.
@@ -1231,184 +1575,156 @@ def clone_board(
     (``committed_at``, ``delivered_at``) are *read off* that history by the metric
     layer, so a card copied without it would be a card that lies.
     """
-    source = get_board_or_404(db, id)
-    if payload.kind == "simulator":
-        if user.get("role") not in {"master", "administrator", "simulator"}:
-            raise Forbidden(
-                "Your role cannot create simulator boards.",
-                code="insufficient_role",
-                details={"role": user.get("role")},
-            )
-        require_flag("simulator")(db)
-    elif user.get("role") not in STRUCTURE_ROLES:
-        raise Forbidden(
-            "Your role cannot create boards.",
-            code="insufficient_role",
-            details={"role": user.get("role")},
-        )
+    source = await get_board_or_404(s, id)
+    await _assert_may_create(s, user, payload.kind)
+    product_id = source["product_id"]
 
     new_board_id = new_id()
     now = utcnow()
-    with db.tx():
-        db.ex(
-            "INSERT INTO boards (id, name, slug, description, kind, source_board_id, "
-            "count_envelope_in_metrics, confirm_moves, wip_min, wip_max, sle_days, "
-            "sle_percentile, created_at, archived) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0)",
-            new_board_id,
-            payload.name,
-            _unique_slug(db, payload.name),
-            source["description"],
-            payload.kind,
-            source["id"],
-            1 if source["count_envelope_in_metrics"] else 0,
-            1 if source["confirm_moves"] else 0,
-            source["wip_min"],
-            source["wip_max"],
-            source["sle_days"],
-            source["sle_percentile"],
-            now,
+    s.add(
+        Board(
+            id=new_board_id,
+            product_id=product_id,
+            name=payload.name,
+            slug=await _unique_slug(s, payload.name, product_id),
+            description=source["description"],
+            kind=payload.kind,
+            source_board_id=source["id"],
+            count_envelope_in_metrics=bool(source["count_envelope_in_metrics"]),
+            confirm_moves=bool(source["confirm_moves"]),
+            wip_min=source["wip_min"],
+            wip_max=source["wip_max"],
+            sle_days=source["sle_days"],
+            sle_percentile=source["sle_percentile"],
+            created_at=now,
+            archived=False,
         )
+    )
+    await s.flush()
 
-        group_map: dict[str, str] = {}
-        for group in db.q(
-            "SELECT * FROM column_groups WHERE board_id = ? ORDER BY position", source["id"]
-        ):
-            group_map[group["id"]] = new_id()
-            db.ex(
-                "INSERT INTO column_groups (id, board_id, name, position, wip_min, wip_max, "
-                "color) VALUES (?,?,?,?,?,?,?)",
-                group_map[group["id"]],
-                new_board_id,
-                group["name"],
-                group["position"],
-                group["wip_min"],
-                group["wip_max"],
-                group["color"],
+    group_map: dict[str, str] = {}
+    for group in await s.scalars(
+        select(ColumnGroup)
+        .where(ColumnGroup.board_id == source["id"])
+        .order_by(ColumnGroup.position)
+    ):
+        group_map[group.id] = new_id()
+        s.add(
+            ColumnGroup(
+                id=group_map[group.id],
+                board_id=new_board_id,
+                name=group.name,
+                position=group.position,
+                wip_min=group.wip_min,
+                wip_max=group.wip_max,
+                color=group.color,
+            )
+        )
+    await s.flush()
+
+    column_map: dict[str, str] = {}
+    for column in await canonical_columns(s, source["id"]):
+        column_map[column["id"]] = new_id()
+        s.add(
+            BoardColumn(
+                id=column_map[column["id"]],
+                board_id=new_board_id,
+                group_id=group_map.get(column["group_id"]) if column["group_id"] else None,
+                name=column["name"],
+                position=column["position"],
+                segment=column["segment"],
+                kind=column["kind"],
+                wip_min=column["wip_min"],
+                wip_max=column["wip_max"],
+                is_commitment_point=bool(column["is_commitment_point"]),
+                is_delivery_point=bool(column["is_delivery_point"]),
+                color=column["color"],
+                description=column["description"],
+            )
+        )
+    await s.flush()
+
+    copied_cards = 0
+    if payload.copy_cards:
+        allocator = KeyAllocator(s, product_id)
+        card_map: dict[str, str] = {}
+        source_cards = await s.execute(
+            select(Card, Project.key.label("project_key"))
+            .outerjoin(Project, Project.id == Card.project_id)
+            .where(Card.board_id == source["id"], Card.archived.is_(False))
+        )
+        for row in source_cards:
+            card = as_dict(row[0]) or {}
+            card_map[card["id"]] = new_id()
+            prefix = row[1] or _slugify(payload.name).upper()[:3] or "SIM"
+            s.add(
+                Card(
+                    **{
+                        **card,
+                        "id": card_map[card["id"]],
+                        "product_id": product_id,
+                        "board_id": new_board_id,
+                        "column_id": column_map[card["column_id"]],
+                        "key": await allocator.take(prefix),
+                        "archived": False,
+                    }
+                )
+            )
+            copied_cards += 1
+        await s.flush()
+
+        if card_map:
+            movements = await s.scalars(
+                select(CardMovement)
+                .where(CardMovement.card_id.in_(list(card_map)))
+                .order_by(CardMovement.moved_at, CardMovement.id)
+            )
+            movement_rows = [
+                {
+                    "id": new_id(),
+                    "card_id": card_map[m.card_id],
+                    "board_id": new_board_id,
+                    "from_column_id": column_map.get(m.from_column_id)
+                    if m.from_column_id
+                    else None,
+                    "to_column_id": column_map[m.to_column_id],
+                    "from_segment": m.from_segment,
+                    "to_segment": m.to_segment,
+                    "moved_at": m.moved_at,
+                    "moved_by": m.moved_by,
+                    "seconds_in_from_column": m.seconds_in_from_column,
+                    "note": m.note,
+                    "is_backward": m.is_backward,
+                    "source": m.source,
+                }
+                for m in movements
+                if m.to_column_id in column_map
+            ]
+            if movement_rows:
+                await s.execute(insert(CardMovement), movement_rows)
+            await s.execute(
+                insert(CardEvent),
+                [
+                    {
+                        "id": new_id(),
+                        "card_id": new_card_id,
+                        "board_id": new_board_id,
+                        "actor_id": user.get("id"),
+                        "event_type": "created",
+                        "field": "cloned_from",
+                        "old_value": old_card_id,
+                        "new_value": new_card_id,
+                        "created_at": now,
+                    }
+                    for old_card_id, new_card_id in card_map.items()
+                ],
             )
 
-        column_map: dict[str, str] = {}
-        for column in canonical_columns(db, source["id"]):
-            column_map[column["id"]] = new_id()
-            db.ex(
-                "INSERT INTO columns (id, board_id, group_id, name, position, segment, kind, "
-                "wip_min, wip_max, is_commitment_point, is_delivery_point, color, description) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                column_map[column["id"]],
-                new_board_id,
-                group_map.get(column["group_id"]) if column["group_id"] else None,
-                column["name"],
-                column["position"],
-                column["segment"],
-                column["kind"],
-                column["wip_min"],
-                column["wip_max"],
-                column["is_commitment_point"],
-                column["is_delivery_point"],
-                column["color"],
-                column["description"],
-            )
+    await normalize_structure(s, new_board_id)
+    await s.commit()
 
-        copied_cards = 0
-        if payload.copy_cards:
-            allocator = KeyAllocator(db)
-            card_map: dict[str, str] = {}
-            source_cards = db.q(
-                "SELECT c.*, p.key AS project_key FROM cards c "
-                "LEFT JOIN projects p ON p.id = c.project_id "
-                "WHERE c.board_id = ? AND c.archived = 0",
-                source["id"],
-            )
-            for card in source_cards:
-                card_map[card["id"]] = new_id()
-                prefix = card["project_key"] or _slugify(payload.name).upper()[:3] or "SIM"
-                db.ex(
-                    "INSERT INTO cards (id, board_id, column_id, project_id, key, title, "
-                    "description, service_class, assignee_id, requester, size, value_area, "
-                    "demand_type, due_date, position, envelope_state, is_blocked, tags, "
-                    "custom_fields, created_at, opened_at, committed_at, delivered_at, "
-                    "archived, created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)",
-                    card_map[card["id"]],
-                    new_board_id,
-                    column_map[card["column_id"]],
-                    card["project_id"],
-                    allocator.take(prefix),
-                    card["title"],
-                    card["description"],
-                    card["service_class"],
-                    card["assignee_id"],
-                    card["requester"],
-                    card["size"],
-                    card["value_area"],
-                    card["demand_type"],
-                    card["due_date"],
-                    card["position"],
-                    card["envelope_state"],
-                    card["is_blocked"],
-                    card["tags"],
-                    card["custom_fields"],
-                    card["created_at"],
-                    card["opened_at"],
-                    card["committed_at"],
-                    card["delivered_at"],
-                    card["created_by"],
-                )
-                copied_cards += 1
-
-            if card_map:
-                placeholders = ", ".join("?" for _ in card_map)
-                movements = db.q(
-                    "SELECT * FROM card_movements WHERE card_id IN "
-                    f"({placeholders}) ORDER BY moved_at",
-                    list(card_map),
-                )
-                db.exmany(
-                    "INSERT INTO card_movements (id, card_id, board_id, from_column_id, "
-                    "to_column_id, from_segment, to_segment, moved_at, moved_by, "
-                    "seconds_in_from_column, note, is_backward, source) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    [
-                        (
-                            new_id(),
-                            card_map[m["card_id"]],
-                            new_board_id,
-                            column_map.get(m["from_column_id"]) if m["from_column_id"] else None,
-                            column_map[m["to_column_id"]],
-                            m["from_segment"],
-                            m["to_segment"],
-                            m["moved_at"],
-                            m["moved_by"],
-                            m["seconds_in_from_column"],
-                            m["note"],
-                            m["is_backward"],
-                            m["source"],
-                        )
-                        for m in movements
-                        if m["to_column_id"] in column_map
-                    ],
-                )
-                db.exmany(
-                    "INSERT INTO card_events (id, card_id, board_id, actor_id, event_type, "
-                    "field, old_value, new_value, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                    [
-                        (
-                            new_id(),
-                            new_card_id,
-                            new_board_id,
-                            user.get("id"),
-                            "created",
-                            "cloned_from",
-                            old_card_id,
-                            new_card_id,
-                            now,
-                        )
-                        for old_card_id, new_card_id in card_map.items()
-                    ],
-                )
-
-        normalize_structure(db, new_board_id)
-
-    board = get_board_or_404(db, new_board_id)
-    out = _board_out(db, board)
+    board = await get_board_or_404(s, new_board_id)
+    out = await _board_out(s, board)
     out["card_count"] = copied_cards
     return out
 
@@ -1423,7 +1739,7 @@ def clone_board(
     response_model=BoardViewOut,
     summary="Everything one board render needs",
 )
-def board_view(
+async def board_view(
     id: str,
     segment: SegmentQuery = Query("unified"),
     project_id: str | None = Query(None),
@@ -1439,7 +1755,7 @@ def board_view(
     due_before: str | None = Query(None),
     envelope_state: str | None = Query(None),
     archived: bool = Query(False),
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("read_boards_metrics")),
 ) -> dict[str, Any]:
     """Board, groups, columns, cards and the full WIP block in four queries.
@@ -1449,25 +1765,27 @@ def board_view(
     WIP state of every policy, so the render is atomic and can never show cards
     against a stale column layout.
     """
-    board = get_board_or_404(db, id)
+    board = await get_board_or_404(s, id)
     if segment == "unified":
         # Seeing both halves as one continuous flow is the Team-plan feature.
-        require_flag("unified_flow")(db)
+        await require_flag("unified_flow")(s)
 
-    columns = canonical_columns(db, board["id"])
-    if segment == "unified":
-        visible = columns
-    else:
-        visible = [c for c in columns if c["segment"] == segment]
+    columns = await canonical_columns(s, board["id"])
+    visible = columns if segment == "unified" else [c for c in columns if c["segment"] == segment]
 
-    groups = db.q(
-        "SELECT * FROM column_groups WHERE board_id = ? ORDER BY position", board["id"]
-    )
+    groups = [
+        as_dict(group) or {}
+        for group in await s.scalars(
+            select(ColumnGroup)
+            .where(ColumnGroup.board_id == board["id"])
+            .order_by(ColumnGroup.position)
+        )
+    ]
     visible_group_ids = {c["group_id"] for c in visible if c["group_id"]}
     visible_groups = [g for g in groups if g["id"] in visible_group_ids]
 
-    cards = select_cards(
-        db,
+    cards = await select_cards(
+        s,
         board_id=board["id"],
         column_ids=[c["id"] for c in visible],
         archived=archived,
@@ -1485,12 +1803,12 @@ def board_view(
         envelope_state=envelope_state,
     )
 
-    wip = board_wip_status(db, board, columns=columns, groups=groups)
+    wip = await board_wip_status(s, board, columns=columns, groups=groups)
     commitment = next((c["id"] for c in columns if c["is_commitment_point"]), None)
     delivery = next((c["id"] for c in columns if c["is_delivery_point"]), None)
 
     return {
-        "board": _board_out(db, board, structure=False),
+        "board": await _board_out(s, board, structure=False),
         "segment": segment,
         "groups": visible_groups,
         "columns": visible,
@@ -1508,14 +1826,14 @@ def board_view(
     response_model=WipStatusOut,
     summary="WIP state per column, per group and for the whole flow",
 )
-def board_wip(
+async def board_wip(
     id: str,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("read_boards_metrics")),
 ) -> dict[str, Any]:
     """Counts against min/max with a ``under|ok|at_limit|over`` state each."""
-    board = get_board_or_404(db, id)
-    return board_wip_status(db, board)
+    board = await get_board_or_404(s, id)
+    return await board_wip_status(s, board)
 
 
 # ---------------------------------------------------------------------------
@@ -1529,10 +1847,10 @@ def board_wip(
     status_code=status.HTTP_201_CREATED,
     summary="Add a column",
 )
-def create_column(
+async def create_column(
     id: str,
     payload: ColumnCreate,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_structure_role),
 ) -> dict[str, Any]:
     """Insert a column at ``position`` inside its own segment, then re-derive the points.
@@ -1540,11 +1858,16 @@ def create_column(
     ``position`` is optional: omitting it appends the column to the end of its own
     segment, which is what "add a column" means without a chosen insertion point.
     """
-    board = get_board_or_404(db, id)
+    board = await get_board_or_404(s, id)
     require_structure_write(user, board)
+    await assert_structure_unlocked(s, board, "create_column")
     _validate_column_shape(payload.segment, payload.kind)
     _assert_envelope_placement(payload.kind, payload.position)
-    if payload.wip_min is not None and payload.wip_max is not None and payload.wip_min > payload.wip_max:
+    if (
+        payload.wip_min is not None
+        and payload.wip_max is not None
+        and payload.wip_min > payload.wip_max
+    ):
         raise BadRequest(
             "The column WIP minimum cannot exceed its maximum.",
             code="invalid_wip_range",
@@ -1552,51 +1875,50 @@ def create_column(
         )
 
     column_id = new_id()
-    with db.tx():
-        if payload.kind == "envelope":
-            _assert_single_envelope(db, board["id"])
-        _assert_group_on_board(db, board["id"], payload.group_id)
-        existing = canonical_columns(db, board["id"])
-        # A new column may be inserted anywhere from the front to just past the
-        # last existing one, so the range is one wider than the board.
-        _assert_position_in_range(payload.position, len(existing), action="inserted at")
-        db.ex(
-            "INSERT INTO columns (id, board_id, group_id, name, position, segment, kind, "
-            "wip_min, wip_max, is_commitment_point, is_delivery_point, color, description) "
-            "VALUES (?,?,?,?,?,?,?,?,?,0,0,?,?)",
-            column_id,
-            board["id"],
-            payload.group_id,
-            payload.name,
-            len(existing),
-            payload.segment,
-            payload.kind,
-            payload.wip_min,
-            payload.wip_max,
-            payload.color,
-            payload.description,
+    if payload.kind == "envelope":
+        await _assert_single_envelope(s, board["id"])
+    await _assert_group_on_board(s, board["id"], payload.group_id)
+    existing = await canonical_columns(s, board["id"])
+    # A new column may be inserted anywhere from the front to just past the
+    # last existing one, so the range is one wider than the board.
+    _assert_position_in_range(payload.position, len(existing), action="inserted at")
+    s.add(
+        BoardColumn(
+            id=column_id,
+            board_id=board["id"],
+            group_id=payload.group_id,
+            name=payload.name,
+            position=len(existing),
+            segment=payload.segment,
+            kind=payload.kind,
+            wip_min=payload.wip_min,
+            wip_max=payload.wip_max,
+            is_commitment_point=False,
+            is_delivery_point=False,
+            color=payload.color,
+            description=payload.description,
         )
-        fresh = {
-            "id": column_id,
-            "segment": payload.segment,
-            "kind": payload.kind,
-            "position": len(existing),
-        }
-        order = _placement_order(existing, fresh, payload.position)
-        normalize_structure(db, board["id"], order)
-        created = _get_column_or_404(db, column_id)
-        _assert_derived_points(
-            payload.is_commitment_point, payload.is_delivery_point, created
-        )
-
+    )
+    await s.flush()
+    fresh = {
+        "id": column_id,
+        "segment": payload.segment,
+        "kind": payload.kind,
+        "position": len(existing),
+    }
+    order = _placement_order(existing, fresh, payload.position)
+    await normalize_structure(s, board["id"], order)
+    created = await _get_column_or_404(s, column_id)
+    _assert_derived_points(payload.is_commitment_point, payload.is_delivery_point, created)
+    await s.commit()
     return created
 
 
 @router.patch("/columns/{id}", response_model=ColumnOut, summary="Update a column")
-def update_column(
+async def update_column(
     id: str,
     payload: ColumnUpdate,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_structure_role),
 ) -> dict[str, Any]:
     """Rename, re-limit, re-group, re-segment or move a column.
@@ -1608,20 +1930,30 @@ def update_column(
     and the group headers follow a re-kind exactly as the commitment point
     follows a re-segment.
     """
-    column = _get_column_or_404(db, id)
-    board = get_board_or_404(db, column["board_id"])
+    column = await _get_column_or_404(s, id)
+    board = await get_board_or_404(s, column["board_id"])
     require_structure_write(user, board)
 
     fields = payload.model_dump(exclude_unset=True)
     wants_commitment = fields.pop("is_commitment_point", None)
     wants_delivery = fields.pop("is_delivery_point", None)
     target_position = fields.pop("position", None)
+    structural = (
+        bool(set(fields) - _COLUMN_POLICY_FIELDS)
+        or target_position is not None
+        or wants_commitment is not None
+        or wants_delivery is not None
+    )
+    if structural:
+        await assert_structure_unlocked(s, board, "update_column")
+    else:
+        assert_board_writable(board)
 
     segment = fields.get("segment", column["segment"])
     kind = fields.get("kind", column["kind"])
     _validate_column_shape(segment, kind)
     _assert_envelope_placement(kind, target_position)
-    _assert_delivery_point_survives(db, board["id"], column, kind)
+    await _assert_delivery_point_survives(s, board["id"], column, kind)
 
     wip_min = fields.get("wip_min", column["wip_min"])
     wip_max = fields.get("wip_max", column["wip_max"])
@@ -1632,39 +1964,33 @@ def update_column(
             details={"wip_min": wip_min, "wip_max": wip_max},
         )
 
-    with db.tx():
-        if kind == "envelope" and column["kind"] != "envelope":
-            _assert_single_envelope(db, board["id"], exclude_id=column["id"])
-        if "group_id" in fields:
-            _assert_group_on_board(db, board["id"], fields["group_id"])
-        if fields:
-            assignments = ", ".join(f"{key} = ?" for key in fields)
-            db.ex(
-                f"UPDATE columns SET {assignments} WHERE id = ?",
-                list(fields.values()) + [column["id"]],
-            )
-        existing = canonical_columns(db, board["id"])
-        _assert_position_in_range(
-            target_position, max(len(existing) - 1, 0), action="moved to"
-        )
-        fresh = next((c for c in existing if c["id"] == column["id"]), None)
-        if fresh is None:  # pragma: no cover - deleted between the two reads
-            raise NotFound("Column", column["id"], code="column_not_found")
-        if target_position is not None or fields.get("segment") or kind == "envelope":
-            order = _placement_order(existing, fresh, target_position)
-            normalize_structure(db, board["id"], order)
-        else:
-            normalize_structure(db, board["id"])
+    if kind == "envelope" and column["kind"] != "envelope":
+        await _assert_single_envelope(s, board["id"], exclude_id=column["id"])
+    if "group_id" in fields:
+        await _assert_group_on_board(s, board["id"], fields["group_id"])
+    if fields:
+        await s.execute(update(BoardColumn).where(BoardColumn.id == column["id"]).values(**fields))
+    existing = await canonical_columns(s, board["id"])
+    _assert_position_in_range(target_position, max(len(existing) - 1, 0), action="moved to")
+    fresh = next((c for c in existing if c["id"] == column["id"]), None)
+    if fresh is None:  # pragma: no cover - deleted between the two reads
+        raise NotFound("Column", column["id"], code="column_not_found")
+    if target_position is not None or fields.get("segment") or kind == "envelope":
+        order = _placement_order(existing, fresh, target_position)
+        await normalize_structure(s, board["id"], order)
+    else:
+        await normalize_structure(s, board["id"])
 
-        updated = _get_column_or_404(db, column["id"])
-        _assert_derived_points(wants_commitment, wants_delivery, updated)
+    updated = await _get_column_or_404(s, column["id"])
+    _assert_derived_points(wants_commitment, wants_delivery, updated)
+    await s.commit()
     return updated
 
 
 @router.delete("/columns/{id}", response_model=OkResponse, summary="Delete a column")
-def delete_column(
+async def delete_column(
     id: str,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_structure_role),
 ) -> dict[str, Any]:
     """Remove an **empty** column and re-derive the board's points.
@@ -1679,13 +2005,12 @@ def delete_column(
     removed is reported back in the message rather than left to be discovered
     later in a chart that quietly changed shape.
     """
-    column = _get_column_or_404(db, id)
-    board = get_board_or_404(db, column["board_id"])
+    column = await _get_column_or_404(s, id)
+    board = await get_board_or_404(s, column["board_id"])
     require_structure_write(user, board)
+    await assert_structure_unlocked(s, board, "delete_column")
 
-    occupancy = int(
-        db.scalar("SELECT COUNT(*) FROM cards WHERE column_id = ?", column["id"]) or 0
-    )
+    occupancy = int(await s.scalar(select(func.count()).where(Card.column_id == column["id"])) or 0)
     if occupancy:
         raise Conflict(
             "column_not_empty",
@@ -1701,14 +2026,11 @@ def delete_column(
             },
         )
     history = int(
-        db.scalar(
-            "SELECT COUNT(*) FROM card_movements WHERE to_column_id = ?", column["id"]
-        )
-        or 0
+        await s.scalar(select(func.count()).where(CardMovement.to_column_id == column["id"])) or 0
     )
-    with db.tx():
-        db.ex("DELETE FROM columns WHERE id = ?", column["id"])
-        normalize_structure(db, board["id"])
+    await s.execute(delete(BoardColumn).where(BoardColumn.id == column["id"]))
+    await normalize_structure(s, board["id"])
+    await s.commit()
     message = f"Column {_quote(column['name'])} deleted."
     if history:
         message += (
@@ -1723,10 +2045,10 @@ def delete_column(
     response_model=ListResponse[ColumnOut],
     summary="Reorder columns",
 )
-def reorder_columns(
+async def reorder_columns(
     id: str,
     payload: ColumnReorderRequest,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_structure_role),
 ) -> dict[str, Any]:
     """Apply an explicit column order, keeping ``position`` dense and legal.
@@ -1737,10 +2059,11 @@ def reorder_columns(
     would silently re-shuffle work it never meant to touch — and, because
     ``position`` is dense, would have no way to tell afterwards.
     """
-    board = get_board_or_404(db, id)
+    board = await get_board_or_404(s, id)
     require_structure_write(user, board)
+    await assert_structure_unlocked(s, board, "reorder_columns")
 
-    columns = canonical_columns(db, board["id"])
+    columns = await canonical_columns(s, board["id"])
     known = {column["id"]: column for column in columns}
     requested = list(payload.ordered_ids)
     unknown = [column_id for column_id in requested if column_id not in known]
@@ -1753,21 +2076,18 @@ def reorder_columns(
     missing = [column for column in columns if column["id"] not in set(requested)]
     if missing:
         raise BadRequest(
-            f"A reorder must list every column on this board. Missing: "
-            f"{_name_list(missing)}.",
+            f"A reorder must list every column on this board. Missing: {_name_list(missing)}.",
             code="incomplete_column_order",
             details={
                 "board_id": board["id"],
                 "expected": len(columns),
                 "received": len(requested),
-                "missing": [
-                    {"id": column["id"], "name": column["name"]} for column in missing
-                ],
+                "missing": [{"id": column["id"], "name": column["name"]} for column in missing],
             },
         )
 
-    with db.tx():
-        ordered = normalize_structure(db, board["id"], requested)
+    ordered = await normalize_structure(s, board["id"], requested)
+    await s.commit()
     return {"items": ordered, "total": len(ordered)}
 
 
@@ -1776,10 +2096,10 @@ def reorder_columns(
     response_model=ColumnDrainOut,
     summary="Move every card out of a column so it can be deleted",
 )
-def drain_column(
+async def drain_column(
     id: str,
     payload: ColumnDrainRequest,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_structure_role),
 ) -> dict[str, Any]:
     """Empty a column into another column of the same board, in one transaction.
@@ -1794,8 +2114,8 @@ def drain_column(
 
     * **backward is allowed.** A column created by mistake sits wherever it was
       created; if draining could only go forward, that column could never be
-      removed. Backward drains are recorded with ``is_backward = 1`` and an
-      audit event, exactly like a forced move, so nothing is hidden.
+      removed. Backward drains are recorded with ``is_backward`` and an audit
+      event, exactly like a forced move, so nothing is hidden.
     * **WIP maxima do not block it.** This is structural repair, not
       replenishment; refusing to empty a column because the destination is full
       would trap the board in the broken shape the user is trying to fix.
@@ -1806,11 +2126,12 @@ def drain_column(
     ``committed_at`` / ``delivered_at`` the same way a move does — otherwise the
     board would show work downstream that the flow metrics cannot see.
     """
-    column = _get_column_or_404(db, id)
-    board = get_board_or_404(db, column["board_id"])
+    column = await _get_column_or_404(s, id)
+    board = await get_board_or_404(s, column["board_id"])
     require_structure_write(user, board)
+    await assert_structure_unlocked(s, board, "drain_column")
 
-    target = _get_column_or_404(db, payload.to_column_id)
+    target = await _get_column_or_404(s, payload.to_column_id)
     if target["board_id"] != board["id"]:
         raise BadRequest(
             "That column belongs to a different board.",
@@ -1825,16 +2146,14 @@ def drain_column(
             {"column_id": column["id"]},
         )
 
-    columns = canonical_columns(db, board["id"])
+    columns = await canonical_columns(s, board["id"])
     order = {c["id"]: index for index, c in enumerate(columns)}
     is_backward = order[target["id"]] < order[column["id"]]
     commitment_index = next(
         (index for index, c in enumerate(columns) if c["segment"] == "downstream"), None
     )
     delivery_id = next((c["id"] for c in reversed(columns) if c["kind"] == "done"), None)
-    crosses_commitment = (
-        commitment_index is not None and order[target["id"]] >= commitment_index
-    )
+    crosses_commitment = commitment_index is not None and order[target["id"]] >= commitment_index
     reaches_delivery = delivery_id is not None and target["id"] == delivery_id
     opens_envelope = column["kind"] == "envelope"
 
@@ -1842,124 +2161,96 @@ def drain_column(
     note = f"Column {_quote(column['name'])} drained into {_quote(target['name'])}."
     committed = delivered = opened = 0
 
-    with db.tx():
-        cards = db.q(
-            "SELECT * FROM cards WHERE column_id = ? ORDER BY position, created_at",
-            column["id"],
+    cards = [
+        as_dict(card) or {}
+        for card in await s.scalars(
+            select(Card)
+            .where(Card.column_id == column["id"])
+            .order_by(Card.position, Card.created_at)
         )
-        if cards:
-            placeholders = ", ".join("?" for _ in cards)
-            last_moved = {
-                row["card_id"]: row["moved_at"]
-                for row in db.q(
-                    "SELECT card_id, MAX(moved_at) AS moved_at FROM card_movements "
-                    f"WHERE card_id IN ({placeholders}) GROUP BY card_id",
-                    [card["id"] for card in cards],
-                )
-            }
-            position = int(
-                db.scalar(
-                    "SELECT COALESCE(MAX(position), -1) FROM cards WHERE column_id = ?",
-                    target["id"],
-                )
-                or -1
+    ]
+    if cards:
+        last_moved = {
+            card_id: moved_at
+            for card_id, moved_at in await s.execute(
+                select(CardMovement.card_id, func.max(CardMovement.moved_at))
+                .where(CardMovement.card_id.in_([card["id"] for card in cards]))
+                .group_by(CardMovement.card_id)
             )
-            movements: list[tuple[Any, ...]] = []
-            events: list[tuple[Any, ...]] = []
+        }
+        highest = await s.scalar(
+            select(func.coalesce(func.max(Card.position), -1)).where(Card.column_id == target["id"])
+        )
+        position = int(highest if highest is not None else -1)
+        movements: list[dict[str, Any]] = []
+        events: list[dict[str, Any]] = []
 
-            for card in cards:
-                position += 1
-                elapsed = seconds_between(
-                    last_moved.get(card["id"]) or card["created_at"], now
-                )
-                movements.append(
-                    (
-                        new_id(),
-                        card["id"],
-                        board["id"],
-                        column["id"],
-                        target["id"],
-                        column["segment"],
-                        target["segment"],
-                        now,
-                        user["id"],
-                        None if elapsed is None else int(round(max(0.0, elapsed))),
-                        note,
-                        1 if is_backward else 0,
-                        "ui",
-                    )
-                )
-                events.append(
-                    (
-                        new_id(), card["id"], board["id"], user["id"],
-                        "moved", "column", column["name"], target["name"], now,
-                    )
-                )
-                if is_backward:
-                    # Same field the forced-move path writes, so the card's
-                    # history reads "Backward move forced from X to Y".
-                    events.append(
-                        (
-                            new_id(), card["id"], board["id"], user["id"],
-                            "moved", "backward_override", column["name"],
-                            target["name"], now,
-                        )
-                    )
-
-                will_commit = crosses_commitment and not card["committed_at"]
-                will_deliver = reaches_delivery and not card["delivered_at"]
-                will_open = opens_envelope and card["envelope_state"] == "sealed"
-                if will_commit:
-                    committed += 1
-                    events.append(
-                        (
-                            new_id(), card["id"], board["id"], user["id"],
-                            "updated", "committed_at", None, now, now,
-                        )
-                    )
-                if will_deliver:
-                    delivered += 1
-                    events.append(
-                        (
-                            new_id(), card["id"], board["id"], user["id"],
-                            "updated", "delivered_at", None, now, now,
-                        )
-                    )
-                if will_open:
-                    opened += 1
-                    events.append(
-                        (
-                            new_id(), card["id"], board["id"], user["id"],
-                            "opened_envelope", "envelope_state", "sealed", "opened", now,
-                        )
-                    )
-
-                db.ex(
-                    "UPDATE cards SET column_id = ?, position = ?, "
-                    "envelope_state = ?, opened_at = COALESCE(opened_at, ?), "
-                    "committed_at = COALESCE(committed_at, ?), "
-                    "delivered_at = COALESCE(delivered_at, ?) WHERE id = ?",
-                    target["id"],
-                    position,
-                    "opened" if will_open else card["envelope_state"],
-                    now if will_open else None,
-                    now if will_commit else None,
-                    now if will_deliver else None,
-                    card["id"],
-                )
-
-            db.exmany(
-                "INSERT INTO card_movements (id, card_id, board_id, from_column_id, "
-                "to_column_id, from_segment, to_segment, moved_at, moved_by, "
-                "seconds_in_from_column, note, is_backward, source) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                movements,
+        def event(card_id: str, event_type: str, field: str, old: Any, new: Any) -> None:
+            events.append(
+                {
+                    "id": new_id(),
+                    "card_id": card_id,
+                    "board_id": board["id"],
+                    "actor_id": user["id"],
+                    "event_type": event_type,
+                    "field": field,
+                    "old_value": old,
+                    "new_value": new,
+                    "created_at": now,
+                }
             )
-            db.exmany(
-                "INSERT INTO card_events (id, card_id, board_id, actor_id, event_type, "
-                "field, old_value, new_value, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                events,
+
+        for card in cards:
+            position += 1
+            elapsed = seconds_between(last_moved.get(card["id"]) or card["created_at"], now)
+            movements.append(
+                {
+                    "id": new_id(),
+                    "card_id": card["id"],
+                    "board_id": board["id"],
+                    "from_column_id": column["id"],
+                    "to_column_id": target["id"],
+                    "from_segment": column["segment"],
+                    "to_segment": target["segment"],
+                    "moved_at": now,
+                    "moved_by": user["id"],
+                    "seconds_in_from_column": (
+                        None if elapsed is None else round(max(0.0, elapsed))
+                    ),
+                    "note": note,
+                    "is_backward": bool(is_backward),
+                    "source": "ui",
+                }
             )
+            event(card["id"], "moved", "column", column["name"], target["name"])
+            if is_backward:
+                # Same field the forced-move path writes, so the card's history
+                # reads "Backward move forced from X to Y".
+                event(card["id"], "moved", "backward_override", column["name"], target["name"])
+
+            will_commit = crosses_commitment and not card["committed_at"]
+            will_deliver = reaches_delivery and not card["delivered_at"]
+            will_open = opens_envelope and card["envelope_state"] == "sealed"
+            values: dict[str, Any] = {"column_id": target["id"], "position": position}
+            if will_commit:
+                committed += 1
+                event(card["id"], "updated", "committed_at", None, now)
+                values["committed_at"] = now
+            if will_deliver:
+                delivered += 1
+                event(card["id"], "updated", "delivered_at", None, now)
+                values["delivered_at"] = now
+            if will_open:
+                opened += 1
+                event(card["id"], "opened_envelope", "envelope_state", "sealed", "opened")
+                values["envelope_state"] = "opened"
+                if not card["opened_at"]:
+                    values["opened_at"] = now
+            await s.execute(update(Card).where(Card.id == card["id"]).values(**values))
+
+        await s.execute(insert(CardMovement), movements)
+        await s.execute(insert(CardEvent), events)
+    await s.commit()
 
     moved = len(cards)
     if moved:
@@ -1988,13 +2279,15 @@ def drain_column(
 # ---------------------------------------------------------------------------
 
 
-def _assign_group_columns(
-    db: Database, board_id: str, group_id: str, column_ids: Sequence[str]
+async def _assign_group_columns(
+    s: AsyncSession, board_id: str, group_id: str, column_ids: Sequence[str]
 ) -> None:
     """Point exactly ``column_ids`` at ``group_id`` (validated against the board)."""
     for column_id in column_ids:
-        row = db.q1(
-            "SELECT id FROM columns WHERE id = ? AND board_id = ?", column_id, board_id
+        row = await s.scalar(
+            select(BoardColumn.id).where(
+                BoardColumn.id == column_id, BoardColumn.board_id == board_id
+            )
         )
         if row is None:
             raise BadRequest(
@@ -2002,12 +2295,14 @@ def _assign_group_columns(
                 code="column_not_on_board",
                 details={"column_id": column_id, "board_id": board_id},
             )
-    db.ex("UPDATE columns SET group_id = NULL WHERE group_id = ?", group_id)
+    await s.execute(
+        update(BoardColumn).where(BoardColumn.group_id == group_id).values(group_id=None)
+    )
     if column_ids:
-        placeholders = ", ".join("?" for _ in column_ids)
-        db.ex(
-            f"UPDATE columns SET group_id = ? WHERE id IN ({placeholders})",
-            [group_id, *column_ids],
+        await s.execute(
+            update(BoardColumn)
+            .where(BoardColumn.id.in_(list(column_ids)))
+            .values(group_id=group_id)
         )
 
 
@@ -2018,16 +2313,21 @@ def _assign_group_columns(
     summary="Create a column group",
     dependencies=[Depends(require_flag("wip_group"))],
 )
-def create_group(
+async def create_group(
     id: str,
     payload: GroupWriteRequest,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_structure_role),
 ) -> dict[str, Any]:
     """Group consecutive columns under one header with its own WIP limits."""
-    board = get_board_or_404(db, id)
+    board = await get_board_or_404(s, id)
     require_structure_write(user, board)
-    if payload.wip_min is not None and payload.wip_max is not None and payload.wip_min > payload.wip_max:
+    await assert_structure_unlocked(s, board, "create_group")
+    if (
+        payload.wip_min is not None
+        and payload.wip_max is not None
+        and payload.wip_min > payload.wip_max
+    ):
         raise BadRequest(
             "The group WIP minimum cannot exceed its maximum.",
             code="invalid_wip_range",
@@ -2035,47 +2335,49 @@ def create_group(
         )
 
     group_id = new_id()
-    with db.tx():
-        position = payload.position
-        if position is None:
-            position = int(
-                db.scalar(
-                    "SELECT COUNT(*) FROM column_groups WHERE board_id = ?", board["id"]
-                )
-                or 0
-            )
-        db.ex(
-            "INSERT INTO column_groups (id, board_id, name, position, wip_min, wip_max, color) "
-            "VALUES (?,?,?,?,?,?,?)",
-            group_id,
-            board["id"],
-            payload.name,
-            position,
-            payload.wip_min,
-            payload.wip_max,
-            payload.color,
+    position = payload.position
+    if position is None:
+        position = int(
+            await s.scalar(select(func.count()).where(ColumnGroup.board_id == board["id"])) or 0
         )
-        if payload.column_ids:
-            _assign_group_columns(db, board["id"], group_id, payload.column_ids)
-        normalize_structure(db, board["id"])
-    return _get_group_or_404(db, group_id)
+    s.add(
+        ColumnGroup(
+            id=group_id,
+            board_id=board["id"],
+            name=payload.name,
+            position=position,
+            wip_min=payload.wip_min,
+            wip_max=payload.wip_max,
+            color=payload.color,
+        )
+    )
+    await s.flush()
+    if payload.column_ids:
+        await _assign_group_columns(s, board["id"], group_id, payload.column_ids)
+    await normalize_structure(s, board["id"])
+    await s.commit()
+    return await _get_group_or_404(s, group_id)
 
 
 @router.patch("/groups/{id}", response_model=GroupOut, summary="Update a column group")
-def update_group(
+async def update_group(
     id: str,
     payload: GroupPatchRequest,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_structure_role),
     _: None = Depends(require_flag("wip_group")),
 ) -> dict[str, Any]:
     """Rename a group, change its limits, or replace the columns it spans."""
-    group = _get_group_or_404(db, id)
-    board = get_board_or_404(db, group["board_id"])
+    group = await _get_group_or_404(s, id)
+    board = await get_board_or_404(s, group["board_id"])
     require_structure_write(user, board)
 
     fields = payload.model_dump(exclude_unset=True)
     column_ids = fields.pop("column_ids", None)
+    if column_ids is not None or set(fields) - _GROUP_POLICY_FIELDS:
+        await assert_structure_unlocked(s, board, "update_group")
+    else:
+        assert_board_writable(board)
     wip_min = fields.get("wip_min", group["wip_min"])
     wip_max = fields.get("wip_max", group["wip_max"])
     if wip_min is not None and wip_max is not None and wip_min > wip_max:
@@ -2085,32 +2387,31 @@ def update_group(
             details={"wip_min": wip_min, "wip_max": wip_max},
         )
 
-    with db.tx():
-        if fields:
-            assignments = ", ".join(f"{key} = ?" for key in fields)
-            db.ex(
-                f"UPDATE column_groups SET {assignments} WHERE id = ?",
-                list(fields.values()) + [group["id"]],
-            )
-        if column_ids is not None:
-            _assign_group_columns(db, board["id"], group["id"], column_ids)
-        normalize_structure(db, board["id"])
-    return _get_group_or_404(db, group["id"])
+    if fields:
+        await s.execute(update(ColumnGroup).where(ColumnGroup.id == group["id"]).values(**fields))
+    if column_ids is not None:
+        await _assign_group_columns(s, board["id"], group["id"], column_ids)
+    await normalize_structure(s, board["id"])
+    await s.commit()
+    return await _get_group_or_404(s, group["id"])
 
 
 @router.delete("/groups/{id}", response_model=OkResponse, summary="Delete a column group")
-def delete_group(
+async def delete_group(
     id: str,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_structure_role),
     _: None = Depends(require_flag("wip_group")),
 ) -> dict[str, Any]:
     """Drop the header; its columns stay on the board, ungrouped."""
-    group = _get_group_or_404(db, id)
-    board = get_board_or_404(db, group["board_id"])
+    group = await _get_group_or_404(s, id)
+    board = await get_board_or_404(s, group["board_id"])
     require_structure_write(user, board)
-    with db.tx():
-        db.ex("UPDATE columns SET group_id = NULL WHERE group_id = ?", group["id"])
-        db.ex("DELETE FROM column_groups WHERE id = ?", group["id"])
-        normalize_structure(db, board["id"])
+    await assert_structure_unlocked(s, board, "delete_group")
+    await s.execute(
+        update(BoardColumn).where(BoardColumn.group_id == group["id"]).values(group_id=None)
+    )
+    await s.execute(delete(ColumnGroup).where(ColumnGroup.id == group["id"]))
+    await normalize_structure(s, board["id"])
+    await s.commit()
     return {"ok": True, "id": group["id"], "message": "Column group deleted."}

@@ -1,26 +1,28 @@
-"""FastAPI dependencies: database handle, authentication, RBAC, feature gating.
+"""FastAPI dependencies: database session, authentication, RBAC, feature gating.
 
 Every protected route composes three things::
 
     @router.post("/cards")
-    def create_card(
+    async def create_card(
         payload: CardCreate,
-        db: Database = Depends(get_db),
+        s: AsyncSession = Depends(get_session),
         user: CurrentUser = Depends(require_roles("master", "administrator", "editor")),
         _: None = Depends(require_flag("multi_project")),
     ): ...
 
 ``CurrentUser`` is a dict that also answers attribute access, so both
-``user["id"]`` and ``user.id`` work — routers written by different agents can use
-whichever reads better.
+``user["id"]`` and ``user.id`` work.
 """
 
 from __future__ import annotations
 
-import json
-from typing import Any, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable
+from typing import Any
 
 from fastapi import Depends, Path, Request
+from pampufa_sdk.auth.token import TokenInvalido
+from sqlalchemy import or_, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import (
     NON_INTERACTIVE_ROLES,
@@ -28,26 +30,35 @@ from .config import (
     plan_tier,
     settings,
 )
-from .db import Database, connect, utcnow
-from .errors import ApiError, Forbidden, NotFound, Unauthorized
+from .db import utcnow
+from .errors import ApiError, Conflict, Forbidden, NotFound, Unauthorized
+from .models import PRODUCT_STANDALONE, Board, FeatureFlag, Plan, User, Workspace, as_dict
+from .pampufa import is_pampufa_token, user_for_identity
 from .security import decode_token
+from .tenancy import (
+    current_product,
+    local_product,
+    read_product_header,
+    role_from_pampufa,
+    set_current_product,
+)
 
 __all__ = [
     "CurrentUser",
-    "get_db",
-    "get_current_user",
-    "get_optional_user",
-    "require_roles",
-    "require_capability",
-    "require_flag",
-    "get_board_or_404",
-    "require_board",
-    "get_active_plan",
-    "effective_flags",
-    "is_flag_effective",
     "assert_can_login",
     "can_write_board",
+    "effective_flags",
+    "get_active_plan",
+    "get_board_or_404",
+    "get_current_user",
+    "get_optional_user",
+    "get_session",
+    "is_flag_effective",
+    "require_board",
     "require_board_write",
+    "require_capability",
+    "require_flag",
+    "require_roles",
 ]
 
 
@@ -77,18 +88,17 @@ class CurrentUser(dict):
 # ---------------------------------------------------------------------------
 
 
-def get_db(request: Request) -> Iterator[Database]:
-    """Yield a per-request :class:`Database`, closing it when the response ends.
+async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
+    """A per-request session; anything left uncommitted is rolled back.
 
-    ``request.app.state.db_path`` lets tests point the whole app at a temp file
-    without touching the process-wide settings.
+    Writes are committed by the endpoint that owns them (``await s.commit()``).
     """
-    path = getattr(request.app.state, "db_path", None) if request else None
-    database = Database(connect(path))
-    try:
-        yield database
-    finally:
-        database.close()
+    async with request.app.state.database.sessions() as session:
+        try:
+            yield session
+        except BaseException:
+            await session.rollback()
+            raise
 
 
 # ---------------------------------------------------------------------------
@@ -107,41 +117,93 @@ def _bearer_token(request: Request) -> str | None:
     return token or None
 
 
-def _load_user(db: Database, user_id: str) -> CurrentUser:
-    row = db.q1(
-        "SELECT id, email, name, role, is_active, created_at, last_login_at "
-        "FROM users WHERE id = ?",
-        user_id,
-    )
-    if row is None:
+_PUBLIC_USER_FIELDS = ("id", "email", "name", "role", "is_active", "created_at", "last_login_at")
+
+
+async def _load_user(s: AsyncSession, user_id: str) -> CurrentUser:
+    try:
+        user = await s.get(User, user_id)
+    except ValueError:  # a subject that is not a UUID cannot be one of ours
+        user = None
+    if user is None:
         raise Unauthorized("The account for this token no longer exists.", code="unknown_subject")
-    if not row.get("is_active"):
+    if not user.is_active:
         raise Forbidden("This account is deactivated.", code="account_disabled")
-    row["is_active"] = bool(row["is_active"])
-    return CurrentUser(row)
+    row = as_dict(user) or {}
+    return CurrentUser({key: row[key] for key in _PUBLIC_USER_FIELDS})
 
 
-def get_current_user(
-    request: Request, db: Database = Depends(get_db)
-) -> CurrentUser:
-    """Resolve the ``Authorization: Bearer <jwt>`` header into a user row."""
+async def get_current_user(request: Request, s: AsyncSession = Depends(get_session)) -> CurrentUser:
+    """Resolve ``Authorization: Bearer <jwt>`` into a user, a product and a role.
+
+    Two kinds of token are accepted (NG5): the local login (HS256, the database
+    holds the role) and the Pampufa login (EdDSA, the role comes from the token's
+    roles in the product named by ``X-Produto``). Either way the product of the
+    request is fixed here, for every query that follows (see :mod:`.tenancy`).
+    """
     token = _bearer_token(request)
     if not token:
         raise Unauthorized("Missing bearer token.", code="missing_token")
-    claims = decode_token(token)  # raises TokenError (401) when untrustworthy
-    user = _load_user(db, str(claims.get("sub")))
-    # The role in the token is a hint; the database is authoritative, so a role
-    # change takes effect immediately rather than at the next token refresh.
-    user["token_role"] = claims.get("role")
+    requested = read_product_header(request.headers)
+    if is_pampufa_token(token):
+        user = await _pampufa_user(request, s, token, requested)
+    else:
+        claims = decode_token(token)  # raises TokenError (401) when untrustworthy
+        user = await _load_user(s, str(claims.get("sub")))
+        # The role in the token is a hint; the database is authoritative, so a role
+        # change takes effect immediately rather than at the next token refresh.
+        user["token_role"] = claims.get("role")
+        user["product_id"] = local_product(str(user["role"]), requested)
+        user["via"] = "local"
+    set_current_product(user["product_id"])
     return user
 
 
-def get_optional_user(
-    request: Request, db: Database = Depends(get_db)
+async def _pampufa_user(
+    request: Request, s: AsyncSession, token: str, requested: str | None
+) -> CurrentUser:
+    gateway = getattr(request.app.state, "pampufa", None)
+    if gateway is None:
+        raise Unauthorized(
+            "This Nagare is not connected to the Pampufa platform.",
+            code="pampufa_not_configured",
+        )
+    try:
+        identity = await gateway.validate(token)
+    except TokenInvalido as error:
+        raise Unauthorized(str(error), code="invalid_token") from error
+    if requested is None:
+        raise ApiError(
+            "product_required",
+            "Tell the Nagare which product this request is for (X-Produto header).",
+            status=400,
+            details={"header": "X-Produto"},
+        )
+    role = role_from_pampufa(identity.papeis, requested)
+    if role is None:
+        raise Forbidden(
+            "You have no Nagare role in this product.",
+            code="product_forbidden",
+            details={"product": requested},
+        )
+    user = await user_for_identity(s, gateway, identity, token)
+    if not user.is_active:
+        raise Forbidden("This account is deactivated.", code="account_disabled")
+    row = as_dict(user) or {}
+    current = CurrentUser({key: row[key] for key in _PUBLIC_USER_FIELDS})
+    current["role"] = role
+    current["product_id"] = requested
+    current["via"] = "pampufa"
+    current["pampufa_sub"] = identity.sub
+    return current
+
+
+async def get_optional_user(
+    request: Request, s: AsyncSession = Depends(get_session)
 ) -> CurrentUser | None:
     """Like :func:`get_current_user` but returns ``None`` instead of raising."""
     try:
-        return get_current_user(request, db)
+        return await get_current_user(request, s)
     except ApiError:
         return None
 
@@ -163,11 +225,11 @@ def assert_can_login(user: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def require_roles(*roles: str) -> Callable[..., CurrentUser]:
+def require_roles(*roles: str) -> Callable[..., Awaitable[CurrentUser]]:
     """Dependency factory allowing only the listed roles."""
     allowed = frozenset(roles)
 
-    def _guard(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+    async def _guard(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
         if user.get("role") not in allowed:
             raise Forbidden(
                 "Your role does not allow this action.",
@@ -180,13 +242,13 @@ def require_roles(*roles: str) -> Callable[..., CurrentUser]:
     return _guard
 
 
-def require_capability(capability: str) -> Callable[..., CurrentUser]:
+def require_capability(capability: str) -> Callable[..., Awaitable[CurrentUser]]:
     """Dependency factory driven by the SPEC §4 capability matrix."""
     allowed = frozenset(ROLE_CAPABILITIES.get(capability, ()))
     if not allowed:
         raise KeyError(f"Unknown capability: {capability}")
 
-    def _guard(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+    async def _guard(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
         if user.get("role") not in allowed:
             raise Forbidden(
                 "Your role does not allow this action.",
@@ -208,64 +270,56 @@ def require_capability(capability: str) -> Callable[..., CurrentUser]:
 # ---------------------------------------------------------------------------
 
 
-def get_active_plan(db: Database) -> dict[str, Any] | None:
+async def get_active_plan(s: AsyncSession) -> dict[str, Any] | None:
     """The workspace's active plan row (``None`` before seeding)."""
-    row = db.q1(
-        "SELECT p.* FROM workspace w JOIN plans p ON p.id = w.active_plan_id "
-        "WHERE w.id = 'workspace'"
+    plan = await s.scalar(
+        select(Plan)
+        .join(Workspace, Workspace.active_plan_id == Plan.id)
+        .where(Workspace.id == "workspace")
     )
-    if row and isinstance(row.get("flags"), str):
-        try:
-            row["flags"] = json.loads(row["flags"])
-        except (ValueError, json.JSONDecodeError):
-            row["flags"] = []
-    return row
+    return as_dict(plan)
 
 
-def effective_flags(db: Database) -> dict[str, bool]:
+async def effective_flags(s: AsyncSession) -> dict[str, bool]:
     """``{key: bool}`` — enabled **and** unlocked by the active plan (SPEC §3)."""
-    plan = get_active_plan(db)
+    plan = await get_active_plan(s)
     tier = plan_tier(plan.get("slug") if plan else None)
-    out: dict[str, bool] = {}
-    for row in db.q("SELECT key, is_enabled, min_plan FROM feature_flags ORDER BY key"):
-        out[row["key"]] = bool(row["is_enabled"]) and plan_tier(row["min_plan"]) <= tier
-    return out
+    flags = await s.scalars(select(FeatureFlag).order_by(FeatureFlag.key))
+    return {flag.key: bool(flag.is_enabled) and plan_tier(flag.min_plan) <= tier for flag in flags}
 
 
-def is_flag_effective(db: Database, key: str) -> bool:
+async def is_flag_effective(s: AsyncSession, key: str) -> bool:
     """Whether a single flag is effective right now."""
-    row = db.q1("SELECT is_enabled, min_plan FROM feature_flags WHERE key = ?", key)
-    if row is None:
+    flag = await s.get(FeatureFlag, key)
+    if flag is None:
         # An unknown flag never gates anything: a router that ships before its
         # flag row exists must keep working.
         return True
-    plan = get_active_plan(db)
+    plan = await get_active_plan(s)
     tier = plan_tier(plan.get("slug") if plan else None)
-    return bool(row["is_enabled"]) and plan_tier(row["min_plan"]) <= tier
+    return bool(flag.is_enabled) and plan_tier(flag.min_plan) <= tier
 
 
-def require_flag(key: str) -> Callable[..., None]:
+def require_flag(key: str) -> Callable[..., Awaitable[None]]:
     """Dependency factory that 403s when a feature is off or plan-locked."""
 
-    def _guard(db: Database = Depends(get_db)) -> None:
-        row = db.q1(
-            "SELECT key, name, is_enabled, min_plan FROM feature_flags WHERE key = ?", key
-        )
-        if row is None:
+    async def _guard(s: AsyncSession = Depends(get_session)) -> None:
+        flag = await s.get(FeatureFlag, key)
+        if flag is None:
             return
-        plan = get_active_plan(db)
+        plan = await get_active_plan(s)
         plan_slug = plan.get("slug") if plan else None
-        if not row["is_enabled"]:
+        if not flag.is_enabled:
             raise Forbidden(
-                f"The feature “{row['name']}” is switched off for this workspace.",
+                f"The feature “{flag.name}” is switched off for this workspace.",
                 code="feature_disabled",
-                details={"flag": key, "min_plan": row["min_plan"], "plan": plan_slug},
+                details={"flag": key, "min_plan": flag.min_plan, "plan": plan_slug},
             )
-        if plan_tier(row["min_plan"]) > plan_tier(plan_slug):
+        if plan_tier(flag.min_plan) > plan_tier(plan_slug):
             raise Forbidden(
-                f"“{row['name']}” requires the {str(row['min_plan']).title()} plan.",
+                f"“{flag.name}” requires the {str(flag.min_plan).title()} plan.",
                 code="plan_upgrade_required",
-                details={"flag": key, "min_plan": row["min_plan"], "plan": plan_slug},
+                details={"flag": key, "min_plan": flag.min_plan, "plan": plan_slug},
             )
 
     _guard.__name__ = f"require_flag_{key}"
@@ -277,35 +331,52 @@ def require_flag(key: str) -> Callable[..., None]:
 # ---------------------------------------------------------------------------
 
 
-def get_board_or_404(db: Database, board_id: str) -> dict[str, Any]:
-    """Fetch a board row or raise a 404 in the standard envelope."""
-    row = db.q1("SELECT * FROM boards WHERE id = ?", board_id)
-    if row is None:
-        # Slugs are unique and human-typeable; accepting one here makes the API
-        # pleasant to drive by hand without weakening the id contract.
-        row = db.q1("SELECT * FROM boards WHERE slug = ?", board_id)
+async def find_board(s: AsyncSession, board_ref: str) -> dict[str, Any] | None:
+    """A board of the current product by id or, failing that, by slug.
+
+    ``None`` when neither matches — a board of another product does not exist here.
+    """
+    conditions = [Board.slug == board_ref]
+    if _looks_like_uuid(board_ref):
+        conditions.insert(0, Board.id == board_ref)
+    query = select(Board).where(or_(*conditions))
+    product = current_product()
+    if product is not None:
+        query = query.where(Board.product_id == product)
+    rows = (await s.scalars(query)).all()
+    # An id match wins over a slug that happens to look the same.
+    by_id = next((row for row in rows if row.id == board_ref), None)
+    return as_dict(by_id or (rows[0] if rows else None))
+
+
+async def get_board_or_404(s: AsyncSession, board_id: str) -> dict[str, Any]:
+    """Fetch a board row or raise a 404 in the standard envelope.
+
+    Slugs are unique and human-typeable; accepting one here makes the API pleasant
+    to drive by hand without weakening the id contract.
+    """
+    row = await find_board(s, board_id)
     if row is None:
         raise NotFound("Board", board_id, code="board_not_found")
-    row["count_envelope_in_metrics"] = bool(row["count_envelope_in_metrics"])
-    row["confirm_moves"] = bool(row["confirm_moves"])
-    row["archived"] = bool(row["archived"])
     return row
 
 
-def require_board(param: str = "id") -> Callable[..., dict[str, Any]]:
+def require_board(param: str = "id") -> Callable[..., Awaitable[dict[str, Any]]]:
     """Dependency factory resolving a path parameter into a board row."""
 
     if param == "board_id":
 
-        def _from_board_id(
-            board_id: str = Path(...), db: Database = Depends(get_db)
+        async def _from_board_id(
+            board_id: str = Path(...), s: AsyncSession = Depends(get_session)
         ) -> dict[str, Any]:
-            return get_board_or_404(db, board_id)
+            return await get_board_or_404(s, board_id)
 
         return _from_board_id
 
-    def _from_id(id: str = Path(...), db: Database = Depends(get_db)) -> dict[str, Any]:
-        return get_board_or_404(db, id)
+    async def _from_id(
+        id: str = Path(...), s: AsyncSession = Depends(get_session)
+    ) -> dict[str, Any]:
+        return await get_board_or_404(s, id)
 
     return _from_id
 
@@ -327,6 +398,22 @@ def can_write_board(user: dict[str, Any], board: dict[str, Any]) -> bool:
         # simulator boards belong to the simulator role.
         return board.get("kind") == "operational"
     return False
+
+
+def is_product_board(board: dict[str, Any]) -> bool:
+    """An operational board of a Pampufa product (NG13 applies to these only)."""
+    return board.get("product_id") != PRODUCT_STANDALONE and board.get("kind") == "operational"
+
+
+def assert_board_writable(board: dict[str, Any]) -> None:
+    """A board swapped out of its product (NG14) keeps its history and takes no writes."""
+    if board.get("read_only"):
+        raise Conflict(
+            "board_read_only",
+            "This board was replaced by a new flow for its product and is read-only: its "
+            "history and metrics stay, nothing on it can change.",
+            {"board_id": board.get("id"), "product_id": board.get("product_id")},
+        )
 
 
 def require_board_write(user: dict[str, Any], board: dict[str, Any]) -> None:
@@ -369,16 +456,27 @@ def require_board_write_target(
             details={"role": role},
         )
     require_board_write(user, board)
+    assert_board_writable(board)
     return board
 
 
-def touch_last_login(db: Database, user_id: str) -> str:
-    """Stamp ``users.last_login_at``; returns the timestamp written."""
+async def touch_last_login(s: AsyncSession, user_id: str) -> str:
+    """Stamp ``users.last_login_at``; returns the timestamp written (not committed)."""
     now = utcnow()
-    db.ex("UPDATE users SET last_login_at = ? WHERE id = ?", now, user_id)
+    await s.execute(update(User).where(User.id == user_id).values(last_login_at=now))
     return now
 
 
 def token_ttl() -> int:
     """Configured access-token lifetime in seconds (for ``expires_in``)."""
     return settings.token_ttl_seconds
+
+
+def _looks_like_uuid(value: str) -> bool:
+    import uuid
+
+    try:
+        uuid.UUID(str(value))
+    except ValueError:
+        return False
+    return True

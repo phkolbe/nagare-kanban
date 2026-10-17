@@ -21,11 +21,12 @@ that board is only ever read here, never written.
 from __future__ import annotations
 
 import uuid
-from typing import Any, Callable, Iterator
+from collections.abc import Callable, Iterator
+from typing import Any
 
 import pytest
 
-from backend.app.db import Database
+from sqlhelper import Database
 
 API = "/api/v1"
 
@@ -165,9 +166,7 @@ def test_get_patch_and_delete_board(client, master, new_board) -> None:
 
 def test_hard_delete_requires_master(client, auth, new_board) -> None:
     board = new_board(template="blank")
-    denied = client.delete(
-        f"{API}/boards/{board['id']}?hard=true", headers=auth("administrator")
-    )
+    denied = client.delete(f"{API}/boards/{board['id']}?hard=true", headers=auth("administrator"))
     assert denied.status_code == 403
     assert denied.json()["error"]["code"] == "insufficient_role"
 
@@ -269,16 +268,34 @@ def test_board_view_segments_return_correct_columns_and_order(
 def test_wip_status_covers_every_state_at_every_scope(client, master, new_board) -> None:
     board = new_board(template="blank", wip_min=2, wip_max=3)
     intake = add_column(
-        client, master, board["id"], name="Intake", segment="downstream", kind="queue",
-        wip_min=2, wip_max=5,
+        client,
+        master,
+        board["id"],
+        name="Intake",
+        segment="downstream",
+        kind="queue",
+        wip_min=2,
+        wip_max=5,
     )
     doing = add_column(
-        client, master, board["id"], name="Doing", segment="downstream", kind="queue",
-        wip_min=None, wip_max=2,
+        client,
+        master,
+        board["id"],
+        name="Doing",
+        segment="downstream",
+        kind="queue",
+        wip_min=None,
+        wip_max=2,
     )
     waiting = add_column(
-        client, master, board["id"], name="Waiting", segment="downstream", kind="queue",
-        wip_min=None, wip_max=3,
+        client,
+        master,
+        board["id"],
+        name="Waiting",
+        segment="downstream",
+        kind="queue",
+        wip_min=None,
+        wip_max=3,
     )
     group = client.post(
         f"{API}/boards/{board['id']}/groups",
@@ -312,7 +329,11 @@ def test_wip_status_covers_every_state_at_every_scope(client, master, new_board)
 
     status = wip()
     assert status["columns"][intake["id"]] == {
-        "count": 1, "min": 2, "max": 5, "state": "under", "label": "1/5",
+        "count": 1,
+        "min": 2,
+        "max": 5,
+        "state": "under",
+        "label": "1/5",
     }
     assert status["columns"][doing["id"]]["state"] == "at_limit"
     assert status["columns"][doing["id"]]["count"] == 2
@@ -374,7 +395,12 @@ def test_commitment_and_delivery_points_recompute_on_add_reorder_and_segment_cha
     order_before = [c["id"] for c in board["columns"]]
     insert_index = order_before.index(d1["id"])
     d0 = add_column(
-        client, master, board_id, name="D0", segment="downstream", kind="queue",
+        client,
+        master,
+        board_id,
+        name="D0",
+        segment="downstream",
+        kind="queue",
         position=insert_index,
     )
     board = get_board(client, master, board_id)
@@ -512,9 +538,7 @@ def test_clone_board_copies_structure_policies_and_card_history(
         )
         assert without_cards.status_code == 201, without_cards.text
         assert without_cards.json()["card_count"] == 0
-        client.delete(
-            f"{API}/boards/{without_cards.json()['id']}?hard=true", headers=master
-        )
+        client.delete(f"{API}/boards/{without_cards.json()['id']}?hard=true", headers=master)
     finally:
         client.delete(f"{API}/boards/{clone['id']}?hard=true", headers=master)
 
@@ -533,8 +557,14 @@ def test_project_crud_and_demand_counts(client, master, new_project) -> None:
     assert fetched.status_code == 200, fetched.text
     body = fetched.json()
     assert body["demands"] == {
-        "total": 0, "sealed": 0, "opened": 0, "upstream": 0,
-        "downstream": 0, "delivered": 0, "in_flight": 0, "blocked": 0,
+        "total": 0,
+        "sealed": 0,
+        "opened": 0,
+        "upstream": 0,
+        "downstream": 0,
+        "delivered": 0,
+        "in_flight": 0,
+        "blocked": 0,
     }
 
     patched = client.patch(
@@ -581,9 +611,7 @@ def test_create_demand_seals_a_card_in_the_envelope_column(
     assert card["opened_at"] is None
     assert card["key"].startswith(project["key"])
 
-    movement = db.q1(
-        "SELECT * FROM card_movements WHERE card_id = ? ORDER BY moved_at", card["id"]
-    )
+    movement = db.q1("SELECT * FROM card_movements WHERE card_id = ? ORDER BY moved_at", card["id"])
     assert movement is not None
     assert movement["from_column_id"] is None
     assert movement["to_column_id"] == envelope_col

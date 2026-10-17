@@ -11,10 +11,13 @@ server-enforced WIP maxima, sealed-envelope demand, immutable commitment timesta
 exists because the Kanban Method says a system that lies about itself cannot be
 improved. The reasoning is written down in **[docs/KANBAN.md](docs/KANBAN.md)**.
 
-Built with a deliberately small dependency surface: **FastAPI + uvicorn + Pydantic** on
-Python 3.14, **stdlib `sqlite3`** (no ORM), hand-rolled **PBKDF2 + HS256** auth, and a
-frontend of **native ES modules, plain CSS and hand-written inline SVG charts** — no
-npm, no bundler, no CDN, no external fonts.
+Built on the same stack as the products of the Pampufa platform it plugs into:
+**FastAPI + Pydantic** on Python ≥ 3.13, **SQLAlchemy 2 (async) + Alembic** on
+**PostgreSQL** (SQLite for the tests and the zero-setup demo), **uv** for dependencies and
+**ruff** for lint. Authentication is hand-rolled **PBKDF2 + HS256** for the standalone
+login. The current frontend is **native ES modules, plain CSS and hand-written inline
+SVG charts**; it is being rebuilt in React (phases N2 and N3 of the Pampufa integration,
+see `obsidian: pampufa-plataforma/integracao-nagare.md`).
 
 ---
 
@@ -35,26 +38,33 @@ placeholders — run the app and see the real thing at <http://127.0.0.1:8770>.*
 
 ## Quickstart
 
-Requires **Python 3.14** and nothing else. Node.js is not used anywhere.
+Requires **[uv](https://docs.astral.sh/uv/)** (it brings Python 3.13) and read access to
+the private `pampufa-sdk` repository. Node.js is not used by the current frontend.
 
 ```bash
-python -m pip install -r requirements.txt
-python run.py
+uv sync --all-extras
+uv run python run.py
 ```
 
 Then open **<http://127.0.0.1:8770>**.
 
-The first run creates `data/nagare.db`, applies the schema and seeds a complete demo
+The database is `NAGARE_DATABASE_URL`. In the Pampufa development setup it is the
+PostgreSQL of the platform's compose
+(`postgresql+asyncpg://nagare:nagare@127.0.0.1:5432/nagare` — use `127.0.0.1`, not
+`localhost`, on Windows); without it, a SQLite file in `data/` keeps a cold clone runnable.
+The first run applies the Alembic migrations and seeds a complete demo
 workspace: 6 users, 4 projects, 2 boards, 260+ cards with twelve months of back-dated
 movement history, blockers, sealed envelopes and cards in flight — enough that every
 chart in the product is populated. Seeding is **deterministic** (`random.Random(20260816)`)
 and **idempotent** (skipped when the `users` table is non-empty).
 
 ```bash
-python run.py --reset          # delete the database and reseed from scratch
-python run.py --port 9000      # serve somewhere else
-python run.py --seed-only      # migrate + seed, print a summary, exit
-python run.py --reload         # uvicorn auto-reload for development
+uv run python run.py --reset          # empty the database and reseed from scratch
+uv run python run.py --port 9000      # serve somewhere else
+uv run python run.py --seed-only      # migrate + seed, print a summary, exit
+uv run python run.py --reload         # uvicorn auto-reload for development
+uv run nagare migrar                  # what the platform's dev-completo runs
+uv run nagare servir
 ```
 
 > [!WARNING]
@@ -124,16 +134,22 @@ uvicorn ── FastAPI app  (backend/app/main.py)
    │            deps.py   auth → RBAC guard → feature-flag guard
    │            flow/     intervals · metrics · kmm · forecast
    ▼
-sqlite3 (stdlib)  data/nagare.db
+SQLAlchemy 2 async  ── PostgreSQL (asyncpg) · SQLite (aiosqlite) in tests/demo
+                          schema from Alembic: backend/migrations
 ```
 
 Deliberate decisions:
 
 - **One origin.** `run.py` serves the API under `/api/v1` and the static frontend from
   `/`. No CORS to configure, no second server, no proxy.
-- **No ORM.** `backend/app/db.py` is a thin helper over `sqlite3` with dict rows,
-  parameterised queries and a `migrate()` that applies `schema.sql`. The schema *is* the
-  model.
+- **SQLAlchemy models, the same API.** `backend/app/models.py` is the schema of record,
+  with real types on PostgreSQL (`uuid`, `timestamptz`, `jsonb`, `boolean`) and UUID v7
+  ids. `backend/app/sqltypes.py` keeps the API contract byte-for-byte: ids travel as
+  dashed text and instants as ISO-8601 `Z` strings, so the frontend and the MCP server
+  did not change. The flow engine (`flow/`) stays synchronous and pure; routers build its
+  context through `AsyncSession.run_sync`.
+- **Product isolation.** Boards, projects and cards carry a `product_id` (`nagare` for
+  the standalone use), and human keys are unique per product.
 - **Stdlib crypto.** PBKDF2-SHA256 password hashing (iteration count stored with the
   hash) and hand-assembled HS256 JWTs with constant-time verification. No third-party
   crypto dependency, no `alg: none` acceptance.
@@ -149,7 +165,7 @@ Deliberate decisions:
 ```
 meu-kanban/
 ├─ run.py                    entry point: migrate, seed, serve
-├─ requirements.txt          fastapi, uvicorn, pydantic (+ pytest, httpx, playwright)
+├─ pyproject.toml  uv.lock   uv project (pampufa-sdk pinned by tag), ruff, pytest
 ├─ README.md                 this file
 ├─ docs/
 │  ├─ SPEC.md                the binding build contract
@@ -159,8 +175,9 @@ meu-kanban/
 │  └─ nagare_mcp.py          stdio JSON-RPC MCP server (stdlib only)
 ├─ backend/app/
 │  ├─ config.py              settings, flag & plan catalogues, role matrix
-│  ├─ db.py  schema.sql      sqlite helper + full DDL
-│  ├─ models.py  schemas.py  row mappers + pydantic contracts
+│  ├─ db.py  sqltypes.py     async engine/sessions, migrations, API-preserving types
+│  ├─ models.py  schemas.py  SQLAlchemy models + pydantic contracts
+│  ├─ cli.py                 nagare migrar | servir
 │  ├─ security.py  deps.py   PBKDF2/JWT, auth + RBAC + flag dependencies
 │  ├─ errors.py              the single error envelope
 │  ├─ seed.py                deterministic demo workspace
@@ -172,7 +189,8 @@ meu-kanban/
 │  ├─ css/                   tokens · base · components · board · metrics · views
 │  └─ js/                    api · store · router · ui · app · board · dnd · card
 │                            filters · charts · metrics · projects · simulator · admin
-└─ tests/                    pytest + FastAPI TestClient
+├─ backend/migrations/       Alembic (ng_*)
+└─ tests/                    pytest + FastAPI TestClient (sqlhelper: raw SQL on both databases)
 ```
 
 ---
@@ -180,17 +198,21 @@ meu-kanban/
 ## Tests
 
 ```bash
-python -m pytest -q                       # everything
-python -m pytest tests/test_metrics.py -q  # one suite
-python -m pytest -q -k wip                 # by keyword
+uv run pytest -q                       # everything, on a temp SQLite database
+uv run pytest tests/test_metrics.py -q  # one suite
+uv run pytest -q -k wip                 # by keyword
+uv run ruff check && uv run ruff format --check
+
+# the same suite on PostgreSQL (the database of record)
+TEST_DATABASE_URL=postgresql+asyncpg://nagare:nagare@127.0.0.1:5432/nagare_teste uv run pytest -q
 ```
 
 The suites cover authentication and the RBAC matrix, board/column/group CRUD and WIP
 policy evaluation, card movement rules (forward-only, commitment/delivery stamping,
 envelope sealing, WIP breaches, expedite override), the flow metric formulas, the
 simulator and Monte Carlo engine, and an end-to-end API smoke test. `tests/conftest.py`
-builds a fresh, seeded temporary database per session, so the suite never touches
-`data/nagare.db`.
+builds a freshly migrated and seeded database per session (a temp SQLite file, or the
+`TEST_DATABASE_URL` schema, reset first), so the suite never touches your data.
 
 The MCP server has its own live round-trip check:
 

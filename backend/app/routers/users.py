@@ -27,11 +27,14 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, status
+from sqlalchemy import case, func, or_, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import ROLE_CAPABILITIES, ROLE_DESCRIPTIONS, ROLE_LABELS, ROLES
-from ..db import Database, new_id, utcnow
-from ..deps import CurrentUser, get_db, require_capability, require_flag
+from ..db import new_id, utcnow
+from ..deps import CurrentUser, get_session, require_capability, require_flag
 from ..errors import BadRequest, Conflict, Forbidden, NotFound
+from ..models import User, as_dict
 from ..schemas import (
     ApiErrorBody,
     ListResponse,
@@ -42,7 +45,7 @@ from ..schemas import (
     UserUpdate,
 )
 
-__all__ = ["router", "RoleCatalogueDetailOut", "CAPABILITY_LABELS"]
+__all__ = ["CAPABILITY_LABELS", "RoleCatalogueDetailOut", "router"]
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -111,30 +114,25 @@ def _public(row: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
-def _load(db: Database, user_id: str) -> dict[str, Any]:
-    row = db.q1("SELECT * FROM users WHERE id = ?", user_id)
+async def _load(s: AsyncSession, user_id: str) -> dict[str, Any]:
+    row = as_dict(await s.get(User, user_id))
     if row is None:
         raise NotFound("User", user_id, code="user_not_found")
     return row
 
 
-def _email_taken(db: Database, email: str, *, excluding: str | None = None) -> bool:
-    row = db.q1(
-        "SELECT id FROM users WHERE lower(email) = ? AND id <> ?",
-        email.strip().lower(),
-        excluding or "",
-    )
-    return row is not None
+async def _email_taken(s: AsyncSession, email: str, *, excluding: str | None = None) -> bool:
+    query = select(User.id).where(func.lower(User.email) == email.strip().lower())
+    if excluding:
+        query = query.where(User.id != excluding)
+    return (await s.scalar(query)) is not None
 
 
-def _active_masters(db: Database, *, excluding: str | None = None) -> int:
-    return int(
-        db.scalar(
-            "SELECT COUNT(*) FROM users WHERE role = 'master' AND is_active = 1 AND id <> ?",
-            excluding or "",
-        )
-        or 0
-    )
+async def _active_masters(s: AsyncSession, *, excluding: str | None = None) -> int:
+    query = select(func.count()).where(User.role == "master", User.is_active.is_(True))
+    if excluding:
+        query = query.where(User.id != excluding)
+    return int(await s.scalar(query) or 0)
 
 
 def _assert_may_touch_master(actor: CurrentUser, target: dict[str, Any]) -> None:
@@ -157,11 +155,13 @@ def _assert_may_grant(actor: CurrentUser, role: str) -> None:
         )
 
 
-def _assert_last_master_survives(db: Database, target: dict[str, Any], action: str) -> None:
+async def _assert_last_master_survives(
+    s: AsyncSession, target: dict[str, Any], action: str
+) -> None:
     """Refuse anything that would leave the workspace without an active master."""
     if target["role"] != "master" or not target["is_active"]:
         return
-    if _active_masters(db, excluding=target["id"]) == 0:
+    if await _active_masters(s, excluding=target["id"]) == 0:
         raise Conflict(
             "last_master_protected",
             "This is the last active master; the workspace would be left without an owner.",
@@ -179,8 +179,8 @@ def _assert_last_master_survives(db: Database, target: dict[str, Any], action: s
     response_model=ListResponse[UserOut],
     summary="List and search users",
 )
-def list_users(
-    db: Database = Depends(get_db),
+async def list_users(
+    s: AsyncSession = Depends(get_session),
     _actor: CurrentUser = Depends(require_capability("read_boards_metrics")),
     role: str | None = Query(None, description="Filter by exact role."),
     q: str | None = Query(None, description="Case-insensitive match on name or email."),
@@ -189,8 +189,7 @@ def list_users(
     offset: int = Query(0, ge=0),
 ) -> ListResponse[UserOut]:
     """The user directory, ordered by privilege then name."""
-    where: list[str] = []
-    params: list[Any] = []
+    conditions: list[Any] = []
 
     if role:
         if role not in ROLES:
@@ -199,27 +198,27 @@ def list_users(
                 code="unknown_role",
                 details={"role": role, "known": list(ROLES)},
             )
-        where.append("role = ?")
-        params.append(role)
+        conditions.append(User.role == role)
     if is_active is not None:
-        where.append("is_active = ?")
-        params.append(1 if is_active else 0)
+        conditions.append(User.is_active.is_(bool(is_active)))
     if q:
         needle = f"%{q.strip().lower()}%"
-        where.append("(lower(name) LIKE ? OR lower(email) LIKE ?)")
-        params.extend([needle, needle])
+        conditions.append(
+            or_(func.lower(User.name).like(needle), func.lower(User.email).like(needle))
+        )
 
-    clause = f" WHERE {' AND '.join(where)}" if where else ""
-    total = int(db.scalar(f"SELECT COUNT(*) FROM users{clause}", params) or 0)
-    rows = db.q(
-        "SELECT * FROM users"
-        + clause
-        + " ORDER BY CASE role"
-        + "".join(f" WHEN '{name}' THEN {rank}" for name, rank in _PRIVILEGE_ORDER.items())
-        + " ELSE 99 END, lower(name) LIMIT ? OFFSET ?",
-        [*params, limit, offset],
+    total = int(await s.scalar(select(func.count()).select_from(User).where(*conditions)) or 0)
+    privilege = case(_PRIVILEGE_ORDER, value=User.role, else_=99)
+    users = await s.scalars(
+        select(User)
+        .where(*conditions)
+        .order_by(privilege, func.lower(User.name))
+        .limit(limit)
+        .offset(offset)
     )
-    return ListResponse[UserOut](items=[UserOut(**_public(row)) for row in rows], total=total)
+    return ListResponse[UserOut](
+        items=[UserOut(**_public(as_dict(user) or {})) for user in users], total=total
+    )
 
 
 @router.get(
@@ -228,16 +227,16 @@ def list_users(
     responses={403: {"model": ApiErrorBody, "description": "Plan or role restriction"}},
     summary="Role catalogue with the full SPEC §4 capability matrix",
 )
-def role_catalogue(
-    db: Database = Depends(get_db),
+async def role_catalogue(
+    s: AsyncSession = Depends(get_session),
     _actor: CurrentUser = Depends(manage_users),
     _flag: None = Depends(require_flag("rbac_advanced")),
 ) -> dict[str, Any]:
     """The six roles and every capability, as data the admin UI can render blind."""
     counts = {
-        row["role"]: int(row["n"])
-        for row in db.q(
-            "SELECT role, COUNT(*) AS n FROM users WHERE is_active = 1 GROUP BY role"
+        role: int(n)
+        for role, n in await s.execute(
+            select(User.role, func.count()).where(User.is_active.is_(True)).group_by(User.role)
         )
     }
     roles = [
@@ -246,8 +245,7 @@ def role_catalogue(
             "label": ROLE_LABELS.get(name, name.title()),
             "description": ROLE_DESCRIPTIONS.get(name, ""),
             "capabilities": {
-                capability: name in ROLE_CAPABILITIES[capability]
-                for capability in CAPABILITY_ORDER
+                capability: name in ROLE_CAPABILITIES[capability] for capability in CAPABILITY_ORDER
             },
         }
         for name in ROLES
@@ -267,13 +265,13 @@ def role_catalogue(
 
 
 @router.get("/{user_id}", response_model=UserOut, summary="Fetch one user")
-def get_user(
+async def get_user(
     user_id: str,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     _actor: CurrentUser = Depends(require_capability("read_boards_metrics")),
 ) -> UserOut:
     """One user by id — the drawer resolves assignees through this."""
-    return UserOut(**_public(_load(db, user_id)))
+    return UserOut(**_public(await _load(s, user_id)))
 
 
 # ---------------------------------------------------------------------------
@@ -291,9 +289,9 @@ def get_user(
     },
     summary="Create a user",
 )
-def create_user(
+async def create_user(
     payload: UserCreate,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     actor: CurrentUser = Depends(manage_users),
 ) -> UserOut:
     """Create an account with a PBKDF2-hashed password."""
@@ -301,7 +299,7 @@ def create_user(
 
     email = payload.email.strip().lower()
     _assert_may_grant(actor, payload.role)
-    if _email_taken(db, email):
+    if await _email_taken(s, email):
         raise Conflict(
             "email_taken",
             "That email address is already registered.",
@@ -314,17 +312,12 @@ def create_user(
         "name": payload.name.strip(),
         "password_hash": hash_password(payload.password),
         "role": payload.role,
-        "is_active": 1 if payload.is_active else 0,
+        "is_active": bool(payload.is_active),
         "created_at": utcnow(),
         "last_login_at": None,
     }
-    db.ex(
-        "INSERT INTO users (id, email, name, password_hash, role, is_active, created_at, "
-        "last_login_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        [row[key] for key in
-         ("id", "email", "name", "password_hash", "role", "is_active", "created_at",
-          "last_login_at")],
-    )
+    s.add(User(**row))
+    await s.commit()
     return UserOut(**_public(row))
 
 
@@ -337,16 +330,16 @@ def create_user(
     },
     summary="Update a user, their role or their activation state",
 )
-def update_user(
+async def update_user(
     user_id: str,
     payload: UserUpdate,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     actor: CurrentUser = Depends(manage_users),
 ) -> UserOut:
     """Apply a partial update after every SPEC §4 guardrail has been checked."""
     from ..security import hash_password
 
-    target = _load(db, user_id)
+    target = await _load(s, user_id)
     is_self = target["id"] == actor["id"]
     _assert_may_touch_master(actor, target)
 
@@ -363,7 +356,7 @@ def update_user(
         if target["role"] in PROTECTED_ROLES:
             # Demoting a master: _assert_may_touch_master already proved the actor
             # is a master, so only the "never the last one" rule is left.
-            _assert_last_master_survives(db, target, "demote")
+            await _assert_last_master_survives(s, target, "demote")
         changes["role"] = payload.role
 
     if payload.is_active is not None and bool(payload.is_active) != bool(target["is_active"]):
@@ -374,13 +367,13 @@ def update_user(
                     "You cannot deactivate your own account.",
                     {"user_id": user_id},
                 )
-            _assert_last_master_survives(db, target, "deactivate")
-        changes["is_active"] = 1 if payload.is_active else 0
+            await _assert_last_master_survives(s, target, "deactivate")
+        changes["is_active"] = bool(payload.is_active)
 
     if payload.email is not None:
         email = payload.email.strip().lower()
         if email != str(target["email"]).lower():
-            if _email_taken(db, email, excluding=user_id):
+            if await _email_taken(s, email, excluding=user_id):
                 raise Conflict(
                     "email_taken",
                     "That email address is already registered.",
@@ -397,9 +390,9 @@ def update_user(
     if not changes:
         return UserOut(**_public(target))
 
-    assignments = ", ".join(f"{column} = ?" for column in changes)
-    db.ex(f"UPDATE users SET {assignments} WHERE id = ?", [*changes.values(), user_id])
-    return UserOut(**_public(_load(db, user_id)))
+    await s.execute(update(User).where(User.id == user_id).values(**changes))
+    await s.commit()
+    return UserOut(**_public(await _load(s, user_id)))
 
 
 @router.delete(
@@ -408,13 +401,13 @@ def update_user(
     responses={409: {"model": ApiErrorBody, "description": "Guardrail violation"}},
     summary="Deactivate a user (soft delete)",
 )
-def delete_user(
+async def delete_user(
     user_id: str,
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     actor: CurrentUser = Depends(manage_users),
 ) -> OkResponse:
     """Soft-delete: history keeps its author, and the session is revoked at once."""
-    target = _load(db, user_id)
+    target = await _load(s, user_id)
     _assert_may_touch_master(actor, target)
     if target["id"] == actor["id"]:
         raise Conflict(
@@ -422,10 +415,11 @@ def delete_user(
             "You cannot deactivate your own account.",
             {"user_id": user_id},
         )
-    _assert_last_master_survives(db, target, "delete")
+    await _assert_last_master_survives(s, target, "delete")
 
     if target["is_active"]:
-        db.ex("UPDATE users SET is_active = 0 WHERE id = ?", user_id)
+        await s.execute(update(User).where(User.id == user_id).values(is_active=False))
+        await s.commit()
     return OkResponse(
         ok=True,
         id=user_id,

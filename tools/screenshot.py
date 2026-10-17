@@ -16,13 +16,19 @@ from PIL import Image, ImageStat
 from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from uiharness import (  # noqa: E402
-    ROOT, api_login, discover_ids, goto_route, new_context, prime, routes_for,
+from uiharness import (
+    ROOT,
+    api_login,
+    discover_ids,
+    goto_route,
+    new_context,
+    prime,
+    routes_for,
 )
 
 SHOTS = ROOT / "shots"
 MIN_BYTES = 30_000
-MIN_STDDEV = 12.0   # a near-uniform image is a blank/failed render
+MIN_STDDEV = 12.0  # a near-uniform image is a blank/failed render
 
 
 def verdict(path: pathlib.Path) -> dict:
@@ -33,7 +39,10 @@ def verdict(path: pathlib.Path) -> dict:
         stddev = stat.stddev[0]
         w, h = im.size
     return {
-        "bytes": size, "stddev": round(stddev, 1), "w": w, "h": h,
+        "bytes": size,
+        "stddev": round(stddev, 1),
+        "w": w,
+        "h": h,
         "ok": size >= MIN_BYTES and stddev >= MIN_STDDEV,
     }
 
@@ -60,14 +69,23 @@ def main() -> int:
                 # viewport shot is what a reviewer would actually see.
                 page.screenshot(path=str(path))
                 v = verdict(path)
-                results.append({"theme": theme, "route": route["slug"],
-                                "path": str(path.relative_to(ROOT)).replace("\\", "/"), **v})
-                print(f"[{'OK  ' if v['ok'] else 'THIN'}] {theme:5} {route['slug']:18} "
-                      f"{v['bytes']:>9,}b  sd={v['stddev']:>5}  {v['w']}x{v['h']}")
+                results.append(
+                    {
+                        "theme": theme,
+                        "route": route["slug"],
+                        "path": str(path.relative_to(ROOT)).replace("\\", "/"),
+                        **v,
+                    }
+                )
+                print(
+                    f"[{'OK  ' if v['ok'] else 'THIN'}] {theme:5} {route['slug']:18} "
+                    f"{v['bytes']:>9,}b  sd={v['stddev']:>5}  {v['w']}x{v['h']}"
+                )
             browser.close()
 
     (ROOT / "tools" / "screenshot_report.json").write_text(
-        json.dumps(results, indent=2), encoding="utf-8")
+        json.dumps(results, indent=2), encoding="utf-8"
+    )
     thin = [r for r in results if not r["ok"]]
     print(f"\n{len(results) - len(thin)}/{len(results)} screenshots look real")
     if thin:

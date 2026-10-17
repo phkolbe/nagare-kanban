@@ -8,41 +8,106 @@ metric owners enrich them, and the frontend reads whatever is present.
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Generic, Literal, TypeVar
+from typing import Annotated, Any, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
 __all__ = [
-    # primitives
-    "Schema", "OpenSchema", "ListResponse", "ApiErrorDetail", "ApiErrorBody",
-    "HealthOut", "OkResponse",
-    # enums
-    "Role", "PlanSlug", "BoardKind", "Segment", "SegmentQuery", "ColumnKind",
-    "ProjectStatus", "ServiceClass", "DemandType", "ValueArea", "EnvelopeState",
-    "CardSize", "MovementSource", "EventType", "WipState", "SimulationKind",
+    "ApiErrorBody",
+    "ApiErrorDetail",
+    "BlockRequest",
     "BlockerCategory",
-    # auth & users
-    "LoginRequest", "TokenResponse", "UserOut", "UserCreate", "UserUpdate",
-    "RoleInfo", "RoleCatalogueOut",
-    # commercial
-    "FlagOut", "FlagUpdate", "PlanOut", "PlanCreate", "PlanUpdate",
-    "WorkspaceOut", "WorkspaceUpdate",
+    "BoardCloneRequest",
+    "BoardCreate",
+    "BoardKind",
     # boards
-    "BoardOut", "BoardCreate", "BoardUpdate", "BoardViewOut", "BoardCloneRequest",
-    "ColumnOut", "ColumnCreate", "ColumnUpdate", "ColumnReorderRequest",
-    "GroupOut", "GroupCreate", "GroupUpdate", "WipCell", "WipStatusOut",
-    # projects
-    "ProjectOut", "ProjectCreate", "ProjectUpdate", "ProjectDetailOut", "DemandCreate",
+    "BoardOut",
+    "BoardUpdate",
+    "BoardViewOut",
+    "CardCreate",
+    "CardDetailOut",
+    "CardHistoryOut",
     # cards
-    "CardOut", "CardCreate", "CardUpdate", "CardDetailOut", "MoveRequest", "MoveResult",
-    "TaskOut", "TaskCreate", "TaskUpdate", "BlockRequest", "CommentOut", "CommentCreate",
-    "MovementOut", "EventOut", "CardHistoryOut",
+    "CardOut",
+    "CardSize",
+    "CardUpdate",
+    "ColumnCreate",
+    "ColumnKind",
+    "ColumnOut",
+    "ColumnReorderRequest",
+    "ColumnUpdate",
+    "CommentCreate",
+    "CommentOut",
+    "DemandCreate",
+    "DemandType",
+    "EnvelopeState",
+    "EventOut",
+    "EventType",
+    # commercial
+    "FlagOut",
+    "FlagUpdate",
+    "GroupCreate",
+    "GroupOut",
+    "GroupUpdate",
+    "HealthOut",
+    "KmmLevel",
+    "KmmMetric",
+    "KmmOut",
+    "ListResponse",
+    # auth & users
+    "LoginRequest",
     # metrics
-    "MetricValue", "SummaryOut", "SeriesPoint", "Series", "SeriesOut",
-    "KmmMetric", "KmmLevel", "KmmOut",
+    "MetricValue",
+    "MoveRequest",
+    "MoveResult",
+    "MovementOut",
+    "MovementSource",
+    "OkResponse",
+    "OpenSchema",
+    "PlanCreate",
+    "PlanOut",
+    "PlanSlug",
+    "PlanUpdate",
+    "ProjectCreate",
+    "ProjectDetailOut",
+    # projects
+    "ProjectOut",
+    "ProjectStatus",
+    "ProjectUpdate",
+    # enums
+    "Role",
+    "RoleCatalogueOut",
+    "RoleInfo",
+    # primitives
+    "Schema",
+    "Segment",
+    "SegmentQuery",
+    "Series",
+    "SeriesOut",
+    "SeriesPoint",
+    "ServiceClass",
     # simulator
-    "SimBoardCreate", "SimGenerateRequest", "SimRunCreate", "SimRunOut",
-    "SimCompareRequest", "SimCompareOut",
+    "SimBoardCreate",
+    "SimCompareOut",
+    "SimCompareRequest",
+    "SimGenerateRequest",
+    "SimRunCreate",
+    "SimRunOut",
+    "SimulationKind",
+    "SummaryOut",
+    "TaskCreate",
+    "TaskOut",
+    "TaskUpdate",
+    "TokenResponse",
+    "UserCreate",
+    "UserOut",
+    "UserUpdate",
+    "ValueArea",
+    "WipCell",
+    "WipState",
+    "WipStatusOut",
+    "WorkspaceOut",
+    "WorkspaceUpdate",
 ]
 
 T = TypeVar("T")
@@ -92,17 +157,34 @@ EnvelopeState = Literal["sealed", "opened"]
 CardSize = Literal["xs", "s", "m", "l", "xl"]
 MovementSource = Literal["ui", "api", "mcp", "seed", "simulation"]
 EventType = Literal[
-    "created", "moved", "updated", "blocked", "unblocked",
-    "opened_envelope", "archived", "commented", "task_added", "task_completed",
+    "created",
+    "moved",
+    "updated",
+    "blocked",
+    "unblocked",
+    "opened_envelope",
+    "archived",
+    "commented",
+    "task_added",
+    "task_completed",
 ]
 WipState = Literal["under", "ok", "at_limit", "over"]
 SimulationKind = Literal[
-    "monte_carlo_when", "monte_carlo_how_many", "wip_experiment",
-    "class_of_service_mix", "replay",
+    "monte_carlo_when",
+    "monte_carlo_how_many",
+    "wip_experiment",
+    "class_of_service_mix",
+    "replay",
 ]
 BlockerCategory = Literal[
-    "dependency", "external_vendor", "waiting_on_customer", "technical",
-    "people", "compliance", "environment", "other",
+    "dependency",
+    "external_vendor",
+    "waiting_on_customer",
+    "technical",
+    "people",
+    "compliance",
+    "environment",
+    "other",
 ]
 
 
@@ -111,7 +193,7 @@ BlockerCategory = Literal[
 # ---------------------------------------------------------------------------
 
 
-class ListResponse(BaseModel, Generic[T]):
+class ListResponse[T](BaseModel):
     """Every list endpoint returns ``{"items": [...], "total": n}`` (SPEC §5)."""
 
     model_config = ConfigDict(extra="ignore")
@@ -120,7 +202,7 @@ class ListResponse(BaseModel, Generic[T]):
     total: int = 0
 
     @classmethod
-    def of(cls, items: list[T], total: int | None = None) -> "ListResponse[T]":
+    def of(cls, items: list[T], total: int | None = None) -> ListResponse[T]:
         """Build a response, defaulting ``total`` to ``len(items)``."""
         return cls(items=items, total=len(items) if total is None else total)
 
@@ -252,7 +334,9 @@ class PlanOut(Schema):
 
 class PlanCreate(Schema):
     name: NonEmptyStr
-    slug: Annotated[str, StringConstraints(strip_whitespace=True, to_lower=True, min_length=2, max_length=40)]
+    slug: Annotated[
+        str, StringConstraints(strip_whitespace=True, to_lower=True, min_length=2, max_length=40)
+    ]
     price_month: float = 0.0
     price_year: float = 0.0
     currency: str = "USD"
@@ -704,7 +788,9 @@ class ProjectOut(Schema):
 
 class ProjectCreate(Schema):
     name: NonEmptyStr
-    key: Annotated[str, StringConstraints(strip_whitespace=True, to_upper=True, min_length=2, max_length=8)]
+    key: Annotated[
+        str, StringConstraints(strip_whitespace=True, to_upper=True, min_length=2, max_length=8)
+    ]
     color: HexColor | None = None
     description: str | None = None
     status: ProjectStatus = "active"

@@ -80,7 +80,8 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, Callable, Iterable
+from collections.abc import Callable, Iterable
+from typing import Any
 
 SERVER_NAME = "nagare-kanban"
 SERVER_VERSION = "1.0.0"
@@ -218,7 +219,10 @@ class NagareClient:
     ) -> Any:
         url = self._url(path, params)
         data = None
-        headers = {"Accept": "application/json", "User-Agent": f"{SERVER_NAME}-mcp/{SERVER_VERSION}"}
+        headers = {
+            "Accept": "application/json",
+            "User-Agent": f"{SERVER_NAME}-mcp/{SERVER_VERSION}",
+        }
         if body is not None:
             data = json.dumps(body).encode("utf-8")
             headers["Content-Type"] = "application/json"
@@ -243,9 +247,7 @@ class NagareClient:
                 # The cached token expired or was revoked: mint a new one once.
                 self.token = None
                 self.identity = None
-                return self._request(
-                    method, path, params, body, authenticated, _retry=False
-                )
+                return self._request(method, path, params, body, authenticated, _retry=False)
             raise _api_error(exc.code, method, url, detail) from None
         except urllib.error.URLError as exc:
             raise ToolError(
@@ -300,7 +302,9 @@ def _api_error(status: int, method: str, url: str, detail: Any) -> ToolError:
     text = f"[{code}] {message}" if code != "http_error" else message
     if hint:
         text = f"{text}\nHint: {hint}"
-    return ToolError(text, {"code": code, "status": status, **({"details": details} if details else {})})
+    return ToolError(
+        text, {"code": code, "status": status, **({"details": details} if details else {})}
+    )
 
 
 #: Extra guidance attached to the error codes an agent is most likely to hit.
@@ -754,7 +758,15 @@ def tool_run_forecast(client: NagareClient, args: dict[str, Any]) -> dict[str, A
         # The full trial histogram is large and rarely useful to a model; the
         # percentiles and the verdict are what a forecast conversation needs.
         out["percentiles"] = results.get("percentiles")
-        for key in ("summary", "verdict", "unit", "sample_size", "trials", "forecast", "distribution_summary"):
+        for key in (
+            "summary",
+            "verdict",
+            "unit",
+            "sample_size",
+            "trials",
+            "forecast",
+            "distribution_summary",
+        ):
             if results.get(key) is not None:
                 out[key] = results[key]
         if out.get("percentiles") is None:
@@ -855,7 +867,10 @@ TOOLS: list[dict[str, Any]] = [
                     "enum": _SERVICE_CLASSES,
                     "description": "Class of service policy applied to the card.",
                 },
-                "assignee_id": {"type": "string", "description": "User id the card is assigned to."},
+                "assignee_id": {
+                    "type": "string",
+                    "description": "User id the card is assigned to.",
+                },
                 "demand_type": {
                     "type": "string",
                     "enum": _DEMAND_TYPES,
@@ -864,13 +879,23 @@ TOOLS: list[dict[str, Any]] = [
                 "value_area": {"type": "string", "enum": _VALUE_AREAS},
                 "size": {"type": "string", "enum": _SIZES},
                 "tag": {"type": "string", "description": "Cards carrying this tag."},
-                "q": {"type": "string", "description": "Free-text search over key, title and description."},
-                "is_blocked": {"type": "boolean", "description": "Only blocked (true) or only unblocked (false) cards."},
+                "q": {
+                    "type": "string",
+                    "description": "Free-text search over key, title and description.",
+                },
+                "is_blocked": {
+                    "type": "boolean",
+                    "description": "Only blocked (true) or only unblocked (false) cards.",
+                },
                 "due_before": {
                     "type": "string",
                     "description": "ISO date/datetime; cards due strictly before it.",
                 },
-                "archived": {"type": "boolean", "default": False, "description": "Include archived cards."},
+                "archived": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Include archived cards.",
+                },
                 "limit": {
                     "type": "integer",
                     "minimum": 1,
@@ -912,9 +937,15 @@ TOOLS: list[dict[str, Any]] = [
             {
                 "board_id": {"type": "string", "description": "Target board id or slug."},
                 "title": {"type": "string", "description": "Short, outcome-shaped card title."},
-                "column_id": {"type": "string", "description": "Column to create the card in; defaults to the first column."},
+                "column_id": {
+                    "type": "string",
+                    "description": "Column to create the card in; defaults to the first column.",
+                },
                 "project_id": {"type": "string", "description": "Project the demand belongs to."},
-                "description": {"type": "string", "description": "Longer description, markdown accepted."},
+                "description": {
+                    "type": "string",
+                    "description": "Longer description, markdown accepted.",
+                },
                 "service_class": {
                     "type": "string",
                     "enum": _SERVICE_CLASSES,
@@ -923,10 +954,17 @@ TOOLS: list[dict[str, Any]] = [
                 },
                 "assignee_id": {"type": "string", "description": "User id to assign."},
                 "requester": {"type": "string", "description": "Who asked for this work."},
-                "size": {"type": "string", "enum": _SIZES, "description": "Optional relative size."},
+                "size": {
+                    "type": "string",
+                    "enum": _SIZES,
+                    "description": "Optional relative size.",
+                },
                 "value_area": {"type": "string", "enum": _VALUE_AREAS, "default": "feature"},
                 "demand_type": {"type": "string", "enum": _DEMAND_TYPES, "default": "value"},
-                "due_date": {"type": "string", "description": "ISO date; required in practice for fixed_date cards."},
+                "due_date": {
+                    "type": "string",
+                    "description": "ISO date; required in practice for fixed_date cards.",
+                },
                 "tags": {
                     "type": "array",
                     "items": {"type": "string"},
@@ -954,8 +992,14 @@ TOOLS: list[dict[str, Any]] = [
         "inputSchema": _schema(
             {
                 "card_id": {"type": "string", "description": "Card to move."},
-                "to_column_id": {"type": "string", "description": "Destination column id, from get_board."},
-                "note": {"type": "string", "description": "Why the card moved; stored on the movement record."},
+                "to_column_id": {
+                    "type": "string",
+                    "description": "Destination column id, from get_board.",
+                },
+                "note": {
+                    "type": "string",
+                    "description": "Why the card moved; stored on the movement record.",
+                },
                 "force": {
                     "type": "boolean",
                     "default": False,
@@ -1008,10 +1052,17 @@ TOOLS: list[dict[str, Any]] = [
             {
                 "project_id": {"type": "string", "description": "Project to attach the demand to."},
                 "title": {"type": "string", "description": "What is being asked for."},
-                "board_id": {"type": "string", "description": "Board to place it on; defaults to the workspace's operational board."},
+                "board_id": {
+                    "type": "string",
+                    "description": "Board to place it on; defaults to the workspace's operational board.",
+                },
                 "description": {"type": "string", "description": "Context, acceptance, links."},
                 "requester": {"type": "string", "description": "Who raised the demand."},
-                "service_class": {"type": "string", "enum": _SERVICE_CLASSES, "default": "standard"},
+                "service_class": {
+                    "type": "string",
+                    "enum": _SERVICE_CLASSES,
+                    "default": "standard",
+                },
                 "value_area": {"type": "string", "enum": _VALUE_AREAS, "default": "feature"},
                 "demand_type": {"type": "string", "enum": _DEMAND_TYPES, "default": "value"},
                 "size": {"type": "string", "enum": _SIZES},
@@ -1091,8 +1142,16 @@ TOOLS: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "monte_carlo_how_many: ISO date to forecast up to.",
                 },
-                "days": {"type": "integer", "minimum": 1, "description": "monte_carlo_how_many: horizon in days."},
-                "weeks": {"type": "integer", "minimum": 1, "description": "monte_carlo_how_many: horizon in weeks."},
+                "days": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "monte_carlo_how_many: horizon in days.",
+                },
+                "weeks": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "monte_carlo_how_many: horizon in weeks.",
+                },
                 "trials": {
                     "type": "integer",
                     "minimum": 1000,
@@ -1274,7 +1333,9 @@ class MCPServer:
 
     def serve_stdio(self) -> int:
         """Read newline-delimited JSON-RPC from stdin until EOF."""
-        _log(f"[nagare-mcp] serving {self.client.base_url} over stdio (protocol {PROTOCOL_VERSION})")
+        _log(
+            f"[nagare-mcp] serving {self.client.base_url} over stdio (protocol {PROTOCOL_VERSION})"
+        )
         for line in sys.stdin:
             line = line.strip()
             if not line:
@@ -1461,7 +1522,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--token", default=None, help="bearer token (env NAGARE_TOKEN)")
     parser.add_argument("--email", default=None, help="login email (env NAGARE_EMAIL)")
     parser.add_argument("--password", default=None, help="login password (env NAGARE_PASSWORD)")
-    parser.add_argument("--timeout", default=None, help="request timeout in seconds (env NAGARE_TIMEOUT)")
+    parser.add_argument(
+        "--timeout", default=None, help="request timeout in seconds (env NAGARE_TIMEOUT)"
+    )
     parser.add_argument("--verbose", action="store_true", help="log every frame to stderr")
     parser.add_argument(
         "--selftest",

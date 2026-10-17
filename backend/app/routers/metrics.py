@@ -25,21 +25,41 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..db import Database
-from ..deps import CurrentUser, get_board_or_404, get_db, require_capability, require_flag
+from ..deps import CurrentUser, get_board_or_404, get_session, require_capability, require_flag
 from ..flow.kmm import compute_kmm
 from ..flow.metrics import (
     MetricsContext,
+)
+from ..flow.metrics import (
     aging as aging_metric,
+)
+from ..flow.metrics import (
     blockers as blockers_metric,
+)
+from ..flow.metrics import (
     cfd as cfd_metric,
+)
+from ..flow.metrics import (
     demand as demand_metric,
+)
+from ..flow.metrics import (
     distribution as distribution_metric,
+)
+from ..flow.metrics import (
     flow_efficiency as flow_efficiency_metric,
+)
+from ..flow.metrics import (
     littles_law as littles_law_metric,
+)
+from ..flow.metrics import (
     scatter as scatter_metric,
+)
+from ..flow.metrics import (
     summary as summary_metric,
+)
+from ..flow.metrics import (
     throughput as throughput_metric,
 )
 from ..schemas import KmmOut, SeriesOut, SummaryOut
@@ -56,9 +76,7 @@ __all__ = ["router"]
 
 
 def common_filters(
-    frm: str | None = Query(
-        None, alias="from", description="ISO-8601 lower bound (inclusive)."
-    ),
+    frm: str | None = Query(None, alias="from", description="ISO-8601 lower bound (inclusive)."),
     to: str | None = Query(None, description="ISO-8601 upper bound (inclusive)."),
     project_id: str | None = Query(None, description="Restrict to one project."),
     service_class: str | None = Query(
@@ -82,10 +100,14 @@ def common_filters(
     }
 
 
-def _ctx(db: Database, board_id: str, filters: dict[str, Any]) -> MetricsContext:
-    """Resolve the board and build the one snapshot every metric reads from."""
-    board = get_board_or_404(db, board_id)
-    return MetricsContext(db, board, **filters)
+async def _ctx(s: AsyncSession, board_id: str, filters: dict[str, Any]) -> MetricsContext:
+    """Resolve the board and build the one snapshot every metric reads from.
+
+    The metric engine is synchronous and pure; it reads the board once, through
+    the session's synchronous face, and computes from memory afterwards.
+    """
+    board = await get_board_or_404(s, board_id)
+    return await s.run_sync(lambda session: MetricsContext(session, board, **filters))
 
 
 # ---------------------------------------------------------------------------
@@ -99,14 +121,14 @@ def _ctx(db: Database, board_id: str, filters: dict[str, Any]) -> MetricsContext
     summary="Headline KPI set",
     dependencies=[Depends(require_flag("metrics_basic"))],
 )
-def get_summary(
+async def get_summary(
     id: str,
     filters: dict[str, Any] = Depends(common_filters),
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("read_boards_metrics")),
 ) -> dict[str, Any]:
     """Every SPEC §7.1 KPI, each with its trend, sample size and confidence flag."""
-    return summary_metric(_ctx(db, id, filters))
+    return summary_metric(await _ctx(s, id, filters))
 
 
 @router.get(
@@ -115,16 +137,16 @@ def get_summary(
     summary="Delivered counts per period, with rolling average",
     dependencies=[Depends(require_flag("metrics_basic"))],
 )
-def get_throughput(
+async def get_throughput(
     id: str,
     period: str = Query("week", pattern="^(day|week|month)$"),
     rolling: int = Query(4, ge=1, le=26, description="Rolling-average window, in periods."),
     filters: dict[str, Any] = Depends(common_filters),
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("read_boards_metrics")),
 ) -> dict[str, Any]:
     """Delivered items per day/week/month plus a rolling average and variability read."""
-    return throughput_metric(_ctx(db, id, filters), period=period, rolling=rolling)
+    return throughput_metric(await _ctx(s, id, filters), period=period, rolling=rolling)
 
 
 @router.get(
@@ -133,16 +155,18 @@ def get_throughput(
     summary="Lead-time histogram with percentile markers",
     dependencies=[Depends(require_flag("metrics_basic"))],
 )
-def get_distribution(
+async def get_distribution(
     id: str,
     metric: str = Query("customer", pattern="^(customer|system|discovery)$"),
-    bin_days: float | None = Query(None, gt=0, description="Fixed bin width; auto-sized when omitted."),
+    bin_days: float | None = Query(
+        None, gt=0, description="Fixed bin width; auto-sized when omitted."
+    ),
     filters: dict[str, Any] = Depends(common_filters),
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("read_boards_metrics")),
 ) -> dict[str, Any]:
     """A lead-time histogram (auto-binned by default) with 50/70/85/95 markers."""
-    return distribution_metric(_ctx(db, id, filters), bin_days=bin_days, metric=metric)
+    return distribution_metric(await _ctx(s, id, filters), bin_days=bin_days, metric=metric)
 
 
 # ---------------------------------------------------------------------------
@@ -157,15 +181,15 @@ def get_distribution(
     summary="Cumulative flow diagram",
     dependencies=[Depends(require_flag("metrics_advanced"))],
 )
-def get_cfd(
+async def get_cfd(
     id: str,
     interval: str = Query("auto", pattern="^(auto|day|week)$"),
     filters: dict[str, Any] = Depends(common_filters),
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("read_boards_metrics")),
 ) -> dict[str, Any]:
     """One stacked-area series per column, ordered upstream to downstream."""
-    return cfd_metric(_ctx(db, id, filters), interval=interval)
+    return cfd_metric(await _ctx(s, id, filters), interval=interval)
 
 
 @router.get(
@@ -174,15 +198,15 @@ def get_cfd(
     summary="Lead-time scatter with percentile and SLE reference lines",
     dependencies=[Depends(require_flag("metrics_advanced"))],
 )
-def get_scatter(
+async def get_scatter(
     id: str,
     metric: str = Query("customer", pattern="^(customer|system|discovery)$"),
     filters: dict[str, Any] = Depends(common_filters),
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("read_boards_metrics")),
 ) -> dict[str, Any]:
     """One dot per delivered card against its delivery date, plus reference lines."""
-    return scatter_metric(_ctx(db, id, filters), metric=metric)
+    return scatter_metric(await _ctx(s, id, filters), metric=metric)
 
 
 @router.get(
@@ -191,14 +215,14 @@ def get_scatter(
     summary="In-flight cards against the percentile bands they have crossed",
     dependencies=[Depends(require_flag("metrics_advanced"))],
 )
-def get_aging(
+async def get_aging(
     id: str,
     filters: dict[str, Any] = Depends(common_filters),
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("read_boards_metrics")),
 ) -> dict[str, Any]:
     """Every in-flight card plotted by column and age, banded against SLE percentiles."""
-    return aging_metric(_ctx(db, id, filters))
+    return aging_metric(await _ctx(s, id, filters))
 
 
 @router.get(
@@ -207,14 +231,14 @@ def get_aging(
     summary="Touch/wait split, aggregate and per column",
     dependencies=[Depends(require_flag("metrics_advanced"))],
 )
-def get_flow_efficiency(
+async def get_flow_efficiency(
     id: str,
     filters: dict[str, Any] = Depends(common_filters),
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("read_boards_metrics")),
 ) -> dict[str, Any]:
     """Aggregate flow efficiency plus the per-column wait-time Pareto."""
-    return flow_efficiency_metric(_ctx(db, id, filters))
+    return flow_efficiency_metric(await _ctx(s, id, filters))
 
 
 @router.get(
@@ -223,14 +247,14 @@ def get_flow_efficiency(
     summary="Blocked time, count and Pareto by category",
     dependencies=[Depends(require_flag("metrics_advanced"))],
 )
-def get_blockers(
+async def get_blockers(
     id: str,
     filters: dict[str, Any] = Depends(common_filters),
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("read_boards_metrics")),
 ) -> dict[str, Any]:
     """Blocked days by category, ranked, with the worst-affected cards."""
-    return blockers_metric(_ctx(db, id, filters))
+    return blockers_metric(await _ctx(s, id, filters))
 
 
 @router.get(
@@ -239,14 +263,14 @@ def get_blockers(
     summary="Class-of-service mix, demand type, failure demand and due-date performance",
     dependencies=[Depends(require_flag("metrics_advanced"))],
 )
-def get_demand(
+async def get_demand(
     id: str,
     filters: dict[str, Any] = Depends(common_filters),
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("read_boards_metrics")),
 ) -> dict[str, Any]:
     """Demand analysis: service-class mix, demand type, per-project split, flow debt."""
-    return demand_metric(_ctx(db, id, filters))
+    return demand_metric(await _ctx(s, id, filters))
 
 
 @router.get(
@@ -255,14 +279,14 @@ def get_demand(
     summary="WIP / throughput / lead-time coherence",
     dependencies=[Depends(require_flag("metrics_advanced"))],
 )
-def get_littles_law(
+async def get_littles_law(
     id: str,
     filters: dict[str, Any] = Depends(common_filters),
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("read_boards_metrics")),
 ) -> dict[str, Any]:
     """Observed WIP against throughput × lead time, with a stability verdict."""
-    return littles_law_metric(_ctx(db, id, filters))
+    return littles_law_metric(await _ctx(s, id, filters))
 
 
 # ---------------------------------------------------------------------------
@@ -276,11 +300,11 @@ def get_littles_law(
     summary="Kanban Maturity Model readiness (ML0..ML6)",
     dependencies=[Depends(require_flag("kmm_dashboard"))],
 )
-def get_kmm(
+async def get_kmm(
     id: str,
     filters: dict[str, Any] = Depends(common_filters),
-    db: Database = Depends(get_db),
+    s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("read_boards_metrics")),
 ) -> dict[str, Any]:
     """Per-level metric availability, current level and concrete next actions."""
-    return compute_kmm(_ctx(db, id, filters))
+    return compute_kmm(await _ctx(s, id, filters))

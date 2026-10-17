@@ -1,61 +1,606 @@
-"""Dataclasses mirroring the DDL, with row <-> dict mapping.
+"""SQLAlchemy 2 models — the schema of record (SPEC §2).
 
-sqlite stores booleans as ``0/1`` and JSON columns as text. These models are the
-one place that translation happens, so routers can hand
-``Card.from_row(row).to_dict()`` straight to pydantic and get real ``bool``,
-``list`` and ``dict`` values.
+Every table keeps the name and the columns the old ``schema.sql`` had, so the API
+contract, the MCP server and the movement history read exactly as before. What
+changed is underneath:
 
-* ``from_row(row)``  — sqlite row (dict) -> dataclass, coercing types
-* ``to_row()``       — dataclass -> dict ready for an INSERT/UPDATE
-* ``to_dict()``      — dataclass -> JSON-friendly dict for API responses
+* ids are UUID v7 (native ``uuid`` on PostgreSQL), ordered by creation, which is
+  also the tie-breaker wherever the old code ordered by sqlite's ``rowid``;
+* instants are ``timestamptz``; JSON columns are ``jsonb``; booleans are booleans;
+* the product that owns the data (``product_id``) is on boards, projects and
+  cards, with the human keys unique **per product** (decision NG4). ``nagare`` is
+  the product of the standalone use, outside the Pampufa platform.
+
+Python code sees plain values: ``str`` ids, ISO ``Z`` strings, ``bool``, ``list``
+and ``dict`` (see :mod:`backend.app.sqltypes`). :func:`as_dict` turns an instance
+into the row dict every router has always worked with.
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field, fields as dataclass_fields
-from typing import Any, ClassVar, Iterable, Sequence, TypeVar
+from typing import Any
+
+from pampufa_sdk.db.base import uuid7
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    MetaData,
+    String,
+    Text,
+    UniqueConstraint,
+    false,
+)
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+from .sqltypes import Id, Instant, Json
 
 __all__ = [
-    "Record",
-    "User",
-    "Board",
-    "ColumnGroup",
-    "Column",
-    "Project",
-    "Card",
-    "CardMovement",
-    "CardEvent",
-    "CardTask",
+    "PRODUCT_STANDALONE",
+    "Base",
     "Blocker",
+    "Board",
+    "BoardColumn",
+    "Card",
+    "CardEvent",
+    "CardMovement",
+    "CardTask",
+    "ColumnGroup",
     "Comment",
+    "ExternalRef",
     "FeatureFlag",
     "Plan",
-    "Workspace",
+    "ProductLink",
+    "ProductLinkHistory",
+    "Project",
     "SimulationRun",
-    "MODEL_BY_TABLE",
+    "User",
+    "WebhookOutbox",
+    "Workspace",
+    "as_dict",
+    "json_dumps",
+    "json_loads",
+    "metadata",
+    "new_uuid",
     "to_bool",
     "to_int",
-    "json_loads",
-    "json_dumps",
-    "rows_to",
 ]
 
-T = TypeVar("T", bound="Record")
+#: The product of the standalone Nagare (local login, outside the platform).
+PRODUCT_STANDALONE = "nagare"
+
+metadata = MetaData(
+    naming_convention={
+        "ix": "ix_%(table_name)s_%(column_0_N_name)s",
+        "uq": "uq_%(table_name)s_%(column_0_N_name)s",
+        "ck": "ck_%(table_name)s_%(constraint_name)s",
+        "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+        "pk": "pk_%(table_name)s",
+    }
+)
+
+
+def new_uuid() -> str:
+    """A fresh UUID v7 as dashed text — the id format for every table."""
+    return str(uuid7())
+
+
+class Base(DeclarativeBase):
+    metadata = metadata
+
+
+def _id() -> Mapped[str]:
+    return mapped_column(Id, primary_key=True, default=new_uuid)
+
+
+def _fk(target: str, ondelete: str, nullable: bool = True) -> Mapped[Any]:
+    return mapped_column(Id, ForeignKey(target, ondelete=ondelete), nullable=nullable)
+
+
+def _product() -> Mapped[str]:
+    return mapped_column(
+        String(40),
+        nullable=False,
+        default=PRODUCT_STANDALONE,
+        server_default=PRODUCT_STANDALONE,
+    )
 
 
 # ---------------------------------------------------------------------------
-# coercion helpers
+# Identity
 # ---------------------------------------------------------------------------
+
+
+class User(Base):
+    __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint(
+            "role IN ('master','administrator','editor','viewer','simulator','system')",
+            name="role",
+        ),
+        Index("idx_users_role", "role"),
+        Index("idx_users_active", "is_active"),
+    )
+
+    id: Mapped[str] = _id()
+    email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    password_hash: Mapped[str | None] = mapped_column(String(200))
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[str] = mapped_column(Instant, nullable=False)
+    last_login_at: Mapped[str | None] = mapped_column(Instant)
+    #: The Pampufa ``sub`` this user signs in with (NG5). A local user with the same
+    #: e-mail is linked on the first Pampufa sign-in (NG decision of 16/10/2026).
+    external_subject: Mapped[str | None] = mapped_column(String(80), unique=True)
+
+
+# ---------------------------------------------------------------------------
+# Boards, groups, columns
+# ---------------------------------------------------------------------------
+
+
+class Board(Base):
+    __tablename__ = "boards"
+    __table_args__ = (
+        UniqueConstraint("product_id", "slug"),
+        CheckConstraint("kind IN ('operational','simulator')", name="kind"),
+        CheckConstraint("wip_min IS NULL OR wip_min >= 0", name="wip_min"),
+        CheckConstraint("wip_max IS NULL OR wip_max >= 0", name="wip_max"),
+        CheckConstraint("sle_days IS NULL OR sle_days > 0", name="sle_days"),
+        CheckConstraint(
+            "sle_percentile IS NULL OR (sle_percentile > 0 AND sle_percentile <= 100)",
+            name="sle_percentile",
+        ),
+        Index("idx_boards_kind", "kind", "archived"),
+        Index("idx_boards_source", "source_board_id"),
+        Index("idx_boards_product", "product_id", "archived"),
+    )
+
+    id: Mapped[str] = _id()
+    product_id: Mapped[str] = _product()
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    slug: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False, default="operational")
+    source_board_id: Mapped[str | None] = _fk("boards.id", "SET NULL")
+    count_envelope_in_metrics: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    confirm_moves: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    wip_min: Mapped[int | None] = mapped_column(Integer)
+    wip_max: Mapped[int | None] = mapped_column(Integer)
+    sle_days: Mapped[int | None] = mapped_column(Integer)
+    sle_percentile: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[str] = mapped_column(Instant, nullable=False)
+    archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    #: A product board whose project was swapped out (NG14): history and metrics stay
+    #: readable, nothing on it can change any more.
+    read_only: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+
+
+class ColumnGroup(Base):
+    __tablename__ = "column_groups"
+    __table_args__ = (
+        CheckConstraint("wip_min IS NULL OR wip_min >= 0", name="wip_min"),
+        CheckConstraint("wip_max IS NULL OR wip_max >= 0", name="wip_max"),
+        Index("idx_groups_board", "board_id", "position"),
+    )
+
+    id: Mapped[str] = _id()
+    board_id: Mapped[str] = _fk("boards.id", "CASCADE", nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    wip_min: Mapped[int | None] = mapped_column(Integer)
+    wip_max: Mapped[int | None] = mapped_column(Integer)
+    color: Mapped[str | None] = mapped_column(String(40))
+
+
+class BoardColumn(Base):
+    __tablename__ = "columns"
+    __table_args__ = (
+        CheckConstraint("segment IN ('upstream','downstream')", name="segment"),
+        CheckConstraint("kind IN ('envelope','queue','activity','done')", name="kind"),
+        CheckConstraint("wip_min IS NULL OR wip_min >= 0", name="wip_min"),
+        CheckConstraint("wip_max IS NULL OR wip_max >= 0", name="wip_max"),
+        Index("idx_columns_board", "board_id", "position"),
+        Index("idx_columns_group", "group_id"),
+        Index("idx_columns_segment", "board_id", "segment", "position"),
+    )
+
+    id: Mapped[str] = _id()
+    board_id: Mapped[str] = _fk("boards.id", "CASCADE", nullable=False)
+    group_id: Mapped[str | None] = _fk("column_groups.id", "SET NULL")
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    segment: Mapped[str] = mapped_column(String(20), nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    wip_min: Mapped[int | None] = mapped_column(Integer)
+    wip_max: Mapped[int | None] = mapped_column(Integer)
+    is_commitment_point: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_delivery_point: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    color: Mapped[str | None] = mapped_column(String(40))
+    description: Mapped[str | None] = mapped_column(Text)
+
+
+# ---------------------------------------------------------------------------
+# Projects
+# ---------------------------------------------------------------------------
+
+
+class Project(Base):
+    __tablename__ = "projects"
+    __table_args__ = (
+        UniqueConstraint("product_id", "key"),
+        CheckConstraint(
+            "status IN ('discovery','active','on_hold','done','cancelled')", name="status"
+        ),
+        Index("idx_projects_status", "status", "archived"),
+        Index("idx_projects_product", "product_id", "archived"),
+    )
+
+    id: Mapped[str] = _id()
+    product_id: Mapped[str] = _product()
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    key: Mapped[str] = mapped_column(String(20), nullable=False)
+    color: Mapped[str | None] = mapped_column(String(40))
+    description: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    owner_id: Mapped[str | None] = _fk("users.id", "SET NULL")
+    started_at: Mapped[str | None] = mapped_column(Instant)
+    target_date: Mapped[str | None] = mapped_column(Instant)
+    created_at: Mapped[str] = mapped_column(Instant, nullable=False)
+    archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+
+# ---------------------------------------------------------------------------
+# Cards
+# ---------------------------------------------------------------------------
+
+
+class Card(Base):
+    __tablename__ = "cards"
+    __table_args__ = (
+        UniqueConstraint("product_id", "key"),
+        CheckConstraint(
+            "service_class IN ('expedite','standard','fixed_date','intangible')",
+            name="service_class",
+        ),
+        CheckConstraint("size IS NULL OR size IN ('xs','s','m','l','xl')", name="size"),
+        CheckConstraint(
+            "value_area IN ('feature','defect','risk','debt','compliance')", name="value_area"
+        ),
+        CheckConstraint("demand_type IN ('value','failure','maintenance')", name="demand_type"),
+        CheckConstraint("envelope_state IN ('sealed','opened')", name="envelope_state"),
+        Index("idx_cards_board_column", "board_id", "column_id"),
+        Index("idx_cards_project", "project_id"),
+        Index("idx_cards_board_archived", "board_id", "archived"),
+        Index("idx_cards_delivered", "board_id", "delivered_at"),
+        Index("idx_cards_committed", "board_id", "committed_at"),
+        Index("idx_cards_assignee", "assignee_id"),
+        Index("idx_cards_service_class", "board_id", "service_class"),
+        Index("idx_cards_envelope", "board_id", "envelope_state"),
+    )
+
+    id: Mapped[str] = _id()
+    product_id: Mapped[str] = _product()
+    board_id: Mapped[str] = _fk("boards.id", "CASCADE", nullable=False)
+    column_id: Mapped[str] = _fk("columns.id", "CASCADE", nullable=False)
+    project_id: Mapped[str | None] = _fk("projects.id", "SET NULL")
+    key: Mapped[str] = mapped_column(String(40), nullable=False)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    service_class: Mapped[str] = mapped_column(String(20), nullable=False, default="standard")
+    assignee_id: Mapped[str | None] = _fk("users.id", "SET NULL")
+    requester: Mapped[str | None] = mapped_column(String(200))
+    size: Mapped[str | None] = mapped_column(String(4))
+    value_area: Mapped[str] = mapped_column(String(20), nullable=False, default="feature")
+    demand_type: Mapped[str] = mapped_column(String(20), nullable=False, default="value")
+    due_date: Mapped[str | None] = mapped_column(Instant)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    envelope_state: Mapped[str] = mapped_column(String(10), nullable=False, default="opened")
+    is_blocked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    tags: Mapped[list[Any]] = mapped_column(Json, nullable=False, default=list)
+    custom_fields: Mapped[dict[str, Any]] = mapped_column(Json, nullable=False, default=dict)
+    created_at: Mapped[str] = mapped_column(Instant, nullable=False)
+    opened_at: Mapped[str | None] = mapped_column(Instant)
+    committed_at: Mapped[str | None] = mapped_column(Instant)
+    delivered_at: Mapped[str | None] = mapped_column(Instant)
+    archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_by: Mapped[str | None] = _fk("users.id", "SET NULL")
+
+
+# ---------------------------------------------------------------------------
+# Movement history — the metrics backbone (SPEC §2.7)
+# ---------------------------------------------------------------------------
+
+
+class CardMovement(Base):
+    __tablename__ = "card_movements"
+    __table_args__ = (
+        CheckConstraint(
+            "from_segment IS NULL OR from_segment IN ('upstream','downstream')",
+            name="from_segment",
+        ),
+        CheckConstraint("to_segment IN ('upstream','downstream')", name="to_segment"),
+        CheckConstraint("source IN ('ui','api','mcp','seed','simulation')", name="source"),
+        Index("idx_movements_card", "card_id", "moved_at"),
+        Index("idx_movements_board_time", "board_id", "moved_at"),
+        Index("idx_movements_to_column", "to_column_id", "moved_at"),
+        Index("idx_movements_from_column", "from_column_id"),
+    )
+
+    id: Mapped[str] = _id()
+    card_id: Mapped[str] = _fk("cards.id", "CASCADE", nullable=False)
+    board_id: Mapped[str] = _fk("boards.id", "CASCADE", nullable=False)
+    from_column_id: Mapped[str | None] = _fk("columns.id", "SET NULL")
+    to_column_id: Mapped[str] = _fk("columns.id", "CASCADE", nullable=False)
+    from_segment: Mapped[str | None] = mapped_column(String(20))
+    to_segment: Mapped[str] = mapped_column(String(20), nullable=False)
+    moved_at: Mapped[str] = mapped_column(Instant, nullable=False)
+    moved_by: Mapped[str | None] = _fk("users.id", "SET NULL")
+    seconds_in_from_column: Mapped[int | None] = mapped_column(Integer)
+    note: Mapped[str | None] = mapped_column(Text)
+    is_backward: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    source: Mapped[str] = mapped_column(String(20), nullable=False, default="ui")
+
+
+# ---------------------------------------------------------------------------
+# Audit trail
+# ---------------------------------------------------------------------------
+
+
+class CardEvent(Base):
+    __tablename__ = "card_events"
+    __table_args__ = (
+        CheckConstraint(
+            "event_type IN ('created','moved','updated','blocked','unblocked',"
+            "'opened_envelope','archived','commented','task_added','task_completed')",
+            name="event_type",
+        ),
+        Index("idx_events_card", "card_id", "created_at"),
+        Index("idx_events_board_time", "board_id", "created_at"),
+        Index("idx_events_type", "event_type"),
+    )
+
+    id: Mapped[str] = _id()
+    card_id: Mapped[str] = _fk("cards.id", "CASCADE", nullable=False)
+    board_id: Mapped[str] = _fk("boards.id", "CASCADE", nullable=False)
+    actor_id: Mapped[str | None] = _fk("users.id", "SET NULL")
+    event_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    field: Mapped[str | None] = mapped_column(String(80))
+    old_value: Mapped[str | None] = mapped_column(Text)
+    new_value: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(Instant, nullable=False)
+
+
+# ---------------------------------------------------------------------------
+# Card detail: tasks, blockers, comments
+# ---------------------------------------------------------------------------
+
+
+class CardTask(Base):
+    __tablename__ = "card_tasks"
+    __table_args__ = (Index("idx_tasks_card", "card_id", "position"),)
+
+    id: Mapped[str] = _id()
+    card_id: Mapped[str] = _fk("cards.id", "CASCADE", nullable=False)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    is_done: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    assignee_id: Mapped[str | None] = _fk("users.id", "SET NULL")
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[str] = mapped_column(Instant, nullable=False)
+    completed_at: Mapped[str | None] = mapped_column(Instant)
+
+
+class Blocker(Base):
+    __tablename__ = "blockers"
+    __table_args__ = (
+        Index("idx_blockers_card", "card_id", "started_at"),
+        Index("idx_blockers_open", "ended_at"),
+    )
+
+    id: Mapped[str] = _id()
+    card_id: Mapped[str] = _fk("cards.id", "CASCADE", nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str | None] = mapped_column(String(80))
+    started_at: Mapped[str] = mapped_column(Instant, nullable=False)
+    ended_at: Mapped[str | None] = mapped_column(Instant)
+    created_by: Mapped[str | None] = _fk("users.id", "SET NULL")
+
+
+class Comment(Base):
+    __tablename__ = "comments"
+    __table_args__ = (Index("idx_comments_card", "card_id", "created_at"),)
+
+    id: Mapped[str] = _id()
+    card_id: Mapped[str] = _fk("cards.id", "CASCADE", nullable=False)
+    author_id: Mapped[str | None] = _fk("users.id", "SET NULL")
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(Instant, nullable=False)
+
+
+# ---------------------------------------------------------------------------
+# Commercial surface: flags, plans, workspace
+# ---------------------------------------------------------------------------
+
+
+class FeatureFlag(Base):
+    __tablename__ = "feature_flags"
+    __table_args__ = (
+        CheckConstraint("min_plan IN ('free','team','business','enterprise')", name="min_plan"),
+        Index("idx_flags_category", "category"),
+    )
+
+    key: Mapped[str] = mapped_column(String(60), primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    min_plan: Mapped[str] = mapped_column(String(20), nullable=False, default="free")
+    category: Mapped[str] = mapped_column(String(40), nullable=False, default="general")
+
+
+class Plan(Base):
+    __tablename__ = "plans"
+    __table_args__ = (Index("idx_plans_tier", "tier_order"),)
+
+    id: Mapped[str] = _id()
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    slug: Mapped[str] = mapped_column(String(40), nullable=False, unique=True)
+    price_month: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    price_year: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
+    tier_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    description: Mapped[str | None] = mapped_column(Text)
+    flags: Mapped[list[Any]] = mapped_column(Json, nullable=False, default=list)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class Workspace(Base):
+    __tablename__ = "workspace"
+    __table_args__ = (CheckConstraint("id = 'workspace'", name="singleton"),)
+
+    id: Mapped[str] = mapped_column(String(20), primary_key=True, default="workspace")
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    active_plan_id: Mapped[str | None] = _fk("plans.id", "SET NULL")
+    timezone: Mapped[str] = mapped_column(String(60), nullable=False, default="UTC")
+    updated_at: Mapped[str] = mapped_column(Instant, nullable=False)
+
+
+# ---------------------------------------------------------------------------
+# Simulator
+# ---------------------------------------------------------------------------
+
+
+class SimulationRun(Base):
+    __tablename__ = "simulation_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('monte_carlo_when','monte_carlo_how_many','wip_experiment',"
+            "'class_of_service_mix','replay')",
+            name="kind",
+        ),
+        Index("idx_runs_board", "board_id", "created_at"),
+        Index("idx_runs_kind", "kind"),
+    )
+
+    id: Mapped[str] = _id()
+    board_id: Mapped[str] = _fk("boards.id", "CASCADE", nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    kind: Mapped[str] = mapped_column(String(40), nullable=False)
+    params: Mapped[dict[str, Any]] = mapped_column(Json, nullable=False, default=dict)
+    results: Mapped[dict[str, Any]] = mapped_column(Json, nullable=False, default=dict)
+    created_at: Mapped[str] = mapped_column(Instant, nullable=False)
+    created_by: Mapped[str | None] = _fk("users.id", "SET NULL")
+
+
+# ---------------------------------------------------------------------------
+# Pampufa integration (NG8-NG14)
+# ---------------------------------------------------------------------------
+
+
+class ProductLink(Base):
+    """The project — and its board — that receives a product's providências (NG14)."""
+
+    __tablename__ = "product_links"
+
+    product_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    project_id: Mapped[str] = _fk("projects.id", "RESTRICT", nullable=False)
+    board_id: Mapped[str] = _fk("boards.id", "RESTRICT", nullable=False)
+    linked_at: Mapped[str] = mapped_column(Instant, nullable=False)
+    linked_by: Mapped[str | None] = _fk("users.id", "SET NULL")
+
+
+class ProductLinkHistory(Base):
+    """Every association and swap, append-only."""
+
+    __tablename__ = "product_link_history"
+    __table_args__ = (
+        CheckConstraint("action IN ('linked','unlinked')", name="action"),
+        Index("idx_link_history_product", "product_id", "at"),
+    )
+
+    id: Mapped[str] = _id()
+    product_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    project_id: Mapped[str] = _fk("projects.id", "RESTRICT", nullable=False)
+    board_id: Mapped[str] = _fk("boards.id", "RESTRICT", nullable=False)
+    action: Mapped[str] = mapped_column(String(10), nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text)
+    moved_cards: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    at: Mapped[str] = mapped_column(Instant, nullable=False)
+    by: Mapped[str | None] = _fk("users.id", "SET NULL")
+
+
+class ExternalRef(Base):
+    """A card that stands for something in another system — a Pampufa providência.
+
+    ``external_id`` is unique per source, which makes card creation idempotent; on a
+    project swap the reference moves to the card recreated on the new board.
+    """
+
+    __tablename__ = "external_refs"
+    __table_args__ = (
+        UniqueConstraint("source", "external_id"),
+        CheckConstraint(
+            "state IN ('open','resolved_at_origin','delivered','discarded')", name="state"
+        ),
+        Index("idx_external_refs_card", "card_id"),
+    )
+
+    id: Mapped[str] = _id()
+    card_id: Mapped[str] = _fk("cards.id", "CASCADE", nullable=False)
+    product_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    source: Mapped[str] = mapped_column(String(20), nullable=False, default="pampufa")
+    external_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    service: Mapped[str | None] = mapped_column(String(40))
+    kind: Mapped[str | None] = mapped_column(String(80))
+    url: Mapped[str | None] = mapped_column(Text)
+    state: Mapped[str] = mapped_column(String(20), nullable=False, default="open")
+    created_at: Mapped[str] = mapped_column(Instant, nullable=False)
+    resolved_at_origin: Mapped[str | None] = mapped_column(Instant)
+    closed_at: Mapped[str | None] = mapped_column(Instant)
+
+
+class WebhookOutbox(Base):
+    """Notifications to the Pampufa, written with the change and sent until confirmed."""
+
+    __tablename__ = "webhook_outbox"
+    __table_args__ = (Index("idx_webhook_pending", "delivered_at", "next_attempt_at"),)
+
+    id: Mapped[str] = _id()
+    event: Mapped[str] = mapped_column(String(60), nullable=False)
+    product_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(Json, nullable=False, default=dict)
+    created_at: Mapped[str] = mapped_column(Instant, nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[str] = mapped_column(Instant, nullable=False)
+    delivered_at: Mapped[str | None] = mapped_column(Instant)
+    last_error: Mapped[str | None] = mapped_column(Text)
+
+
+# ---------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------
+
+
+def as_dict(obj: Base | None) -> dict[str, Any] | None:
+    """The instance as the row dict the routers work with (``None`` passes through)."""
+    if obj is None:
+        return None
+    return {attr.key: getattr(obj, attr.key) for attr in obj.__mapper__.column_attrs}
 
 
 def to_bool(value: Any) -> bool:
-    """Coerce sqlite's ``0/1`` (or a JSON bool/string) to a real ``bool``."""
+    """Coerce ``0/1``, a JSON bool or a string to a real ``bool``."""
     if isinstance(value, bool):
         return value
     if value is None:
         return False
-    if isinstance(value, (int, float)):
+    if isinstance(value, int | float):
         return value != 0
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
@@ -71,10 +616,10 @@ def to_int(value: Any) -> int | None:
 
 
 def json_loads(value: Any, default: Any) -> Any:
-    """Parse a JSON text column, falling back to ``default`` on anything odd."""
+    """A JSON value as Python, falling back to ``default`` on anything odd."""
     if value is None or value == "":
         return default() if callable(default) else default
-    if isinstance(value, (list, dict)):
+    if isinstance(value, list | dict):
         return value
     try:
         parsed = json.loads(value)
@@ -86,434 +631,13 @@ def json_loads(value: Any, default: Any) -> Any:
 
 
 def json_dumps(value: Any) -> str:
-    """Serialise a JSON column value compactly and deterministically."""
+    """Serialise a value compactly and deterministically (audit trail, comparisons)."""
     if value is None:
         return "null"
     if isinstance(value, str):
-        # Already-serialised values pass through untouched when they parse.
         try:
             json.loads(value)
             return value
         except (ValueError, json.JSONDecodeError):
             return json.dumps(value)
     return json.dumps(value, separators=(",", ":"), default=str)
-
-
-# ---------------------------------------------------------------------------
-# base record
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class Record:
-    """Base for every table dataclass."""
-
-    TABLE: ClassVar[str] = ""
-    #: column name -> default value used when the stored JSON is unusable
-    JSON_FIELDS: ClassVar[dict[str, Any]] = {}
-    #: columns stored as INTEGER 0/1
-    BOOL_FIELDS: ClassVar[tuple[str, ...]] = ()
-    #: columns stored as INTEGER
-    INT_FIELDS: ClassVar[tuple[str, ...]] = ()
-
-    @classmethod
-    def column_names(cls) -> tuple[str, ...]:
-        """The table's column names, in declaration order."""
-        return tuple(f.name for f in dataclass_fields(cls))
-
-    @classmethod
-    def from_row(cls: type[T], row: dict[str, Any] | None) -> T | None:
-        """Build an instance from a sqlite row, ignoring unknown columns."""
-        if row is None:
-            return None
-        known = set(cls.column_names())
-        data: dict[str, Any] = {k: v for k, v in dict(row).items() if k in known}
-        for name in cls.BOOL_FIELDS:
-            if name in data:
-                data[name] = to_bool(data[name])
-        for name in cls.INT_FIELDS:
-            if name in data:
-                data[name] = to_int(data[name])
-        for name, default in cls.JSON_FIELDS.items():
-            if name in data:
-                data[name] = json_loads(data[name], default)
-        return cls(**data)  # type: ignore[arg-type]
-
-    def to_row(self) -> dict[str, Any]:
-        """Dict shaped for an INSERT/UPDATE: bools as 0/1, JSON as text."""
-        out: dict[str, Any] = {}
-        for f in dataclass_fields(self):
-            value = getattr(self, f.name)
-            if f.name in self.BOOL_FIELDS:
-                out[f.name] = 1 if to_bool(value) else 0
-            elif f.name in self.JSON_FIELDS:
-                out[f.name] = json_dumps(value)
-            else:
-                out[f.name] = value
-        return out
-
-    def to_dict(self) -> dict[str, Any]:
-        """JSON-friendly dict for API responses."""
-        out: dict[str, Any] = {}
-        for f in dataclass_fields(self):
-            value = getattr(self, f.name)
-            if f.name in self.BOOL_FIELDS:
-                out[f.name] = to_bool(value)
-            elif f.name in self.JSON_FIELDS:
-                out[f.name] = (
-                    value
-                    if isinstance(value, (list, dict))
-                    else json_loads(value, self.JSON_FIELDS[f.name])
-                )
-            else:
-                out[f.name] = value
-        return out
-
-    # -- SQL convenience ----------------------------------------------------
-
-    @classmethod
-    def insert_sql(cls) -> str:
-        """``INSERT INTO <table> (...) VALUES (?, ?, ...)`` for this record."""
-        cols = cls.column_names()
-        placeholders = ", ".join("?" for _ in cols)
-        return f"INSERT INTO {cls.TABLE} ({', '.join(cols)}) VALUES ({placeholders})"
-
-    def insert_params(self) -> list[Any]:
-        """Positional parameters matching :meth:`insert_sql`."""
-        row = self.to_row()
-        return [row[name] for name in self.column_names()]
-
-
-def rows_to(model: type[T], rows: Iterable[dict[str, Any]]) -> list[T]:
-    """Map a sequence of sqlite rows onto ``model``."""
-    out: list[T] = []
-    for row in rows:
-        built = model.from_row(row)
-        if built is not None:
-            out.append(built)
-    return out
-
-
-# ---------------------------------------------------------------------------
-# tables
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class User(Record):
-    TABLE: ClassVar[str] = "users"
-    BOOL_FIELDS: ClassVar[tuple[str, ...]] = ("is_active",)
-
-    id: str = ""
-    email: str = ""
-    name: str = ""
-    password_hash: str = ""
-    role: str = "viewer"
-    is_active: bool = True
-    created_at: str = ""
-    last_login_at: str | None = None
-
-    def public(self) -> dict[str, Any]:
-        """The user without the password hash — what the API is allowed to emit."""
-        data = self.to_dict()
-        data.pop("password_hash", None)
-        return data
-
-
-@dataclass
-class Board(Record):
-    TABLE: ClassVar[str] = "boards"
-    BOOL_FIELDS: ClassVar[tuple[str, ...]] = (
-        "count_envelope_in_metrics",
-        "confirm_moves",
-        "archived",
-    )
-    INT_FIELDS: ClassVar[tuple[str, ...]] = (
-        "wip_min",
-        "wip_max",
-        "sle_days",
-        "sle_percentile",
-    )
-
-    id: str = ""
-    name: str = ""
-    slug: str = ""
-    description: str | None = None
-    kind: str = "operational"
-    source_board_id: str | None = None
-    count_envelope_in_metrics: bool = False
-    confirm_moves: bool = True
-    wip_min: int | None = None
-    wip_max: int | None = None
-    sle_days: int | None = None
-    sle_percentile: int | None = None
-    created_at: str = ""
-    archived: bool = False
-
-
-@dataclass
-class ColumnGroup(Record):
-    TABLE: ClassVar[str] = "column_groups"
-    INT_FIELDS: ClassVar[tuple[str, ...]] = ("position", "wip_min", "wip_max")
-
-    id: str = ""
-    board_id: str = ""
-    name: str = ""
-    position: int = 0
-    wip_min: int | None = None
-    wip_max: int | None = None
-    color: str | None = None
-
-
-@dataclass
-class Column(Record):
-    TABLE: ClassVar[str] = "columns"
-    BOOL_FIELDS: ClassVar[tuple[str, ...]] = ("is_commitment_point", "is_delivery_point")
-    INT_FIELDS: ClassVar[tuple[str, ...]] = ("position", "wip_min", "wip_max")
-
-    id: str = ""
-    board_id: str = ""
-    group_id: str | None = None
-    name: str = ""
-    position: int = 0
-    segment: str = "upstream"
-    kind: str = "queue"
-    wip_min: int | None = None
-    wip_max: int | None = None
-    is_commitment_point: bool = False
-    is_delivery_point: bool = False
-    color: str | None = None
-    description: str | None = None
-
-
-@dataclass
-class Project(Record):
-    TABLE: ClassVar[str] = "projects"
-    BOOL_FIELDS: ClassVar[tuple[str, ...]] = ("archived",)
-
-    id: str = ""
-    name: str = ""
-    key: str = ""
-    color: str | None = None
-    description: str | None = None
-    status: str = "active"
-    owner_id: str | None = None
-    started_at: str | None = None
-    target_date: str | None = None
-    created_at: str = ""
-    archived: bool = False
-
-
-@dataclass
-class Card(Record):
-    TABLE: ClassVar[str] = "cards"
-    BOOL_FIELDS: ClassVar[tuple[str, ...]] = ("is_blocked", "archived")
-    INT_FIELDS: ClassVar[tuple[str, ...]] = ("position",)
-    JSON_FIELDS: ClassVar[dict[str, Any]] = {"tags": list, "custom_fields": dict}
-
-    id: str = ""
-    board_id: str = ""
-    column_id: str = ""
-    project_id: str | None = None
-    key: str = ""
-    title: str = ""
-    description: str | None = None
-    service_class: str = "standard"
-    assignee_id: str | None = None
-    requester: str | None = None
-    size: str | None = None
-    value_area: str = "feature"
-    demand_type: str = "value"
-    due_date: str | None = None
-    position: int = 0
-    envelope_state: str = "opened"
-    is_blocked: bool = False
-    tags: list[str] = field(default_factory=list)
-    custom_fields: dict[str, Any] = field(default_factory=dict)
-    created_at: str = ""
-    opened_at: str | None = None
-    committed_at: str | None = None
-    delivered_at: str | None = None
-    archived: bool = False
-    created_by: str | None = None
-
-    @property
-    def is_in_flight(self) -> bool:
-        """Committed but not yet delivered — the WIP definition in SPEC §7.1."""
-        return bool(self.committed_at) and not self.delivered_at
-
-
-@dataclass
-class CardMovement(Record):
-    TABLE: ClassVar[str] = "card_movements"
-    BOOL_FIELDS: ClassVar[tuple[str, ...]] = ("is_backward",)
-    INT_FIELDS: ClassVar[tuple[str, ...]] = ("seconds_in_from_column",)
-
-    id: str = ""
-    card_id: str = ""
-    board_id: str = ""
-    from_column_id: str | None = None
-    to_column_id: str = ""
-    from_segment: str | None = None
-    to_segment: str = "upstream"
-    moved_at: str = ""
-    moved_by: str | None = None
-    seconds_in_from_column: int | None = None
-    note: str | None = None
-    is_backward: bool = False
-    source: str = "ui"
-
-
-@dataclass
-class CardEvent(Record):
-    TABLE: ClassVar[str] = "card_events"
-
-    id: str = ""
-    card_id: str = ""
-    board_id: str = ""
-    actor_id: str | None = None
-    event_type: str = "updated"
-    field: str | None = None
-    old_value: str | None = None
-    new_value: str | None = None
-    created_at: str = ""
-
-
-@dataclass
-class CardTask(Record):
-    TABLE: ClassVar[str] = "card_tasks"
-    BOOL_FIELDS: ClassVar[tuple[str, ...]] = ("is_done",)
-    INT_FIELDS: ClassVar[tuple[str, ...]] = ("position",)
-
-    id: str = ""
-    card_id: str = ""
-    title: str = ""
-    is_done: bool = False
-    assignee_id: str | None = None
-    position: int = 0
-    created_at: str = ""
-    completed_at: str | None = None
-
-
-@dataclass
-class Blocker(Record):
-    TABLE: ClassVar[str] = "blockers"
-
-    id: str = ""
-    card_id: str = ""
-    reason: str = ""
-    category: str | None = None
-    started_at: str = ""
-    ended_at: str | None = None
-    created_by: str | None = None
-
-    @property
-    def is_open(self) -> bool:
-        """A blocker with no ``ended_at`` is still costing the card time."""
-        return not self.ended_at
-
-
-@dataclass
-class Comment(Record):
-    TABLE: ClassVar[str] = "comments"
-
-    id: str = ""
-    card_id: str = ""
-    author_id: str | None = None
-    body: str = ""
-    created_at: str = ""
-
-
-@dataclass
-class FeatureFlag(Record):
-    TABLE: ClassVar[str] = "feature_flags"
-    BOOL_FIELDS: ClassVar[tuple[str, ...]] = ("is_enabled",)
-
-    key: str = ""
-    name: str = ""
-    description: str | None = None
-    is_enabled: bool = True
-    min_plan: str = "free"
-    category: str = "general"
-
-
-@dataclass
-class Plan(Record):
-    TABLE: ClassVar[str] = "plans"
-    BOOL_FIELDS: ClassVar[tuple[str, ...]] = ("is_active",)
-    INT_FIELDS: ClassVar[tuple[str, ...]] = ("tier_order",)
-    JSON_FIELDS: ClassVar[dict[str, Any]] = {"flags": list}
-
-    id: str = ""
-    name: str = ""
-    slug: str = ""
-    price_month: float = 0.0
-    price_year: float = 0.0
-    currency: str = "USD"
-    tier_order: int = 0
-    description: str | None = None
-    flags: list[str] = field(default_factory=list)
-    is_active: bool = True
-
-
-@dataclass
-class Workspace(Record):
-    TABLE: ClassVar[str] = "workspace"
-
-    id: str = "workspace"
-    name: str = "Nagare"
-    active_plan_id: str | None = None
-    timezone: str = "UTC"
-    updated_at: str = ""
-
-
-@dataclass
-class SimulationRun(Record):
-    TABLE: ClassVar[str] = "simulation_runs"
-    JSON_FIELDS: ClassVar[dict[str, Any]] = {"params": dict, "results": dict}
-
-    id: str = ""
-    board_id: str = ""
-    name: str = ""
-    kind: str = "monte_carlo_when"
-    params: dict[str, Any] = field(default_factory=dict)
-    results: dict[str, Any] = field(default_factory=dict)
-    created_at: str = ""
-    created_by: str | None = None
-
-
-MODEL_BY_TABLE: dict[str, type[Record]] = {
-    model.TABLE: model
-    for model in (
-        User,
-        Board,
-        ColumnGroup,
-        Column,
-        Project,
-        Card,
-        CardMovement,
-        CardEvent,
-        CardTask,
-        Blocker,
-        Comment,
-        FeatureFlag,
-        Plan,
-        Workspace,
-        SimulationRun,
-    )
-}
-
-
-def insert(db: Any, record: Record) -> Record:
-    """Insert a record through any object exposing ``ex(sql, *params)``."""
-    db.ex(type(record).insert_sql(), record.insert_params())
-    return record
-
-
-def insert_many(db: Any, records: Sequence[Record]) -> int:
-    """Bulk-insert records of a single type; returns the number written."""
-    if not records:
-        return 0
-    model = type(records[0])
-    db.exmany(model.insert_sql(), [r.insert_params() for r in records])
-    return len(records)

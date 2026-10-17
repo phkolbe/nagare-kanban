@@ -21,12 +21,13 @@ Two board shapes cover everything SPEC §6 asks for:
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
-from typing import Any, Iterator
+from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 
-from backend.app.db import Database
+from sqlhelper import Database
 
 API = "/api/v1"
 
@@ -186,7 +187,7 @@ def test_forced_backward_move_by_master_records_is_backward_and_an_audit_event(
     assert body["card"]["column_id"] == backlog
 
     stored = db.q1(
-        "SELECT * FROM card_movements WHERE card_id = ? ORDER BY moved_at DESC, rowid DESC",
+        "SELECT * FROM card_movements WHERE card_id = ? ORDER BY moved_at DESC, id DESC",
         card["id"],
     )
     assert bool(stored["is_backward"]) is True
@@ -263,9 +264,7 @@ def test_group_wip_limit_rejects_the_move_naming_the_group_policy(
     assert error["details"]["max"] == 2
 
 
-def test_flow_wip_limit_rejects_the_move_naming_the_flow_policy(
-    client, master, flow_board
-) -> None:
+def test_flow_wip_limit_rejects_the_move_naming_the_flow_policy(client, master, flow_board) -> None:
     backlog = col_id(flow_board, "Backlog")
     in_progress = col_id(flow_board, "In Progress")
     patched = client.patch(f"{API}/boards/{flow_board['id']}", json={"wip_max": 1}, headers=master)
@@ -380,7 +379,7 @@ def test_seconds_in_from_column_matches_the_backdated_history(
     card = make_card(client, master, flow_board["id"], backlog)
 
     # 1h 1m 1s ago: a duration humanize_seconds renders unambiguously as "1h 1m".
-    backdated = (datetime.now(timezone.utc) - timedelta(hours=1, minutes=1, seconds=1)).strftime(
+    backdated = (datetime.now(UTC) - timedelta(hours=1, minutes=1, seconds=1)).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
     db.ex(
@@ -404,9 +403,7 @@ def test_seconds_in_from_column_matches_the_backdated_history(
 # ---------------------------------------------------------------------------
 
 
-def test_sealed_envelope_card_cannot_be_moved_until_opened(
-    client, master, envelope_board
-) -> None:
+def test_sealed_envelope_card_cannot_be_moved_until_opened(client, master, envelope_board) -> None:
     envelope_col = col_id(envelope_board, "Envelope")
     ideas_col = col_id(envelope_board, "Ideas")
     sealed = client.post(
@@ -453,7 +450,7 @@ def test_patch_writes_exactly_one_card_event_per_changed_field(
 
     events = db.q(
         "SELECT * FROM card_events WHERE card_id = ? AND event_type = 'updated' "
-        "ORDER BY created_at, rowid",
+        "ORDER BY created_at, id",
         card["id"],
     )
     assert {e["field"] for e in events} == {"title", "size", "service_class"}
@@ -585,9 +582,7 @@ def test_history_orders_entries_and_reports_touch_and_wait_totals(
     assert move(client, master, card["id"], review).status_code == 200
     assert move(client, master, card["id"], done).status_code == 200
 
-    moves = db.q(
-        "SELECT * FROM card_movements WHERE card_id = ? ORDER BY moved_at, rowid", card["id"]
-    )
+    moves = db.q("SELECT * FROM card_movements WHERE card_id = ? ORDER BY moved_at, id", card["id"])
     assert len(moves) == 4
     # Four moves executed back-to-back can legitimately land in the same
     # wall-clock second (moved_at has one-second resolution); the merged
@@ -595,7 +590,7 @@ def test_history_orders_entries_and_reports_touch_and_wait_totals(
     # entries fall back to comparing ids, which is not chronological. Spacing
     # the recorded timestamps a second apart removes that ambiguity so this
     # test pins ordering rather than id-shuffle luck.
-    base = datetime.now(timezone.utc) - timedelta(hours=2)
+    base = datetime.now(UTC) - timedelta(hours=2)
     for index, row in enumerate(moves):
         stamp = (base + timedelta(seconds=index)).strftime("%Y-%m-%dT%H:%M:%SZ")
         db.ex("UPDATE card_movements SET moved_at = ? WHERE id = ?", stamp, row["id"])
@@ -646,9 +641,7 @@ def test_history_includes_a_forced_backward_move_in_backward_moves_total(
 
     history = client.get(f"{API}/cards/{card['id']}/history", headers=master).json()
     assert history["totals"]["backward_moves"] == 1
-    backward_entries = [
-        e for e in history["timeline"] if e.get("is_backward")
-    ]
+    backward_entries = [e for e in history["timeline"] if e.get("is_backward")]
     assert len(backward_entries) == 1
 
 
@@ -681,9 +674,12 @@ def test_list_cards_supports_every_documented_filter(
         due_date="2026-09-01T00:00:00Z",
     )
     assert move(client, master, tagged["id"], in_progress).status_code == 200
-    assert client.post(
-        f"{API}/cards/{tagged['id']}/block", json={"reason": "blocked for test"}, headers=master
-    ).status_code == 201
+    assert (
+        client.post(
+            f"{API}/cards/{tagged['id']}/block", json={"reason": "blocked for test"}, headers=master
+        ).status_code
+        == 201
+    )
 
     def search(**params: Any) -> set[str]:
         response = client.get(
