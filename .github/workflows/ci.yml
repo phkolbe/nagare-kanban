@@ -3,7 +3,7 @@
 #
 # O pampufa-sdk e privado: o secret PAMPUFA_SDK_TOKEN (token de LEITURA so do
 # pampufa-sdk) entra no git como credencial apenas para aquele repositorio. Como criar:
-# cofre Obsidian pampufa-plataforma/guia-instalacao-docker-e-ci.md.
+# cofre Obsidian grupo-sr/plataforma/guias/instalacao-docker-e-ci.md.
 #
 # checkout com `persist-credentials: false`: senao o checkout grava no git um cabecalho
 # com o GITHUB_TOKEN (que so enxerga ESTE repositorio), e ele vence a credencial do

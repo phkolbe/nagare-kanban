@@ -19,7 +19,7 @@ login. The screens are **React 18 + TypeScript + Vite + TanStack Query** with ha
 SVG charts (`web/`), in Portuguese and English. One build serves two modes: the
 standalone Nagare at its own root, with its local login, and the Tarefas module of every
 product of the Pampufa platform, with the platform's single sign-on (phases N1–N3, see
-`obsidian: pampufa-plataforma/integracao-nagare.md`).
+`obsidian: grupo-sr/plataforma/decisoes/integracao-nagare.md`).
 
 ---
 

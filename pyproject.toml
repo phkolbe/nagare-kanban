@@ -8,7 +8,7 @@ license = { text = "Proprietario" }
 authors = [{ name = "Paulo Kolbe", email = "paulo.kolbe@gmail.com" }]
 
 # O pampufa-sdk entra so como biblioteca (validacao do token pela JWKS e uuid7);
-# o Nagare nao e um servico da Pampufa (decisao NG1, cofre pampufa-plataforma/integracao-nagare.md).
+# o Nagare nao e um servico da Pampufa (decisao NG1, cofre grupo-sr/plataforma/decisoes/integracao-nagare.md).
 dependencies = [
     "pampufa-sdk",
     "fastapi>=0.118",
