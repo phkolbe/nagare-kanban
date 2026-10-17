@@ -215,7 +215,9 @@ def install(app: Any) -> None:
 
         for instrumentor in (HTTPXClientInstrumentor(), SQLAlchemyInstrumentor()):
             if not instrumentor.is_instrumented_by_opentelemetry:
-                instrumentor.instrument(tracer_provider=_provider)
+                # skip_dep_check: the instrumentation declares ``sqlalchemy < 2.1`` and
+                # would refuse the 2.1 in use; the engine events it wraps are the same.
+                instrumentor.instrument(tracer_provider=_provider, skip_dep_check=True)
         log.info("OpenTelemetry on — exporting to %s", endpoint)
 
     FastAPIInstrumentor.instrument_app(
