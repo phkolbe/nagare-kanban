@@ -1196,6 +1196,9 @@ async def _board_out(
     """Board row plus (optionally) its groups, columns and card count."""
     out = dict(board)
     out["card_count"] = await _card_count(s, board["id"])
+    # What the screens need to offer only the edits the lock allows (NG13, N2).
+    out["product_board"] = is_product_board(board)
+    out["flow_locked"] = await flow_locked(s, board)
     if structure:
         out["columns"] = await canonical_columns(s, board["id"])
         out["groups"] = [

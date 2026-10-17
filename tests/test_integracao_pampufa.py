@@ -714,3 +714,61 @@ def test_the_consolidated_board_shows_each_product_once(client, pampufa) -> None
     own = client.get(f"{API}/integration/overview", headers=headers(leitor)).json()
     assert [lane["product_id"] for lane in own["products"]] == [PRODUCT]
     assert theirs["id"] not in {c["id"] for c in own["products"][0]["cards"]}
+
+
+def test_the_board_says_whether_its_flow_is_locked(client, pampufa) -> None:
+    """N2: the screens offer only the edits the lock allows (NG13)."""
+    admin = pampufa.person({PRODUCT: ["nagare.admin"]})
+    board = client.post(
+        f"{API}/boards",
+        json={"name": f"Trava {uuid.uuid4().hex[:6]}", "template": "providencias"},
+        headers=headers(admin),
+    ).json()
+    before = client.get(f"{API}/boards/{board['id']}", headers=headers(admin)).json()
+    assert (before["product_board"], before["flow_locked"], before["read_only"]) == (
+        True,
+        False,
+        False,
+    )
+    assert before["product_id"] == PRODUCT
+    client.post(
+        f"{API}/cards", json={"board_id": board["id"], "title": "Um"}, headers=headers(admin)
+    )
+    after = client.get(f"{API}/boards/{board['id']}", headers=headers(admin)).json()
+    assert after["flow_locked"] is True
+
+
+def test_platform_cards_open_in_the_tarefas_module(monkeypatch) -> None:
+    from backend.app.config import settings
+    from backend.app.integration import card_url
+
+    card = {"id": "c1", "board_id": "b1", "product_id": PRODUCT}
+    monkeypatch.setattr(settings, "screens_url", "http://gw/grupo-sr")
+    assert card_url(card) == "http://gw/grupo-sr/sr-adv/tarefas/quadro/b1?cartao=c1"
+    assert card_url({**card, "product_id": "nagare"}).endswith("/#/board/b1")
+    monkeypatch.setattr(settings, "screens_url", "")
+    assert card_url(card).endswith("/#/board/b1")
+
+
+def test_the_tarefas_screens_are_served_under_the_platform_path(
+    client, tmp_path, monkeypatch
+) -> None:
+    """N2: the gateway keeps /grupo-sr/; the Nagare answers the build and the screens."""
+    from backend.app.config import settings
+
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "index.html").write_text("<div id=root></div>", encoding="utf-8")
+    (tmp_path / "assets" / "app.js").write_text("console.log(1)", encoding="utf-8")
+    monkeypatch.setattr(settings, "screens_dir", tmp_path)
+
+    for path in (
+        "/grupo-sr/sr-adv/tarefas",
+        "/grupo-sr/sr-adv/tarefas/quadro/x",
+        "/grupo-sr/pampufa/tarefas",
+    ):
+        page = client.get(path)
+        assert page.status_code == 200 and "root" in page.text, path
+    asset = client.get("/grupo-sr/_nagare/assets/app.js")
+    assert asset.status_code == 200 and "javascript" in asset.headers["content-type"]
+    assert client.get("/grupo-sr/_nagare/../pyproject.toml").status_code == 404
+    assert client.get("/grupo-sr/sr-adv/financeiro").status_code == 404
