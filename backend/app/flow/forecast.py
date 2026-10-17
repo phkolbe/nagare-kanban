@@ -1323,7 +1323,9 @@ def simulate_flow(
                 flow_wip -= 1
             return
         cols[index].append(item)
-        if previous is None or previous < commit_index <= index:
+        # Only the commitment point puts work in the flow: an arrival upstream of
+        # it is still an option and must not hold a slot of the whole-flow limit.
+        if index >= commit_index and (previous is None or previous < commit_index):
             flow_wip += 1
             flow_wip_peak = max(flow_wip_peak, flow_wip)
         if spec.is_activity:
@@ -1909,7 +1911,12 @@ def _wip_verdict(rows: Sequence[Mapping[str, Any]]) -> str:
     usable = [row for row in rows if row.get("lead_time_avg") is not None]
     if len(usable) < 2:
         return _("Not enough delivered work to compare these policies.")
-    loosest = max(usable, key=lambda row: row.get("avg_wip") or 0.0)
+    # The reference is the row without limits; a custom experiment without one
+    # falls back to its loosest row (the highest average WIP).
+    loosest = next(
+        (row for row in usable if (row.get("policy") or {}).get("unlimited")),
+        max(usable, key=lambda row: row.get("avg_wip") or 0.0),
+    )
     best_throughput = max((row.get("throughput_per_week") or 0.0) for row in usable)
     # The best policy is the one with the shortest lead time that still keeps
     # throughput within 5% of the best any policy achieved. Anything below that
@@ -1922,8 +1929,11 @@ def _wip_verdict(rows: Sequence[Mapping[str, Any]]) -> str:
         row for row in usable if (row.get("throughput_per_week") or 0.0) < best_throughput * 0.95
     ]
 
-    parts: list[str] = []
     lead_drop = _pct_change(winner.get("lead_time_p85"), loosest.get("lead_time_p85"))
+    if winner is loosest or lead_drop is None or lead_drop >= 0:
+        return _wip_verdict_no_gain(loosest, starved)
+
+    parts: list[str] = []
     wip_drop = _pct_change(winner.get("avg_wip"), loosest.get("avg_wip"))
     throughput_delta = _pct_change(
         winner.get("throughput_per_week"), loosest.get("throughput_per_week")
@@ -1990,6 +2000,32 @@ def _wip_verdict(rows: Sequence[Mapping[str, Any]]) -> str:
                 change=num(customer_change, "+.1f"),
             )
         )
+    return " ".join(parts)
+
+
+def _wip_verdict_no_gain(reference: Mapping[str, Any], starved: Sequence[Mapping[str, Any]]) -> str:
+    """No limit bought a shorter lead time: say so instead of comparing a row with itself."""
+    parts = [
+        _(
+            "With this demand no WIP limit shortened the 85th-percentile system lead time "
+            "without costing throughput: “{reference}” already finishes in {lead} days at "
+            "{throughput} items/week. The board has slack, so the limits make no difference here.",
+            reference=reference["name"],
+            lead=num(reference.get("lead_time_p85")),
+            throughput=num(reference.get("throughput_per_week")),
+        )
+    ]
+    if starved:
+        worst = min(starved, key=lambda row: row.get("throughput_per_week") or 0.0)
+        parts.append(
+            _(
+                "Tighter limits only starve it: “{policy}” cut throughput to {throughput} "
+                "items/week.",
+                policy=worst["name"],
+                throughput=num(worst.get("throughput_per_week")),
+            )
+        )
+    parts.append(_("Keep the current policy and test again with more arrivals per week."))
     return " ".join(parts)
 
 

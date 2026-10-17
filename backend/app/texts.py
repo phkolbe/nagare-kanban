@@ -1029,6 +1029,22 @@ PT: dict[str, str] = {
         "limites agora estão abaixo da capacidade do time e o quadro está sufocado."
     ),
     (
+        "With this demand no WIP limit shortened the 85th-percentile system lead time without "
+        "costing throughput: “{reference}” already finishes in {lead} days at {throughput} "
+        "items/week. The board has slack, so the limits make no difference here."
+    ): (
+        "Com essa demanda, nenhum limite de WIP encurtou o lead time do sistema no percentil 85 "
+        "sem custar vazão: “{reference}” já termina em {lead} dias, com {throughput} "
+        "itens/semana. O quadro tem folga, então os limites não fazem diferença aqui."
+    ),
+    "Tighter limits only starve it: “{policy}” cut throughput to {throughput} items/week.": (
+        "Limites mais apertados só o sufocam: “{policy}” derrubou a vazão para {throughput} "
+        "itens/semana."
+    ),
+    "Keep the current policy and test again with more arrivals per week.": (
+        "Mantenha a política atual e teste de novo com mais chegadas por semana."
+    ),
+    (
         "Past that point the trade turns: “{policy}” cut throughput to {throughput} items/week "
         "— the limits are now below the team's capacity and the board is starving."
     ): (
