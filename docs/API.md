@@ -203,6 +203,7 @@ Found by searching every `code=` / `Conflict(...)` / `ApiError(...)` in `backend
 | 400 | `unknown_flag` / `plan_inactive` | `flags.py` | Plan names an unknown flag; activating a retired plan |
 | 400 | `unknown_role` | `users.py` | `?role=` is not one of the six roles |
 | 400 | `invalid_service_class` | `integration.py` | `classe_servico` of a providência is not a class of service |
+| 400 | `refresh_through_pampufa` | `auth.py` | `POST /auth/refresh` with a Pampufa token: the Pampufa renews it |
 | 400 | `not_a_simulator_board` | `simulator.py` | Write to a non-simulator board through `/simulator/*` |
 | 400 | `invalid_simulation_params` / `simulation_failed` / `compare_failed` | `simulator.py` | Missing/invalid run parameter; engine refused the input; comparison impossible |
 | 401 | `missing_token` | `deps.py` | No `Authorization: Bearer` |
@@ -220,6 +221,7 @@ Found by searching every `code=` / `Conflict(...)` / `ApiError(...)` in `backend
 | 403 | `plan_change_forbidden` | `flags.py` | Non-master switching the active plan |
 | 403 | `comment_not_yours` | `cards.py` | Editing someone else's comment (non-admin) |
 | 403 | `system_has_no_preferences` | `auth.py` | `PATCH /auth/me` by a service identity |
+| 403 | `standalone_only` | `deps.require_standalone` | Users, flags, plans, workspace or simulator called with a Pampufa token (§5, §6, §12) |
 | 404 | `board_not_found`, `column_not_found`, `group_not_found`, `card_not_found`, `project_not_found`, `user_not_found`, `task_not_found`, `comment_not_found`, `flag_not_found`, `plan_not_found`, `run_not_found`, `providencia_not_found` | throughout | Lookups; boards, cards and projects also accept their human key (slug, `NGR-104`, `NGR`) |
 | 404 | `not_found` | `main.py` catch-all | No API route for that method and path |
 | 405 | `method_not_allowed` | Starlette | Wrong verb on a real path |
@@ -236,6 +238,7 @@ Found by searching every `code=` / `Conflict(...)` / `ApiError(...)` in `backend
 | 409 | `commitment_point_is_derived` / `delivery_point_is_derived` | `boards.py` | Derived flags set directly |
 | 409 | `no_open_column` / `no_operational_board` / `board_has_no_columns` | `projects.py`, `integration.py` | Structural precondition missing |
 | 409 | `board_not_linkable` / `already_linked` | `integration.py` | Flow swap preconditions (§14.4) |
+| 409 | `providencia_in_other_product` | `integration.py` | The `providencia_id` already has a card in another product (§14.2) |
 | 409 | `email_taken`, `last_master_protected`, `self_role_change_blocked`, `self_deactivation_blocked` | `users.py` | User guardrails |
 | 409 | `project_key_taken` | `projects.py` | Project key in use in this product |
 | 409 | `plan_slug_taken` / `active_plan_locked` | `flags.py` | Plan conflicts |
@@ -330,7 +333,7 @@ every product (NG15: the Grupo SR runs on enterprise with everything on).
 | Method & path | RBAC | Notes |
 |---|---|---|
 | `POST /auth/login` | public | `{email, password}` → `TokenResponse` (§1.1) |
-| `POST /auth/refresh` | any valid token | Re-mints a **local** token from the database row; refuses `system` |
+| `POST /auth/refresh` | local token | Re-mints a **local** token from the database row; refuses `system`; a Pampufa token answers `400 refresh_through_pampufa` (the platform renews its own) |
 | `GET /auth/me` | any valid token | Profile, capability matrix, effective flags, locale, way in, product |
 | `PATCH /auth/me` | any valid token except `system` | `{locale: "pt-BR" \| "en" \| null}` — the person's language |
 | `GET /auth/capabilities` | any valid token | `{capability: bool}` for the caller's role |
@@ -374,8 +377,11 @@ sentences, Monte Carlo and simulator verdicts, run names — come in **pt-BR or 
 
 ## 5. Users (ADMIN)
 
-Writes need `manage_users` (`master`, `administrator`); reads are open to every signed-in
-identity because assignee pickers resolve names.
+**Standalone Nagare only:** with a Pampufa token every route here answers
+`403 standalone_only` (inside the platform, people and roles are the Pampufa's, and the
+users table is not split by product; decision N3-c). Writes need `manage_users`
+(`master`, `administrator`); reads are open to every local identity because assignee
+pickers resolve names.
 
 | Method & path | Query / body | RBAC | Notes |
 |---|---|---|---|
@@ -396,6 +402,9 @@ Pampufa are created here on first sight (§1.2), without a password.
 ---
 
 ## 6. Flags, plans & workspace (ADMIN)
+
+**Standalone Nagare only**, like §5: a Pampufa token answers `403 standalone_only`. Inside
+the platform the shell reads the effective flags from `GET /auth/me`.
 
 | Method & path | Query / body | RBAC | Notes |
 |---|---|---|---|
@@ -627,7 +636,9 @@ to **the Nagare simulator** instead of a screen of the Tarefas module, which has
 ## 12. Simulator (SIM)
 
 Router `backend/app/routers/simulator.py`, the HTTP face of
-`backend/app/flow/forecast.py`. Every route needs the `simulator` flag (business) and
+`backend/app/flow/forecast.py`. **Standalone Nagare only** (decision A9-c): a Pampufa
+token answers `403 standalone_only`; runs are also read only from boards of the current
+product. Every route needs the `simulator` flag (business) and
 the `simulator_boards` capability (`master`, `administrator`, `simulator`); the two
 Monte Carlo kinds also need `monte_carlo`. The screens offer the simulator only on the
 **standalone Nagare** (:8770); the Tarefas module inside the Pampufa has no simulator
@@ -686,7 +697,7 @@ no `X-Produto`, so it works in the standalone product (`nagare`).
 | `create_demand` | `POST /projects/{id}/demands` | |
 | `get_metrics_summary` | `GET /boards/{id}/metrics/summary` | |
 | `get_kmm_status` | `GET /boards/{id}/metrics/kmm` | |
-| `run_forecast` | `POST /simulator/runs` | Works: `kind = monte_carlo_when` with `items` (sent as `backlog_size`), or `monte_carlo_how_many` with `days`. Needs a role with `simulator_boards` (master, administrator, simulator) and the `simulator` + `monte_carlo` flags. See §15 for the `weeks` / `target_date` horizons |
+| `run_forecast` | `POST /simulator/runs` | Works: `kind = monte_carlo_when` with `items` (sent as `backlog_size`), or `monte_carlo_how_many` with `days`, `weeks` (× 7) or `target_date` (days from `start_date`, default today), all sent as `days`. Needs a role with `simulator_boards` (master, administrator, simulator) and the `simulator` + `monte_carlo` flags. See §15 for the `weeks` / `target_date` horizons |
 
 REST errors become tool errors prefixed with the code (`[wip_limit_exceeded] ...`) plus a
 canned `Hint:` for the common ones (`_HINTS` in the file). Card writes are attributed to
@@ -861,25 +872,15 @@ its history and metrics stay. Each link and unlink is kept in `history`
 
 Things an integrator should know, found while writing this document from the code.
 
-1. **`feature_not_available` does not exist.** The backend only raises
-   `feature_disabled` and `plan_upgrade_required`; the MCP `_HINTS` map and
-   `tests/test_auth_rbac.py` still list `feature_not_available` defensively.
-2. **`interactive_login_forbidden` is unreachable.** `deps.assert_can_login` raises it
-   but has no caller; the login path raises `interactive_login_denied`.
-3. **The `main.py` catch-all 404 is the bare envelope.** "No API route for ..." answers
-   `{"error": {...}}` without `title`/`status`/`codigo`, unlike every other error.
-4. **MCP `run_forecast` horizons.** The tool accepts `weeks` and `target_date` for
-   `monte_carlo_how_many` and passes them through, but the API reads only `days`; those
-   two spellings answer `400 invalid_simulation_params`. `days` works.
-5. **Workspace-wide data under product roles.** Users, flags, plans and the workspace
-   have no `product_id`. A `nagare.admin` of one product (administrator there) can
-   therefore use the `/users` writes and `PATCH /workspace` (name, timezone) on the
-   global rows. Simulation runs (`GET /simulator/runs`, `/runs/{id}`, `/compare`) are
-   read without a product filter.
-6. **`POST /auth/refresh` with a Pampufa token** mints a *local* HS256 token from the
-   user's database row (role `viewer` for people created through the Pampufa, product
-   `nagare`); the platform renews its own token instead.
-7. **Additive routes beyond SPEC §5**: `GET /boards/templates`, `GET /auth/capabilities`,
+1. **Fixed on 17/10/2026** (found while writing this document): the dead codes
+   `feature_not_available` and `interactive_login_forbidden` are gone; the catch-all
+   404 carries `title`/`status`/`codigo` like every other error; MCP `run_forecast`
+   turns `weeks` and `target_date` into the `days` the API reads; users, flags, plans,
+   the workspace and the simulator answer `403 standalone_only` to a Pampufa token
+   (those rows have no `product_id`); a `providencia_id` already carded in another
+   product answers `409 providencia_in_other_product`; `POST /auth/refresh` no longer
+   trades a Pampufa token for a local one.
+2. **Additive routes beyond SPEC §5**: `GET /boards/templates`, `GET /auth/capabilities`,
    `PATCH /auth/me`, `GET /flags/catalogue`, `GET /cards/{id}/tasks`,
    `GET /cards/{id}/movements`, `GET /cards/{id}/events`, `PATCH`/`DELETE
    /comments/{id}`, `POST /columns/{id}/drain`, `DELETE /boards/{id}?hard=`, the
