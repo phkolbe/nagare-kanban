@@ -81,6 +81,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Iterable
+from datetime import date
 from typing import Any
 
 SERVER_NAME = "nagare-kanban"
@@ -328,6 +329,7 @@ _HINTS: dict[str, str] = {
     "unauthorized": "The token is missing or expired. Set NAGARE_TOKEN or NAGARE_EMAIL/NAGARE_PASSWORD.",
     "invalid_token": "The token is malformed or signed with a different secret.",
     "token_expired": "The token expired; restart the MCP server or supply a fresh NAGARE_TOKEN.",
+    "standalone_only": "This tool needs the standalone Nagare login, not a Pampufa token.",
     "interactive_login_denied": "The system identity cannot sign in interactively; use a human account.",
     "interactive_login_forbidden": "The system identity cannot sign in interactively; use a human account.",
 }
@@ -740,10 +742,13 @@ def tool_run_forecast(client: NagareClient, args: dict[str, Any]) -> dict[str, A
             params["backlog_size"] = params.pop("items")
         if "backlog_size" not in params:
             raise ToolError("monte_carlo_when needs `items`: how many work items to forecast.")
-    if kind == "monte_carlo_how_many" and not ({"target_date", "days", "weeks"} & params.keys()):
-        raise ToolError(
-            "monte_carlo_how_many needs a horizon: pass `target_date`, `days` or `weeks`."
-        )
+    if kind == "monte_carlo_how_many":
+        if not ({"target_date", "days", "weeks"} & params.keys()):
+            raise ToolError(
+                "monte_carlo_how_many needs a horizon: pass `target_date`, `days` or `weeks`."
+            )
+        # The forecast API reads only `days`; turn the friendlier horizons into it.
+        params["days"] = _horizon_days(params)
     body = {"board_id": board_id, "kind": kind, "params": params}
     if args.get("name"):
         body["name"] = args["name"]
@@ -774,6 +779,27 @@ def tool_run_forecast(client: NagareClient, args: dict[str, Any]) -> dict[str, A
     elif results is not None:
         out["results"] = results
     return out
+
+
+def _horizon_days(params: dict[str, Any]) -> int:
+    """The `days` of a how-many forecast from `days`, `weeks` or `target_date`."""
+    weeks = params.pop("weeks", None)
+    target = params.pop("target_date", None)
+    if params.get("days") is not None:
+        days = int(params["days"])
+    elif weeks is not None:
+        days = round(float(weeks) * 7)
+    else:
+        try:
+            start = date.fromisoformat(str(params.get("start_date") or date.today().isoformat()))
+            days = (date.fromisoformat(str(target)) - start).days
+        except ValueError as error:
+            raise ToolError(
+                "`target_date` and `start_date` must be ISO dates (YYYY-MM-DD)."
+            ) from error
+    if days < 1:
+        raise ToolError("The forecast horizon must be at least one day after the start date.")
+    return days
 
 
 def _require(args: dict[str, Any], key: str) -> str:
