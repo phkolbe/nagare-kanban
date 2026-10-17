@@ -18,6 +18,8 @@ def test_metrics_answer_to_the_loopback_in_the_prometheus_format(client) -> None
     body = response.text
     assert "nagare_http_requests_total{" in body
     assert 'route="/api/v1/boards"' in body
+    # Unauthenticated: no product resolved, the platform's "-" label.
+    assert 'product_id="-"' in body
     assert "nagare_http_latency_seconds_bucket" in body
     assert "nagare_webhook_outbox_pending" in body
     # Probes do not pollute the series and the real path never appears.

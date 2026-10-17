@@ -21,7 +21,6 @@ Without the variable nothing is installed and the tracer is the API's no-op.
 from __future__ import annotations
 
 import logging
-import re
 import time
 from typing import Any
 
@@ -60,16 +59,18 @@ REGISTRY = CollectorRegistry(auto_describe=True)
 
 HTTP_REQUESTS = Counter(
     "nagare_http_requests_total",
-    "HTTP requests by route template, method and status",
-    ["route", "method", "status"],
+    "HTTP requests by route template, method, status and product",
+    ["route", "method", "status", "product_id"],
     registry=REGISTRY,
 )
 HTTP_LATENCY = Histogram(
     "nagare_http_latency_seconds",
-    "HTTP request latency by route template and method",
-    ["route", "method"],
+    "HTTP request latency by route template, method and product",
+    ["route", "method", "product_id"],
     registry=REGISTRY,
 )
+#: ``product_id`` label outside an authenticated request (same value as the platform's).
+NO_PRODUCT = "-"
 WEBHOOK_PENDING = Gauge(
     "nagare_webhook_outbox_pending",
     "Webhooks to the Pampufa waiting for delivery",
@@ -110,15 +111,18 @@ class RequestMetrics(BaseHTTPMiddleware):
             return response
         finally:
             route = route_template(request.scope)
+            # Only the product the auth dependency resolved (never the raw header): an
+            # invented header cannot create series (the platform's rule, OBS-E).
+            product = request.scope.get("state", {}).get("product_id") or NO_PRODUCT
             if request.url.path not in EXCLUDED_URLS.split(","):
-                HTTP_REQUESTS.labels(route, request.method, str(status)).inc()
-                HTTP_LATENCY.labels(route, request.method).observe(time.perf_counter() - started)
+                HTTP_REQUESTS.labels(route, request.method, str(status), product).inc()
+                HTTP_LATENCY.labels(route, request.method, product).observe(
+                    time.perf_counter() - started
+                )
             span = trace.get_current_span()
             if span.get_span_context().is_valid:
                 span.set_attribute("http.route", route)
-                product = request.headers.get("x-produto")
-                if product and re.fullmatch(r"[a-z0-9-]{2,40}", product):
-                    span.set_attribute("pampufa.product_id", product)
+                span.set_attribute("pampufa.product_id", product)
 
 
 metrics_router = APIRouter(tags=["observability"])

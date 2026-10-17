@@ -166,6 +166,8 @@ async def get_current_user(request: Request, s: AsyncSession = Depends(get_sessi
         user["product_id"] = local_product(str(user["role"]), requested)
         user["via"] = "local"
     set_current_product(user["product_id"])
+    # The metrics middleware reads it from here (the contextvar does not reach it).
+    request.state.product_id = user["product_id"]
     # The language of every human-readable text this request generates (see .texts).
     set_locale(effective_locale(user.get("locale"), str(user.get("via"))))
     set_via(str(user.get("via")))
