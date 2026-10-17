@@ -5,8 +5,9 @@
 
 import { useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { Aviso, Carregando, ErroApi, useProduto } from '@pampufa/ui'
+import { Aviso, Carregando, ErroApi } from '@pampufa/ui'
 
+import { useNagare } from '../../app/contexto'
 import { chaves, nagare } from '../../api/nagare'
 import { TIPOS_COLUNA, type Coluna, type Grupo, type Quadro, type Segmento, type TipoColuna } from '../../api/tipos'
 import { useAvisos } from '../../componentes/Avisos'
@@ -18,7 +19,7 @@ import { ordenarColunas } from '../quadro/regras'
 type Metodo = 'POST' | 'PATCH' | 'DELETE'
 
 function useGravar(quadroId: string) {
-  const produto = useProduto().id
+  const produto = useNagare().produto
   const avisar = useAvisos()
   const { t } = useT()
   const recarregar = useRecarregarQuadro()
@@ -34,7 +35,7 @@ function useGravar(quadroId: string) {
 
 export function EditorEstrutura({ quadro: inicial, fechar }: { quadro: Quadro; fechar: () => void }) {
   const { t, eu } = useT()
-  const produto = useProduto().id
+  const produto = useNagare().produto
   const quadro = useQuery({
     queryKey: chaves.quadro(produto, inicial.id),
     queryFn: () => nagare<Quadro>(produto, `/boards/${inicial.id}`),

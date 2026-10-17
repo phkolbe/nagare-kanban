@@ -2,8 +2,9 @@
 
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Aviso, useProduto } from '@pampufa/ui'
+import { Aviso } from '@pampufa/ui'
 
+import { useNagare } from '../../app/contexto'
 import { chaves, nagare } from '../../api/nagare'
 import {
   AREAS_VALOR,
@@ -23,7 +24,7 @@ import { useQuadros } from '../quadro/consultas'
 
 export function NovaDemanda({ projeto, fechar }: { projeto: ProjetoDetalhe; fechar: () => void }) {
   const { t } = useT()
-  const produto = useProduto().id
+  const produto = useNagare().produto
   const queryClient = useQueryClient()
   const quadros = useQuadros()
   const [f, setF] = useState({

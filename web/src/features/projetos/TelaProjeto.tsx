@@ -3,8 +3,9 @@
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { Cabecalho, Carregando, ErroDeApi, Tag, Vazio, useProduto } from '@pampufa/ui'
+import { Cabecalho, Carregando, ErroDeApi, Tag, Vazio } from '@pampufa/ui'
 
+import { useNagare } from '../../app/contexto'
 import { chaves, nagare } from '../../api/nagare'
 import type { Cartao, ProjetoDetalhe } from '../../api/tipos'
 import { SeletorIdioma } from '../../componentes/SeletorIdioma'
@@ -16,7 +17,7 @@ import { FASES, faseDoCartao, type Fase } from './fase'
 
 export function TelaProjeto() {
   const { projetoId = '' } = useParams()
-  const produto = useProduto().id
+  const { produto, rota } = useNagare()
   const { t, eu, data } = useT()
   const [editar, setEditar] = useState(false)
   const [demanda, setDemanda] = useState(false)
@@ -39,7 +40,7 @@ export function TelaProjeto() {
         descricao={p.description ?? undefined}
         acoes={
           <>
-            <Link className="btn sm ghost" to={`/${produto}/tarefas/projetos`}>
+            <Link className="btn sm ghost" to={rota('projetos')}>
               {t('projetos.voltar')}
             </Link>
             {capacidades.manage_cards && eu?.flags.envelope !== false && (
@@ -91,13 +92,13 @@ export function TelaProjeto() {
 
 function LinhaDemanda({ cartao, podeAbrir }: { cartao: Cartao; podeAbrir: boolean }) {
   const { t, data } = useT()
-  const produto = useProduto().id
+  const { rota } = useNagare()
   const lacrado = cartao.envelope_state === 'sealed'
   const abrirEnvelope = useAcaoNoCartao(cartao, 'cartao.envelope_aberto')
   return (
     <li className={`ng-demanda classe-${cartao.service_class}`}>
       <span className="ng-chave">{cartao.key}</span>
-      <Link to={`/${produto}/tarefas/quadro/${cartao.board_id}?cartao=${cartao.id}`}>
+      <Link to={`${rota(`quadro/${cartao.board_id}`)}?cartao=${cartao.id}`}>
         {lacrado ? t('cartao.lacrado') : cartao.title}
       </Link>
       <span className="mini">{t(`classe.${cartao.service_class}`)}</span>

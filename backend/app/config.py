@@ -78,8 +78,8 @@ class Settings:
     dev: bool = field(default_factory=lambda: _env_bool("NAGARE_DEV", True))
 
     # --- frontend ----------------------------------------------------------
-    frontend_dir: Path = field(default_factory=lambda: BASE_DIR / "frontend")
-    #: The React screens of the platform's Tarefas module (``web/``, built by Vite, N2).
+    #: The React screens (``web/``, built by Vite): the platform's Tarefas module under
+    #: ``/grupo-sr/`` (N2) and the standalone Nagare at ``/`` (N3; the old screen is gone).
     screens_dir: Path = field(default_factory=lambda: BASE_DIR / "web" / "dist")
 
     # --- Pampufa integration (NG1-NG17) ---------------------------------------

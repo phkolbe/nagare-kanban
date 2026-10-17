@@ -5,8 +5,8 @@
 
 import { useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { useProduto } from '@pampufa/ui'
 
+import { useNagare } from '../../app/contexto'
 import { chaves } from '../../api/nagare'
 import {
   AREAS_VALOR,
@@ -40,7 +40,7 @@ type Campos = Partial<
 
 export function AbaDetalhes({ cartao, quadro, editavel }: { cartao: CartaoDetalhe; quadro: Quadro; editavel: boolean }) {
   const { t, eu } = useT()
-  const produto = useProduto().id
+  const produto = useNagare().produto
   const queryClient = useQueryClient()
   const projetos = useProjetos()
   const pessoas = usePessoas()

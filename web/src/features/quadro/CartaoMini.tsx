@@ -13,6 +13,36 @@ export function iniciaisDe(nome: string): string {
   return ((palavras[0]?.[0] ?? '') + (palavras.length > 1 ? (palavras[palavras.length - 1]?.[0] ?? '') : '')).toUpperCase()
 }
 
+/**
+ * Setas entre os cartoes (paridade com a tela antiga): para cima e para baixo na mesma celula;
+ * para os lados, a celula vizinha da mesma raia (o cartao na mesma altura, ou o ultimo dela).
+ */
+export function focarVizinho(atual: HTMLElement, tecla: string): boolean {
+  const celula = atual.closest<HTMLElement>('.ng-celula')
+  if (!celula) return false
+  const daCelula = [...celula.querySelectorAll<HTMLElement>('.ng-cartao')]
+  const posicao = daCelula.indexOf(atual)
+  if (tecla === 'ArrowUp' || tecla === 'ArrowDown') {
+    const alvo = daCelula[posicao + (tecla === 'ArrowDown' ? 1 : -1)]
+    alvo?.focus()
+    return Boolean(alvo)
+  }
+  const passo = tecla === 'ArrowRight' ? 1 : -1
+  const grade = celula.parentElement
+  let coluna = Number(celula.dataset.coluna) + passo
+  while (grade && coluna >= 0) {
+    const vizinha = grade.querySelector<HTMLElement>(`.ng-celula[data-coluna="${coluna}"][data-linha="${celula.dataset.linha}"]`)
+    if (!vizinha) return false
+    const cartoes = [...vizinha.querySelectorAll<HTMLElement>('.ng-cartao')]
+    if (cartoes.length > 0) {
+      ;(cartoes[Math.min(posicao, cartoes.length - 1)] ?? cartoes[0])!.focus()
+      return true
+    }
+    coluna += passo
+  }
+  return false
+}
+
 export function CartaoMini({
   cartao,
   sleDias,
@@ -40,8 +70,10 @@ export function CartaoMini({
   const idade = envelhecimento(cartao.age_days, sleDias)
   const providencia = providenciaDo(cartao)
 
-  const tecla = (e: KeyboardEvent) => {
-    if (e.key === 'Enter') {
+  const tecla = (e: KeyboardEvent<HTMLElement>) => {
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+      if (focarVizinho(e.currentTarget, e.key)) e.preventDefault()
+    } else if (e.key === 'Enter') {
       e.preventDefault()
       abrir()
     } else if (e.key === 'm' && podeArrastar && !lacrado) {

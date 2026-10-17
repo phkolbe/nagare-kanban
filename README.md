@@ -15,9 +15,11 @@ Built on the same stack as the products of the Pampufa platform it plugs into:
 **FastAPI + Pydantic** on Python ≥ 3.13, **SQLAlchemy 2 (async) + Alembic** on
 **PostgreSQL** (SQLite for the tests and the zero-setup demo), **uv** for dependencies and
 **ruff** for lint. Authentication is hand-rolled **PBKDF2 + HS256** for the standalone
-login. The current frontend is **native ES modules, plain CSS and hand-written inline
-SVG charts**; it is being rebuilt in React (phases N2 and N3 of the Pampufa integration,
-see `obsidian: pampufa-plataforma/integracao-nagare.md`).
+login. The screens are **React 18 + TypeScript + Vite + TanStack Query** with hand-written
+SVG charts (`web/`), in Portuguese and English. One build serves two modes: the
+standalone Nagare at its own root, with its local login, and the Tarefas module of every
+product of the Pampufa platform, with the platform's single sign-on (phases N1–N3, see
+`obsidian: pampufa-plataforma/integracao-nagare.md`).
 
 ---
 
@@ -38,11 +40,12 @@ placeholders — run the app and see the real thing at <http://127.0.0.1:8770>.*
 
 ## Quickstart
 
-Requires **[uv](https://docs.astral.sh/uv/)** (it brings Python 3.13) and read access to
-the private `pampufa-sdk` repository. Node.js is not used by the current frontend.
+Requires **[uv](https://docs.astral.sh/uv/)** (it brings Python 3.13), **Node.js 22** for
+the screens, and read access to the private `pampufa-sdk` repository.
 
 ```bash
 uv sync --all-extras
+npm --prefix web ci && npm --prefix web run build
 uv run python run.py
 ```
 
@@ -124,8 +127,8 @@ Interactive API docs live at **<http://127.0.0.1:8770/docs>**, the OpenAPI docum
 ## Architecture
 
 ```
-Browser  ──  native ES modules + plain CSS + inline SVG (no build step)
-   │            hash router · pub/sub store · fetch wrapper
+Browser  ──  React 18 + TypeScript (web/, built by Vite) · hand-written SVG charts
+   │            two modes: standalone (/) · Pampufa Tarefas module (/grupo-sr/…)
    │  same origin, no CORS in production
    ▼
 uvicorn ── FastAPI app  (backend/app/main.py)
@@ -140,8 +143,8 @@ SQLAlchemy 2 async  ── PostgreSQL (asyncpg) · SQLite (aiosqlite) in tests/d
 
 Deliberate decisions:
 
-- **One origin.** `run.py` serves the API under `/api/v1` and the static frontend from
-  `/`. No CORS to configure, no second server, no proxy.
+- **One origin.** `run.py` serves the API under `/api/v1` and the React build (`web/dist`)
+  from `/` (and under `/grupo-sr/` for the platform). No CORS, no second server.
 - **SQLAlchemy models, the same API.** `backend/app/models.py` is the schema of record,
   with real types on PostgreSQL (`uuid`, `timestamptz`, `jsonb`, `boolean`) and UUID v7
   ids. `backend/app/sqltypes.py` keeps the API contract byte-for-byte: ids travel as
@@ -157,16 +160,18 @@ Deliberate decisions:
   `card_movements` intervals, never from mutable "status changed" fields.
 - **Routers import defensively.** A missing router logs a warning instead of preventing
   the app from booting — the codebase is built by several agents in parallel.
-- **No build step for the standalone screen.** The old frontend is served as written:
-  what you read in `frontend/js/*.js` is exactly what the browser runs.
-- **React screens inside the Pampufa platform (N2).** `web/` is the Tarefas module of
-  each product (`/grupo-sr/<produto>/tarefas/...`): board, card, structure editor,
-  projects and the flow swap, task rules and the PO's consolidated board. React 18 +
-  TypeScript + Vite + TanStack Query, with the platform's shell from `@pampufa/ui`
-  (menu, bell, single sign-on). The Nagare serves the build at `/grupo-sr/_nagare/`;
-  the screens talk to `/nagare/api/v1` with the Pampufa token and `X-Produto`.
-  Portuguese and English (the person's choice, saved on the user; Portuguese by
-  default through the Pampufa, English on the local login).
+- **One React app, two modes (N2/N3).** Standalone at `/` (local login, light/dark/system
+  theme, its own shell with board search and shortcuts, admin of users, flags and plans)
+  and, inside the Pampufa, the Tarefas module of each product (`/grupo-sr/<produto>/
+  tarefas/...`) with the platform's shell, bell and single sign-on from `@pampufa/ui`;
+  there the screens talk to `/nagare/api/v1` with the Pampufa token and `X-Produto`.
+  Board, card, structure editor, projects and the flow swap, metrics with the KMM, the
+  simulator, task rules and the PO's consolidated board. The old `#/board/...` links
+  still open the right screen.
+- **The person's language, end to end.** The screens and the texts the API writes
+  (metric labels, verdicts, KMM, forecasts) come in pt-BR or English: the person's
+  choice (`PATCH /auth/me`), else Portuguese through the Pampufa and English locally
+  (`backend/app/texts.py`).
 
 ### Project layout
 
@@ -192,14 +197,11 @@ meu-kanban/
 │  ├─ main.py                app factory, router mounting, static serving
 │  ├─ flow/                  intervals · metrics · kmm · forecast
 │  └─ routers/               the nine HTTP routers
-├─ frontend/
-│  ├─ index.html
-│  ├─ css/                   tokens · base · components · board · metrics · views
-│  └─ js/                    api · store · router · ui · app · board · dnd · card
-│                            filters · charts · metrics · projects · simulator · admin
-├─ web/                      React screens of the platform's Tarefas module (N2)
-│  └─ src/                   api · i18n (pt-BR, en) · componentes · features/{quadro,
-│                            cartao, estrutura, projetos, regras, consolidado} · checks
+├─ web/                      the React screens (both modes)
+│  └─ src/                   app · api · i18n (pt-BR, en) · componentes · graficos ·
+│                            sozinho (standalone shell, login, theme) · features/{quadro,
+│                            cartao, estrutura, projetos, metricas, simulador, admin,
+│                            regras, consolidado} · checks
 ├─ backend/migrations/       Alembic (ng_*)
 └─ tests/                    pytest + FastAPI TestClient (sqlhelper: raw SQL on both databases)
 ```

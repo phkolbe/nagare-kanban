@@ -5,7 +5,17 @@
  * CHAMADAS com dados no formato real da API do Nagare.
  */
 
+import { baseDoSozinho, modoDoCaminho, montarRota } from '../app/contexto'
 import type { Cartao, Coluna, SituacaoWip } from '../api/tipos'
+import { travaDoUsuario } from '../features/admin/travas'
+import { eficienciaDoCartao } from '../features/cartao/eficiencia'
+import { janela } from '../features/metricas/consultas'
+import { formatarIndicador, valorKmm } from '../features/metricas/formato'
+import { melhorLinha, rebalancear } from '../features/simulador/tipos'
+import { eixoRedondo, passoRedondo } from '../graficos/escalas'
+import { rotaDoLinkAntigo } from '../sozinho/linksAntigos'
+import { temaEfetivo } from '../sozinho/tema'
+import { TRILHO, bloqueioDoItem } from '../sozinho/trilho'
 import { faseDoCartao } from '../features/projetos/fase'
 import {
   contarFiltros,
@@ -223,6 +233,87 @@ confere('erro pelo codigo da API', chaveDoErro('flow_locked', 409), 'erro.flow_l
 confere('erro do pampufa pelo codigo', chaveDoErro('nagare.responsavel_sem_papel', 422), 'erro.nagare.responsavel_sem_papel')
 confere('403 sem traducao', chaveDoErro('algo_novo', 403), 'erro.forbidden')
 confere('codigo desconhecido usa a mensagem do servidor', chaveDoErro('algo_novo', 409), null)
+
+// ----------------------------------------------------------------- N3: dois modos
+confere('modo pelo caminho', [modoDoCaminho('/grupo-sr/sr-adv/tarefas'), modoDoCaminho('/quadro/1'), modoDoCaminho('/nagare/metricas')], [
+  'plataforma',
+  'sozinho',
+  'sozinho',
+])
+confere('base do Nagare sozinho', [baseDoSozinho('/nagare/quadro'), baseDoSozinho('/quadro'), baseDoSozinho('/nagarex')], ['/nagare', '', ''])
+confere('rotas nos dois modos', [montarRota('plataforma', 'sr-adv', 'quadro/1'), montarRota('sozinho', 'nagare', 'quadro/1'), montarRota('sozinho', 'nagare', '')], [
+  '/sr-adv/tarefas/quadro/1',
+  '/quadro/1',
+  '/',
+])
+confere('links da tela antiga', ['#/board/abc', '#/metrics/q1', '#/admin/plans', '#/login', '#/x'].map(rotaDoLinkAntigo), [
+  '/quadro/abc',
+  '/metricas/q1',
+  '/admin/planos',
+  '/entrar',
+  null,
+])
+confere('tema efetivo', [temaEfetivo('system', true), temaEfetivo('system', false), temaEfetivo('dark', false)], ['dark', 'light', 'dark'])
+confere(
+  'trilho: plano e papel',
+  [
+    bloqueioDoItem({ flag: 'simulator', capacidade: 'simulator_boards' }, { simulator: false }, { simulator_boards: true }),
+    bloqueioDoItem({ flag: 'simulator', capacidade: 'simulator_boards' }, { simulator: true }, {}),
+    bloqueioDoItem({ capacidade: 'manage_users' }, {}, { manage_users: true }),
+  ],
+  ['plano', 'papel', null],
+)
+confere('o trilho tem as cinco telas', TRILHO.map((i) => i.caminho), ['quadro', 'projetos', 'metricas', 'simulador', 'admin'])
+
+// ----------------------------------------------------------------- N3: metricas
+confere('janela de 90 dias', janela('90d', '2026-10-17', null), { from: '2026-07-19', to: '2026-10-17' })
+confere('janela "tudo" desde a criacao do quadro', janela('all', '2026-10-17', '2026-06-18T10:00:00Z'), { from: '2026-06-18', to: '2026-10-17' })
+const tPt = traducao('pt-BR')
+confere('indicador em dias', formatarIndicador(34.75, 'days', tPt.numero), { valor: '35', unidade: 'd' })
+confere('indicador curto com decimal', formatarIndicador(4.24, 'cards/week', tPt.numero), { valor: '4,2', unidade: '/sem' })
+confere('indicador percentual', formatarIndicador(28.25, 'percent', tPt.numero), { valor: '28%', unidade: '' })
+confere('indicador vazio', formatarIndicador(null, 'days', tPt.numero), { valor: '—', unidade: '' })
+confere('KMM: percentis', valorKmm({ p50: 31.1, p85: 55.3 }, tPt.numero), 'P50 31,1 · P85 55,3')
+confere('KMM: mix', valorKmm([{ key: 'standard', label: 'Padrão', pct: 71.2 }], tPt.numero), 'Padrão 71%')
+confere('KMM: vazio', valorKmm(null, tPt.numero), '—')
+confere('escala redonda', eixoRedondo(0, 47).marcas, [0, 10, 20, 30, 40, 50])
+confere('passo redondo', [passoRedondo(7), passoRedondo(230), passoRedondo(0)], [2, 50, 1])
+
+// ----------------------------------------------------------------- N3: simulador
+const linha = (nome: string, p85: number | null, vazao: number) => ({ name: nome, avg_wip: 1, delivered: 1, lead_time_avg: 1, lead_time_p85: p85, flow_efficiency_pct: 1, throughput_per_week: vazao })
+confere(
+  'melhor configuracao: menor p85 entre as que mantem a vazao',
+  melhorLinha([linha('livre', 22, 8.3), linha('justo', 14, 8.1), linha('apertado', 9, 0.9), linha('sem dados', null, 9)]),
+  1,
+)
+confere('mix rebalanceado soma 100', Object.values(rebalancear({ expedite: 8, standard: 70, fixed_date: 12, intangible: 10 }, 'expedite', 30)).reduce((a, b) => a + b, 0), 100)
+confere('mix rebalanceado guarda a escolha', rebalancear({ expedite: 8, standard: 70, fixed_date: 12, intangible: 10 }, 'expedite', 30).expedite, 30)
+
+// ----------------------------------------------------------------- N3: eficiencia do cartao (aba Historico)
+const mov = (de: string | null, segundos: number | null, quando: string) =>
+  ({ id: quando, from_column_id: de, seconds_in_from_column: segundos, from_column_name: null, to_column_name: null, moved_at: quando, moved_by_name: null, note: null, is_backward: false })
+const ef = eficienciaDoCartao(
+  [mov(null, null, '2026-10-01T00:00:00Z'), mov('a-fazer', 86_400, '2026-10-02T00:00:00Z'), mov('fazendo', 3 * 86_400, '2026-10-05T00:00:00Z')],
+  colunas,
+  'aguardando',
+  false,
+  Date.parse('2026-10-06T00:00:00Z'),
+)
+confere('eficiencia: trabalho, espera (inclusive a coluna atual) e %', [ef.trabalhoS / 86_400, ef.esperaS / 86_400, Math.round(ef.pct ?? 0)], [3, 2, 60])
+confere('eficiencia sem movimentos', eficienciaDoCartao([], colunas, 'entrada', false, 0).pct, null)
+
+// ----------------------------------------------------------------- N3: administracao (travas da tela antiga)
+const master = { id: 'm1', role: 'master' }
+confere(
+  'travas',
+  [
+    travaDoUsuario(master, { id: 'm1', role: 'master', is_active: true }, 2),
+    travaDoUsuario({ id: 'a1', role: 'administrator' }, { id: 'm1', role: 'master', is_active: true }, 2),
+    travaDoUsuario(master, { id: 'm2', role: 'master', is_active: true }, 1),
+    travaDoUsuario(master, { id: 'e1', role: 'editor', is_active: true }, 1),
+  ],
+  ['admin.trava_voce', 'admin.trava_master', 'admin.trava_ultimo_master', null],
+)
 
 if (falhas > 0) throw new Error(`${falhas} de ${total} verificacoes falharam.`)
 console.log(`${total} verificacoes das telas do Nagare passaram.`)

@@ -5,8 +5,8 @@
 
 import { useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
-import { useProduto } from '@pampufa/ui'
 
+import { useNagare } from '../../app/contexto'
 import { nagare } from '../../api/nagare'
 import type { CelulaWip } from '../../api/tipos'
 import { useAvisos } from '../../componentes/Avisos'
@@ -41,7 +41,7 @@ export function EditorWip({
   podeEditar: boolean
 }) {
   const { t } = useT()
-  const produto = useProduto().id
+  const produto = useNagare().produto
   const avisar = useAvisos()
   const recarregar = useRecarregarQuadro()
   const [aberto, setAberto] = useState(false)

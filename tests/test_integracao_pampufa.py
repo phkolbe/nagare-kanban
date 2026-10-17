@@ -514,7 +514,7 @@ def test_a_new_flow_is_a_new_project_and_open_cards_move(client, pampufa, db: Da
     ]
     assert event == "cartao.movido"
     assert payload["cartao_id"] == moved["id"] and payload["cartao_chave"] == moved["key"]
-    assert payload["cartao_url"].endswith(f"/#/board/{board.json()['id']}")
+    assert f"/quadro/{board.json()['id']}?cartao=" in payload["cartao_url"]
     assert payload["cartao_anterior_chave"] == open_card["key"]
 
     old_columns = db.q(
@@ -745,9 +745,9 @@ def test_platform_cards_open_in_the_tarefas_module(monkeypatch) -> None:
     card = {"id": "c1", "board_id": "b1", "product_id": PRODUCT}
     monkeypatch.setattr(settings, "screens_url", "http://gw/grupo-sr")
     assert card_url(card) == "http://gw/grupo-sr/sr-adv/tarefas/quadro/b1?cartao=c1"
-    assert card_url({**card, "product_id": "nagare"}).endswith("/#/board/b1")
+    assert card_url({**card, "product_id": "nagare"}).endswith("/quadro/b1?cartao=c1")
     monkeypatch.setattr(settings, "screens_url", "")
-    assert card_url(card).endswith("/#/board/b1")
+    assert card_url(card).endswith("/quadro/b1?cartao=c1")
 
 
 def test_the_tarefas_screens_are_served_under_the_platform_path(

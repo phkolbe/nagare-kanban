@@ -111,15 +111,6 @@ def _mount_routers(app: FastAPI) -> list[str]:
     return mounted
 
 
-def _safe_frontend_path(relative: str) -> Path | None:
-    """Resolve a request path inside ``frontend/``, refusing traversal attempts."""
-    root = settings.frontend_dir.resolve()
-    candidate = (root / relative.lstrip("/")).resolve()
-    if candidate == root or root in candidate.parents:
-        return candidate
-    return None
-
-
 def _file_response(path: Path) -> FileResponse:
     media_type, _ = mimetypes.guess_type(path.name)
     headers = dict(_NO_CACHE) if settings.dev else {}
@@ -213,7 +204,7 @@ def create_app(
         include_in_schema=False,
     )
     def spa(full_path: str, request: Request) -> Any:
-        """Serve a static asset, or fall back to the SPA shell.
+        """The standalone Nagare's screens: every other GET is the React shell (N3).
 
         Every verb is claimed so that a request to an API route whose router is
         not mounted yet answers with the standard JSON 404 rather than a 405 from
@@ -234,10 +225,6 @@ def create_app(
                     "not_found", f"No API route for {request.method} /{full_path}."
                 ),
             )
-        relative = full_path[len("static/") :] if full_path.startswith("static/") else full_path
-        candidate = _safe_frontend_path(relative)
-        if candidate and candidate.is_file():
-            return _file_response(candidate)
         return _index_response()
 
     return app
@@ -268,13 +255,13 @@ def _screens_response(full_path: str) -> Any:
 
 
 def _index_response() -> Any:
-    """The SPA shell, or a helpful placeholder if the frontend is not built yet."""
-    index_file = settings.frontend_dir / "index.html"
+    """The React shell (``web/dist``), or a placeholder while it is not built yet."""
+    index_file = settings.screens_dir / "index.html"
     if index_file.is_file():
         return _file_response(index_file)
     return PlainTextResponse(
         "Nagare Kanban API is running.\n\n"
-        f"The frontend shell was not found at {index_file}.\n"
+        f"The screens are not built yet: run `npm run build` in web/ ({index_file}).\n"
         f"The API is available at {API_PREFIX} and the docs at /docs.\n",
         status_code=200,
         headers=dict(_NO_CACHE),

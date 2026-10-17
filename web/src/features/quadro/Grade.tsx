@@ -310,6 +310,8 @@ function Celula({
   return (
     <div
       ref={setNodeRef}
+      data-coluna={indice}
+      data-linha={linha}
       className={`ng-celula${recolhida ? ' recolhida' : ''}${destino ? ` alvo-${destino.estado}` : ''}`}
       style={{ gridColumn: indice + 1, gridRow: linha }}
       title={destino?.motivo ? t(destino.motivo) : undefined}

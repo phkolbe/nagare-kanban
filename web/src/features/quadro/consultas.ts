@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useProduto } from '@pampufa/ui'
 
+import { useNagare } from '../../app/contexto'
 import { chaves, consulta, nagare } from '../../api/nagare'
 import type {
   Cartao,
@@ -18,7 +18,7 @@ import { mensagemDeErro, useT } from '../../i18n'
 import { parametrosDaVisao, type Filtros } from './regras'
 
 export function useQuadros() {
-  const produto = useProduto().id
+  const produto = useNagare().produto
   return useQuery({
     queryKey: chaves.quadros(produto),
     queryFn: () => nagare<Lista<Quadro>>(produto, '/boards?kind=operational'),
@@ -27,7 +27,7 @@ export function useQuadros() {
 }
 
 export function useQuadro(id: string) {
-  const produto = useProduto().id
+  const produto = useNagare().produto
   return useQuery({
     queryKey: chaves.quadro(produto, id),
     queryFn: () => nagare<Quadro>(produto, `/boards/${encodeURIComponent(id)}`),
@@ -35,7 +35,7 @@ export function useQuadro(id: string) {
 }
 
 export function useVisao(id: string, segmento: SegmentoVisao, filtros: Filtros) {
-  const produto = useProduto().id
+  const produto = useNagare().produto
   const busca = consulta({ segment: segmento, ...parametrosDaVisao(filtros) })
   return useQuery({
     queryKey: chaves.visao(produto, id, busca),
@@ -45,7 +45,7 @@ export function useVisao(id: string, segmento: SegmentoVisao, filtros: Filtros) 
 }
 
 export function useVinculo() {
-  const produto = useProduto().id
+  const produto = useNagare().produto
   return useQuery({
     queryKey: chaves.vinculo(produto),
     queryFn: () => nagare<Vinculo>(produto, '/integration/product'),
@@ -54,7 +54,7 @@ export function useVinculo() {
 }
 
 export function useProjetos() {
-  const produto = useProduto().id
+  const produto = useNagare().produto
   return useQuery({
     queryKey: chaves.projetos(produto),
     queryFn: () => nagare<Lista<Projeto>>(produto, '/projects'),
@@ -64,7 +64,7 @@ export function useProjetos() {
 
 /** Quem pode receber cartao no produto: as pessoas `nagare.*` da Pampufa (17/10/2026). */
 export function usePessoas() {
-  const produto = useProduto().id
+  const produto = useNagare().produto
   return useQuery({
     queryKey: chaves.pessoas(produto),
     queryFn: () => nagare<Pessoas>(produto, '/integration/people'),
@@ -74,7 +74,7 @@ export function usePessoas() {
 
 /** Refaz o que um cartao mexido muda: as visoes do quadro, o cartao e os projetos. */
 export function useRecarregarQuadro() {
-  const produto = useProduto().id
+  const produto = useNagare().produto
   const queryClient = useQueryClient()
   return (quadroId: string, cartaoId?: string) => {
     void queryClient.invalidateQueries({ queryKey: chaves.visoes(produto, quadroId) })
@@ -89,7 +89,7 @@ export function useRecarregarQuadro() {
  * (WIP cheio, para tras, envelope lacrado...), com a mensagem na lingua da tela.
  */
 export function useMover(quadroId: string) {
-  const produto = useProduto().id
+  const produto = useNagare().produto
   const queryClient = useQueryClient()
   const avisar = useAvisos()
   const { t } = useT()
@@ -125,7 +125,7 @@ export function useMover(quadroId: string) {
 
 /** Grava uma politica do quadro (WIP do fluxo, SLE, confirmar movimentos...). */
 export function useAlterarQuadro(quadroId: string) {
-  const produto = useProduto().id
+  const produto = useNagare().produto
   const avisar = useAvisos()
   const { t } = useT()
   const recarregar = useRecarregarQuadro()

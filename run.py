@@ -5,7 +5,7 @@
     uv run python run.py
 
 Migrates the database (Alembic), seeds the demo workspace on first run, then
-serves the API *and* the static frontend from one origin at http://127.0.0.1:8770.
+serves the API *and* the React screens (web/dist) from one origin at http://127.0.0.1:8770.
 The database is ``NAGARE_DATABASE_URL`` (PostgreSQL in the platform's dev setup);
 without it, a SQLite file in ``data/`` keeps a cold clone runnable as a demo.
 
@@ -29,7 +29,7 @@ if str(REPO_ROOT) not in sys.path:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="run.py",
-        description="Run the Nagare Kanban server (API + frontend on one origin).",
+        description="Run the Nagare Kanban server (API + screens on one origin).",
     )
     parser.add_argument("--host", default=None, help="bind address (default 127.0.0.1)")
     parser.add_argument("--port", type=int, default=None, help="bind port (default 8770)")

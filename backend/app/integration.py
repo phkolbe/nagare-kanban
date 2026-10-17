@@ -67,14 +67,14 @@ TAG_RESOLVED_AT_ORIGIN = "resolvido-na-origem"
 
 def card_url(card: dict[str, Any]) -> str:
     """Where a person opens the card: the product's Tarefas module (N2), or the
-    standalone Nagare's own board."""
+    standalone Nagare's board (N3: the same React screens at its root)."""
     product = card.get("product_id")
     if settings.screens_url and product and product != PRODUCT_STANDALONE:
         return (
             f"{settings.screens_url}/{product}/tarefas/quadro/{card['board_id']}"
             f"?cartao={card['id']}"
         )
-    return f"{settings.public_url}/#/board/{card['board_id']}"
+    return f"{settings.public_url}/quadro/{card['board_id']}?cartao={card['id']}"
 
 
 # ---------------------------------------------------------------------------
