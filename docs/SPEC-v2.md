@@ -1,3 +1,16 @@
+> **Historical document — increment 2 of the v1 build contract** (tag `v1`, August 2026).
+> The code has moved on since: PostgreSQL through async SQLAlchemy and Alembic, one React
+> app in `web/` (the `frontend/` files named below are gone), data isolated per product,
+> the Pampufa's `nagare.*` roles and the platform integration of phases N1–N3. What still
+> holds: the invariants of R2.1–R2.3 — the structure rules `normalize_structure()`
+> enforces, WIP editable at column, group and flow scope, lanes as a view that never
+> reclassifies a card. Two changes: lanes are turned on by the URL (`?raias=classe`),
+> not restored from `localStorage` (only the collapsed lanes are remembered there); and
+> on a product board the flow locks after the first card (NG13: from then on only WIP
+> limits, the SLE and column names and colours change). The current API is in
+> [API.md](API.md); the decisions since v1 are in the Obsidian vault,
+> `grupo-sr/plataforma/decisoes/integracao-nagare.md`. The text below is kept as written.
+
 # Nagare Kanban — Build Contract, increment 2
 
 > Extends `docs/SPEC.md`, which remains authoritative for everything it already covers

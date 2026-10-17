@@ -391,6 +391,11 @@ metric: *"no column on this board is marked `queue`, so wait time — and theref
 efficiency — cannot be computed."* That sentence is a concrete next practice, which is
 what a maturity model is for.
 
+Inside the Pampufa, where the Tarefas module has no simulator screen, the ML5 practice
+"WIP-experiment outcomes" (and the explanation of "capability comparison across boards")
+points to **the Nagare simulator** — the standalone Nagare is where those experiments
+run. The practice still counts toward the level (decision A9-d).
+
 A caution: maturity levels describe **the organisation's capability**, not a ladder to
 be climbed for its own sake. A five-person team delivering predictably at ML3 needs
 nothing from ML5.
@@ -413,6 +418,14 @@ administrator can pass `force: true`, which records `is_backward = 1` plus an au
 entry — so a genuine correction is possible but never invisible. Rework is better
 modelled as a *new* card with `demand_type = failure`, which then shows up as failure
 demand, where it belongs.
+
+The same harm comes from redrawing the board under live work: re-kinding, removing or
+reordering columns rewrites what every recorded interval meant. So on a **product
+board** of the Pampufa the structure is editable only until the first card arrives;
+after that it is locked (`409 flow_locked`) and only WIP limits, the SLE and column
+names and colours change (decision NG13). A different flow is a **new project** linked
+to the product: the open cards move to it and the old board stays read-only with its
+history and metrics intact.
 
 ### Unlimited WIP
 

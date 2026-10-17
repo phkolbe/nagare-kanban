@@ -1,3 +1,12 @@
+> **Historical document — the v1 build contract** (tag `v1`, August 2026). The code has
+> moved on since: PostgreSQL through async SQLAlchemy and Alembic (SQLite only for tests
+> and the demo), one React app in `web/` instead of the vanilla frontend, data isolated
+> per product (`product_id`, `X-Produto`), the Pampufa's `nagare.*` roles next to the
+> local login, and the platform integration of phases N1–N3. What still holds: §6
+> (movement rules), §7 (metric formulas), §8 (simulator) and §11 (seed data). The current
+> API is in [API.md](API.md); the decisions since v1 are in the Obsidian vault,
+> `grupo-sr/plataforma/decisoes/integracao-nagare.md`. The text below is kept as written.
+
 # Nagare Kanban — Build Contract (SPEC)
 
 > 流れ *nagare* = "flow". This document is the **single source of truth** for every agent
