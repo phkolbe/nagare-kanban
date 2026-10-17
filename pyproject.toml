@@ -36,7 +36,7 @@ nagare = "backend.app.cli:main"
 [tool.uv.sources]
 # SDK fixado por tag. Para evoluir o SDK junto, troque temporariamente por
 # { path = "../pampufa-sdk", editable = true } e NAO commite essa troca.
-pampufa-sdk = { git = "https://github.com/phkolbe/pampufa-sdk", tag = "v0.13.0" }
+pampufa-sdk = { git = "https://github.com/phkolbe/pampufa-sdk", tag = "v0.14.0" }
 
 [build-system]
 requires = ["hatchling"]

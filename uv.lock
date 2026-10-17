@@ -629,7 +629,7 @@ requires-dist = [
     { name = "asyncpg", specifier = ">=0.30" },
     { name = "fastapi", specifier = ">=0.118" },
     { name = "httpx", specifier = ">=0.28" },
-    { name = "pampufa-sdk", git = "https://github.com/phkolbe/pampufa-sdk?tag=v0.13.0" },
+    { name = "pampufa-sdk", git = "https://github.com/phkolbe/pampufa-sdk?tag=v0.14.0" },
     { name = "playwright", marker = "extra == 'qa'", specifier = ">=1.44" },
     { name = "pydantic", specifier = ">=2.12" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3" },
@@ -663,8 +663,8 @@ wheels = [
 
 [[package]]
 name = "pampufa-sdk"
-version = "0.13.0"
-source = { git = "https://github.com/phkolbe/pampufa-sdk?tag=v0.13.0#61e30ee50668d0d6c99451e096d25c4163c5a171" }
+version = "0.14.0"
+source = { git = "https://github.com/phkolbe/pampufa-sdk?tag=v0.14.0#d72b38079e187c9f3dbf724f063883585cca9c3f" }
 dependencies = [
     { name = "alembic" },
     { name = "apscheduler" },
