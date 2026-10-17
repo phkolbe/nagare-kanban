@@ -35,3 +35,8 @@ Thumbs.db
 
 # ---- environment (secrets) ----
 .env
+
+# ---- React screens (web/, N2) ----
+web/node_modules/
+web/dist/
+web/*.tsbuildinfo

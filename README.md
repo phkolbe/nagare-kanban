@@ -157,8 +157,16 @@ Deliberate decisions:
   `card_movements` intervals, never from mutable "status changed" fields.
 - **Routers import defensively.** A missing router logs a warning instead of preventing
   the app from booting — the codebase is built by several agents in parallel.
-- **No build step, ever.** The frontend is served as written. What you read in
-  `frontend/js/*.js` is exactly what the browser runs.
+- **No build step for the standalone screen.** The old frontend is served as written:
+  what you read in `frontend/js/*.js` is exactly what the browser runs.
+- **React screens inside the Pampufa platform (N2).** `web/` is the Tarefas module of
+  each product (`/grupo-sr/<produto>/tarefas/...`): board, card, structure editor,
+  projects and the flow swap, task rules and the PO's consolidated board. React 18 +
+  TypeScript + Vite + TanStack Query, with the platform's shell from `@pampufa/ui`
+  (menu, bell, single sign-on). The Nagare serves the build at `/grupo-sr/_nagare/`;
+  the screens talk to `/nagare/api/v1` with the Pampufa token and `X-Produto`.
+  Portuguese and English (the person's choice, saved on the user; Portuguese by
+  default through the Pampufa, English on the local login).
 
 ### Project layout
 
@@ -189,6 +197,9 @@ meu-kanban/
 │  ├─ css/                   tokens · base · components · board · metrics · views
 │  └─ js/                    api · store · router · ui · app · board · dnd · card
 │                            filters · charts · metrics · projects · simulator · admin
+├─ web/                      React screens of the platform's Tarefas module (N2)
+│  └─ src/                   api · i18n (pt-BR, en) · componentes · features/{quadro,
+│                            cartao, estrutura, projetos, regras, consolidado} · checks
 ├─ backend/migrations/       Alembic (ng_*)
 └─ tests/                    pytest + FastAPI TestClient (sqlhelper: raw SQL on both databases)
 ```
@@ -213,6 +224,13 @@ envelope sealing, WIP breaches, expedite override), the flow metric formulas, th
 simulator and Monte Carlo engine, and an end-to-end API smoke test. `tests/conftest.py`
 builds a freshly migrated and seeded database per session (a temp SQLite file, or the
 `TEST_DATABASE_URL` schema, reset first), so the suite never touches your data.
+
+The React screens (in `web/`, with the platform's SDK from its git tag):
+
+```bash
+npm ci && npm run typecheck && npm run check && npm run build   # web/dist, served by the Nagare
+npm run dev                                                       # :5177, API through the gateway (:8080)
+```
 
 The MCP server has its own live round-trip check:
 
