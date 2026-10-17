@@ -117,7 +117,16 @@ def _bearer_token(request: Request) -> str | None:
     return token or None
 
 
-_PUBLIC_USER_FIELDS = ("id", "email", "name", "role", "is_active", "created_at", "last_login_at")
+_PUBLIC_USER_FIELDS = (
+    "id",
+    "email",
+    "name",
+    "role",
+    "is_active",
+    "created_at",
+    "last_login_at",
+    "locale",
+)
 
 
 async def _load_user(s: AsyncSession, user_id: str) -> CurrentUser:
@@ -171,7 +180,9 @@ async def _pampufa_user(
     try:
         identity = await gateway.validate(token)
     except TokenInvalido as error:
-        raise Unauthorized(str(error), code="invalid_token") from error
+        # An expired token is renewed by the platform's client; anything else is refused.
+        code = "token_expired" if error.codigo == "auth.token_expirado" else "invalid_token"
+        raise Unauthorized(str(error), code=code) from error
     if requested is None:
         raise ApiError(
             "product_required",
@@ -195,6 +206,7 @@ async def _pampufa_user(
     current["product_id"] = requested
     current["via"] = "pampufa"
     current["pampufa_sub"] = identity.sub
+    current["pampufa_roles"] = {scope: list(roles) for scope, roles in identity.papeis.items()}
     return current
 
 

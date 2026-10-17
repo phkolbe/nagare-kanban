@@ -150,13 +150,37 @@ _HTTP_CODE_MAP: dict[int, str] = {
 }
 
 
+#: Codes the Pampufa's screens act on, in the platform's vocabulary (``@pampufa/ui``
+#: renews the session on ``auth.token_expirado``).
+_PROBLEM_CODES: dict[str, str] = {"token_expired": "auth.token_expirado"}
+
+
+def _response(
+    status: int, payload: dict[str, Any], headers: dict[str, str] | None = None
+) -> JSONResponse:
+    """The error envelope, also readable as ``problem+json`` by the platform's client.
+
+    ``error`` stays the Nagare's own shape (old UI, MCP); ``title``, ``status`` and
+    ``codigo`` are what ``@pampufa/ui`` reads. The React screens translate by code.
+    """
+    error = payload.get("error") or {}
+    code = str(error.get("code") or "http_error")
+    body = {
+        "title": error.get("message") or "Request failed.",
+        "status": status,
+        "codigo": _PROBLEM_CODES.get(code, code),
+        **payload,
+    }
+    return JSONResponse(status_code=status, content=body, headers=headers)
+
+
 def install_error_handlers(app: FastAPI) -> None:
     """Register every exception handler on ``app``."""
 
     @app.exception_handler(ApiError)
     async def _api_error(_: Request, exc: ApiError) -> JSONResponse:
         headers = {"WWW-Authenticate": "Bearer"} if exc.status == 401 else None
-        return JSONResponse(status_code=exc.status, content=exc.payload(), headers=headers)
+        return _response(exc.status, exc.payload(), headers)
 
     @app.exception_handler(RequestValidationError)
     async def _validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:
@@ -170,9 +194,9 @@ def install_error_handlers(app: FastAPI) -> None:
                     "type": err.get("type", "value_error"),
                 }
             )
-        return JSONResponse(
-            status_code=422,
-            content=error_payload(
+        return _response(
+            422,
+            error_payload(
                 "validation_error",
                 "The request body or query string failed validation.",
                 {"fields": fields},
@@ -184,19 +208,15 @@ def install_error_handlers(app: FastAPI) -> None:
         code = _HTTP_CODE_MAP.get(exc.status_code, "http_error")
         detail = exc.detail if isinstance(exc.detail, str) else "Request failed."
         headers = dict(exc.headers or {})
-        return JSONResponse(
-            status_code=exc.status_code,
-            content=error_payload(code, detail),
-            headers=headers or None,
-        )
+        return _response(exc.status_code, error_payload(code, detail), headers or None)
 
     @app.exception_handler(Exception)
     async def _unhandled(request: Request, exc: Exception) -> JSONResponse:
         # Log with the traceback: the client only ever gets the opaque message.
         log.exception("Unhandled error on %s %s", request.method, request.url.path)
-        return JSONResponse(
-            status_code=500,
-            content=error_payload(
+        return _response(
+            500,
+            error_payload(
                 "internal_error",
                 "An unexpected error occurred. The incident was logged.",
                 {"type": type(exc).__name__},

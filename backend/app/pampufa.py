@@ -98,6 +98,16 @@ class PampufaGateway:
             sub=str(user.get("id")), email=str(user.get("email")), name=str(user.get("nome"))
         )
 
+    async def people(self, product_id: str) -> list[dict[str, Any]]:
+        """Who has a ``nagare.*`` role in the product (decision of 17/10/2026).
+
+        ``[{sub, email, nome, papeis}]`` from the Pampufa, with the Nagare's service
+        token: the Pampufa is the directory, the Nagare only mirrors it.
+        """
+        url = f"{self.settings.pampufa_url}/api/v1/integracao/nagare/pessoas"
+        response = await self._service.requisitar("GET", url, params={"produto": product_id})
+        return list(response.json())
+
     async def post_event(self, event: str, payload: dict[str, Any]) -> None:
         """Deliver one notification; raises when the Pampufa does not take it."""
         url = f"{self.settings.pampufa_url}/api/v1/integracao/nagare/eventos"

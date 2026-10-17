@@ -137,6 +137,9 @@ class User(Base):
     #: The Pampufa ``sub`` this user signs in with (NG5). A local user with the same
     #: e-mail is linked on the first Pampufa sign-in (NG decision of 16/10/2026).
     external_subject: Mapped[str | None] = mapped_column(String(80), unique=True)
+    #: The language the person chose (``pt-BR`` or ``en``). Empty: the default of the
+    #: way in — Portuguese through the Pampufa, English on the local login (N2).
+    locale: Mapped[str | None] = mapped_column(String(10))
 
 
 # ---------------------------------------------------------------------------

@@ -15,13 +15,18 @@ And by people who administer a product's board:
 ``GET /integration/product`` / ``PUT /integration/product``
     The project and board that receive the product's providências, and the swap to
     a new flow (NG14).
+``GET /integration/overview``
+    The PO's consolidated board: the product boards by stage, one lane per product.
+``GET /integration/people``
+    Who can take a card in the product: the Pampufa's ``nagare.*`` people; on the
+    standalone Nagare, its own active users.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,10 +37,13 @@ from ..integration import (
     card_for_providencia,
     card_url,
     find_ref,
+    overview,
+    product_people,
     resolve_at_origin,
     swap_product_project,
 )
 from ..models import (
+    PRODUCT_STANDALONE,
     Board,
     BoardColumn,
     Card,
@@ -203,6 +211,63 @@ async def _link_out(s: AsyncSession, product_id: str) -> dict[str, Any]:
             "board": {"id": board.get("id"), "name": board.get("name"), "slug": board.get("slug")},
         },
         "history": history,
+    }
+
+
+class PersonOut(BaseModel):
+    id: str
+    name: str
+    email: str
+    sub: str | None = None
+    roles: list[str] = []
+
+
+class PeopleOut(BaseModel):
+    #: ``pampufa`` (the platform's directory) or ``local`` (the standalone Nagare)
+    source: str
+    people: list[PersonOut]
+
+
+@router.get("/overview", summary="The product boards by stage (the PO's consolidated view)")
+async def consolidated(
+    s: AsyncSession = Depends(get_session),
+    user: CurrentUser = Depends(require_capability("read_boards_metrics")),
+) -> dict[str, Any]:
+    """Read only. The gestor (and the master) see every linked product; anyone else,
+    the products where they hold a ``nagare.*`` role (17/10/2026)."""
+    return await overview(s, dict(user))
+
+
+@router.get("/people", response_model=PeopleOut, summary="Who can take a card in this product")
+async def people(
+    request: Request,
+    s: AsyncSession = Depends(get_session),
+    user: CurrentUser = Depends(require_capability("read_boards_metrics")),
+) -> dict[str, Any]:
+    """The assignee picker (decision of 17/10/2026): in a platform product, the people
+    with a ``nagare.*`` role there, straight from the Pampufa — even those who never
+    opened the Nagare; on the standalone Nagare, its own active users."""
+    gateway = getattr(request.app.state, "pampufa", None)
+    product_id = str(user["product_id"])
+    if product_id != PRODUCT_STANDALONE and gateway is not None:
+        return {"source": "pampufa", "people": await product_people(s, gateway, product_id)}
+    rows = await s.scalars(
+        select(User)
+        .where(User.is_active.is_(True), User.role != "system")
+        .order_by(User.name, User.email)
+    )
+    return {
+        "source": "local",
+        "people": [
+            {
+                "id": u.id,
+                "name": u.name,
+                "email": u.email,
+                "sub": u.external_subject,
+                "roles": [u.role],
+            }
+            for u in rows
+        ],
     }
 
 
