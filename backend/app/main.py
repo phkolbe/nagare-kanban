@@ -25,13 +25,13 @@ from typing import Any
 
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from sqlalchemy import func, select
 
 from . import __version__
 from .config import settings
 from .db import Database, migrate
-from .errors import error_payload, install_error_handlers
+from .errors import ApiError, install_error_handlers
 from .models import User
 from .pampufa import PampufaGateway, webhook_loop
 from .routers import ROUTER_MODULES
@@ -219,12 +219,7 @@ def create_app(
                 "HEAD",
             }
         ):
-            return JSONResponse(
-                status_code=404,
-                content=error_payload(
-                    "not_found", f"No API route for {request.method} /{full_path}."
-                ),
-            )
+            raise ApiError("not_found", f"No API route for {request.method} /{full_path}.", 404)
         return _index_response()
 
     return app
@@ -239,11 +234,9 @@ def _screens_response(full_path: str) -> Any:
         candidate = (root / full_path[len("_nagare/") :]).resolve()
         if root in candidate.parents and candidate.is_file():
             return _file_response(candidate)
-        return JSONResponse(status_code=404, content=error_payload("not_found", "No such file."))
+        raise ApiError("not_found", "No such file.", 404)
     if not _SCREEN_ROUTE.match(full_path):
-        return JSONResponse(
-            status_code=404, content=error_payload("not_found", "Not a Nagare screen.")
-        )
+        raise ApiError("not_found", "Not a Nagare screen.", 404)
     index_file = root / "index.html"
     if index_file.is_file():
         return _file_response(index_file)

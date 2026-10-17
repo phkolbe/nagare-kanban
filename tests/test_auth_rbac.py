@@ -95,9 +95,9 @@ FREE_FLAGS: tuple[str, ...] = (
     "multi_project",
 )
 
-#: The plan-gate refusals `deps.require_flag` can raise (SPEC §3 has no literal
-#: code, so the assertion accepts the whole family rather than pinning one).
-FLAG_DENIED_CODES = {"plan_upgrade_required", "feature_disabled", "feature_not_available"}
+#: The two plan-gate refusals `deps.require_flag` raises: the flag is off, or the
+#: active plan does not unlock it.
+FLAG_DENIED_CODES = {"plan_upgrade_required", "feature_disabled"}
 
 
 # ---------------------------------------------------------------------------
@@ -237,7 +237,7 @@ def test_system_identity_is_denied_interactive_login(client) -> None:
     )
     assert response.status_code == 403, response.text
     code = response.json()["error"]["code"]
-    assert code in {"interactive_login_denied", "interactive_login_forbidden"}
+    assert code == "interactive_login_denied"
 
 
 def test_wrong_password_is_rejected(client) -> None:
@@ -408,10 +408,7 @@ def test_refresh_requires_a_valid_token_and_refuses_the_system_identity(client, 
         f"{API}/auth/refresh", headers={"Authorization": f"Bearer {system_token}"}
     )
     assert response.status_code == 403
-    assert response.json()["error"]["code"] in {
-        "interactive_login_denied",
-        "interactive_login_forbidden",
-    }
+    assert response.json()["error"]["code"] == "interactive_login_denied"
 
 
 @pytest.mark.parametrize("role", ROLES)

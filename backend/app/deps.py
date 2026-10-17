@@ -25,7 +25,6 @@ from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import (
-    NON_INTERACTIVE_ROLES,
     ROLE_CAPABILITIES,
     plan_tier,
     settings,
@@ -46,7 +45,6 @@ from .texts import effective_locale, set_locale, set_via
 
 __all__ = [
     "CurrentUser",
-    "assert_can_login",
     "can_write_board",
     "effective_flags",
     "get_active_plan",
@@ -224,18 +222,6 @@ async def get_optional_user(
         return await get_current_user(request, s)
     except ApiError:
         return None
-
-
-def assert_can_login(user: dict[str, Any]) -> None:
-    """Reject interactive logins for non-human roles (SPEC §4: ``system``)."""
-    if user.get("role") in NON_INTERACTIVE_ROLES:
-        raise Forbidden(
-            "The system identity is for API and MCP access only and cannot sign in.",
-            code="interactive_login_forbidden",
-            details={"role": user.get("role")},
-        )
-    if not user.get("is_active"):
-        raise Forbidden("This account is deactivated.", code="account_disabled")
 
 
 async def require_standalone(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:

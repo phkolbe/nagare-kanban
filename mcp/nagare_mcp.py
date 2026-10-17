@@ -319,7 +319,6 @@ _HINTS: dict[str, str] = {
         "Finish or unblock something already in progress instead of starting more."
     ),
     "envelope_sealed": "Call open_envelope on this card before moving it.",
-    "feature_not_available": "The workspace plan or a feature flag does not include this capability.",
     "feature_disabled": "A workspace administrator has switched this feature off.",
     "plan_upgrade_required": "This capability belongs to a higher plan tier.",
     "forbidden": "The authenticated role may not do this. Check GET /users/roles for the matrix.",
@@ -331,7 +330,6 @@ _HINTS: dict[str, str] = {
     "token_expired": "The token expired; restart the MCP server or supply a fresh NAGARE_TOKEN.",
     "standalone_only": "This tool needs the standalone Nagare login, not a Pampufa token.",
     "interactive_login_denied": "The system identity cannot sign in interactively; use a human account.",
-    "interactive_login_forbidden": "The system identity cannot sign in interactively; use a human account.",
 }
 
 

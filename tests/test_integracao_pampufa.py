@@ -820,3 +820,11 @@ def test_a_pampufa_token_is_not_traded_for_a_local_one(client, pampufa) -> None:
     response = client.post(f"{API}/auth/refresh", headers=headers(token))
     assert response.status_code == 400, response.text
     assert response.json()["error"]["code"] == "refresh_through_pampufa"
+
+
+def test_an_unknown_api_route_is_problem_json_too(client) -> None:
+    response = client.get(f"{API}/nothing-here")
+    body = response.json()
+    assert response.status_code == 404
+    assert body["error"]["code"] == "not_found"
+    assert (body["status"], body["codigo"]) == (404, "not_found") and body["title"]
