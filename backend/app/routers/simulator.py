@@ -60,6 +60,7 @@ from ..schemas import (
     SimRunOut,
 )
 from ..tenancy import in_product
+from ..texts import N_, _
 from .boards import (
     BoardCreateRequest,
     KeyAllocator,
@@ -76,6 +77,24 @@ router = APIRouter(
 #: The two run kinds SPEC §3 gates behind the (separately purchasable) Monte
 #: Carlo flag; the other three kinds are "simulator" — already gated above.
 _MONTE_CARLO_KINDS: frozenset[str] = frozenset({"monte_carlo_when", "monte_carlo_how_many"})
+
+#: ``kind.replace("_", " ").title()`` for every run kind, as English catalog keys,
+#: so a run's default name reads in the caller's language.
+_KIND_TITLE: dict[str, str] = {
+    "monte_carlo_when": N_("Monte Carlo When"),
+    "monte_carlo_how_many": N_("Monte Carlo How Many"),
+    "wip_experiment": N_("Wip Experiment"),
+    "class_of_service_mix": N_("Class Of Service Mix"),
+    "replay": N_("Replay"),
+}
+
+#: Service classes as written inside a sentence (the English text is the key itself).
+_SERVICE_CLASS_WORD: dict[str, str] = {
+    "expedite": N_("expedite"),
+    "standard": N_("standard"),
+    "fixed_date": N_("fixed_date"),
+    "intangible": N_("intangible"),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +155,12 @@ def _run_row_out(row: Any) -> dict[str, Any]:
     out["results"] = dict(out.get("results") or {})
     out["created_by_name"] = row._mapping["created_by_name"]
     return out
+
+
+def _run_kind_title(kind: str) -> str:
+    """The run kind in words, for a run saved without a name."""
+    title = _KIND_TITLE.get(kind)
+    return _(title) if title else kind.replace("_", " ").title()
 
 
 async def _get_run_or_404(s: AsyncSession, run_id: str) -> dict[str, Any]:
@@ -238,7 +263,7 @@ async def reset_simulator_board(
     return {
         "ok": True,
         "id": board["id"],
-        "message": f"Removed {removed} card(s) and their history.",
+        "message": _("Removed {count} card(s) and their history.", count=removed),
     }
 
 
@@ -312,11 +337,17 @@ async def generate_demand(
                 "column_id": specs[record["final_index"]].key,
                 "project_id": None,
                 "key": await allocator.take(prefix),
-                "title": f"Simulated {record['service_class']} demand #{record['index'] + 1}",
+                "title": _(
+                    "Simulated {service_class} demand #{number}",
+                    service_class=_(
+                        _SERVICE_CLASS_WORD.get(record["service_class"], record["service_class"])
+                    ),
+                    number=record["index"] + 1,
+                ),
                 "description": None,
                 "service_class": record["service_class"],
                 "assignee_id": None,
-                "requester": "Simulator",
+                "requester": _("Simulator"),
                 "size": record["size"],
                 "value_area": record["value_area"],
                 "demand_type": record["demand_type"],
@@ -558,7 +589,7 @@ async def create_run(
         SimulationRun(
             id=run_id,
             board_id=board["id"],
-            name=payload.name or f"{payload.kind.replace('_', ' ').title()} — {utcnow()}",
+            name=payload.name or f"{_run_kind_title(payload.kind)} — {utcnow()}",
             kind=payload.kind,
             params=_as_json(payload.params),
             results=_as_json(results),
@@ -616,9 +647,23 @@ async def compare_runs(
     s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("simulator_boards")),
 ) -> dict[str, Any]:
-    """Align 2–8 saved runs into one table (SPEC §8.6): metrics, deltas, verdict."""
+    """Align 2–8 saved runs into one table (SPEC §8.6): metrics, deltas, verdict.
+
+    The baseline is the run the person picked (``baseline_run_id``), moved to the
+    front: the comparison measures every delta against its first run.
+    """
+    ordered = list(dict.fromkeys(payload.run_ids))
+    if payload.baseline_run_id is not None:
+        if payload.baseline_run_id not in ordered:
+            raise BadRequest(
+                "The baseline must be one of the compared runs.",
+                code="compare_failed",
+                details={"baseline_run_id": payload.baseline_run_id},
+            )
+        ordered.remove(payload.baseline_run_id)
+        ordered.insert(0, payload.baseline_run_id)
     runs: list[dict[str, Any]] = []
-    for run_id in payload.run_ids:
+    for run_id in ordered:
         run = await _get_run_or_404(s, run_id)
         run.pop("created_by_name", None)
         runs.append(run)
@@ -634,4 +679,5 @@ async def compare_runs(
         "rows": comparison["rows"],
         "deltas": comparison["deltas"],
         "verdict": comparison["verdict"],
+        "baseline_run_id": runs[0]["id"],
     }

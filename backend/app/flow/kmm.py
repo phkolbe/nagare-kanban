@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..db import iso
+from ..texts import N_, _
 from .metrics import (
     LOW_CONFIDENCE_SAMPLE,
     MetricsContext,
@@ -128,13 +129,13 @@ def _ml1_specs() -> list[_MetricSpec]:
     return [
         _MetricSpec(
             key="board_in_use",
-            label="Board in use",
-            why=(
+            label=_("Board in use"),
+            why=_(
                 "Anderson's first rung asks only that work be pulled onto a visual board "
                 "at all — Yoshima calls this simply colocar o trabalho na parede (put the "
                 "work on the wall), the precondition every later metric depends on."
             ),
-            action="Put real, current work onto this board — an empty board cannot be measured.",
+            action=_("Put real, current work onto this board — an empty board cannot be measured."),
             check=lambda s: (
                 len(s.ctx.all_columns) >= 2 and len(s.ctx.records) >= 1,
                 {"columns": len(s.ctx.all_columns), "cards": len(s.ctx.records)},
@@ -142,13 +143,13 @@ def _ml1_specs() -> list[_MetricSpec]:
         ),
         _MetricSpec(
             key="wip_count",
-            label="WIP count",
-            why=(
+            label=_("WIP count"),
+            why=_(
                 "Reading the number of items currently in progress is Anderson's ML1 "
                 "threshold metric — the first number a team can state without any "
                 "movement history at all."
             ),
-            action=(
+            action=_(
                 "Mark one column as the commitment point and one as the delivery point so "
                 "work-in-progress has a clear boundary to be counted against."
             ),
@@ -159,13 +160,13 @@ def _ml1_specs() -> list[_MetricSpec]:
         ),
         _MetricSpec(
             key="cards_visualised",
-            label="Cards visualised",
-            why=(
+            label=_("Cards visualised"),
+            why=_(
                 "Representing each unit of work as its own card — not a batched checklist "
                 "— is what turns a board into a kanban system rather than a generic to-do "
                 "list, per Anderson's ML1 definition."
             ),
-            action="Add the team's actual work items as individual cards on the board.",
+            action=_("Add the team's actual work items as individual cards on the board."),
             check=lambda s: (len(s.ctx.records) >= 1, len(s.ctx.records)),
         ),
     ]
@@ -180,13 +181,13 @@ def _ml2_specs() -> list[_MetricSpec]:
     return [
         _MetricSpec(
             key="lead_time_avg",
-            label="Average lead time",
-            why=(
+            label=_("Average lead time"),
+            why=_(
                 "Computing a mean lead time from real movement timestamps — not a guess — "
                 "is Anderson's ML2 threshold: the first quantitative promise a team can "
                 "make to a customer."
             ),
-            action="Deliver at least one card through the board so a lead time can be observed.",
+            action=_("Deliver at least one card through the board so a lead time can be observed."),
             check=lambda s: (
                 _mval(s, "customer_lead_time").get("sample_size", 0) >= 1,
                 _mval(s, "customer_lead_time").get("value"),
@@ -194,13 +195,13 @@ def _ml2_specs() -> list[_MetricSpec]:
         ),
         _MetricSpec(
             key="throughput",
-            label="Throughput",
-            why=(
+            label=_("Throughput"),
+            why=_(
                 "Counting delivered items per period gives Defined-stage teams their first "
                 "capacity signal — what Yoshima's coaching practice calls o ritmo do time "
                 "(the team's rhythm)."
             ),
-            action="Deliver work regularly enough that a per-week count becomes meaningful.",
+            action=_("Deliver work regularly enough that a per-week count becomes meaningful."),
             check=lambda s: (
                 _mval(s, "throughput").get("sample_size", 0) >= 1,
                 _mval(s, "throughput").get("value"),
@@ -208,13 +209,13 @@ def _ml2_specs() -> list[_MetricSpec]:
         ),
         _MetricSpec(
             key="wip_aging",
-            label="WIP aging",
-            why=(
+            label=_("WIP aging"),
+            why=_(
                 "Watching how long committed items have already been sitting — aging WIP, "
                 "not just a headcount — is Defined-stage evidence that the team tracks "
                 "flow, not only completion."
             ),
-            action="Commit at least one card and leave it in flight so its age can be tracked.",
+            action=_("Commit at least one card and leave it in flight so its age can be tracked."),
             check=lambda s: (
                 len(s.ctx.in_flight_at()) >= 1,
                 len(s.ctx.in_flight_at()),
@@ -222,12 +223,14 @@ def _ml2_specs() -> list[_MetricSpec]:
         ),
         _MetricSpec(
             key="blocker_count",
-            label="Blocker count",
-            why=(
+            label=_("Blocker count"),
+            why=_(
                 "Recording blockers explicitly, with a start and end time, is what turns "
                 "'we were stuck' into a number Anderson's ML2 teams can act on."
             ),
-            action="Log blockers on cards as they happen, with a category, instead of only in conversation.",
+            action=_(
+                "Log blockers on cards as they happen, with a category, instead of only in conversation."
+            ),
             check=lambda s: (
                 len(s.ctx.blocker_rows) >= 1,
                 s.blockers["meta"].get("blocker_count"),
@@ -235,13 +238,15 @@ def _ml2_specs() -> list[_MetricSpec]:
         ),
         _MetricSpec(
             key="work_item_types",
-            label="Work-item types",
-            why=(
+            label=_("Work-item types"),
+            why=_(
                 "Distinguishing types of demand — feature, defect, risk, debt, compliance "
                 "— is Anderson's ML2 requirement for classifying work before you can "
                 "improve how it flows."
             ),
-            action="Tag delivered cards with more than one value area or demand type as they actually differ.",
+            action=_(
+                "Tag delivered cards with more than one value area or demand type as they actually differ."
+            ),
             check=lambda s: (
                 len(s.demand["meta"].get("value_area_mix", [])) >= 2
                 or len(s.demand["meta"].get("demand_type_mix", [])) >= 2,
@@ -260,15 +265,16 @@ def _ml3_specs() -> list[_MetricSpec]:
     return [
         _MetricSpec(
             key="lead_time_distribution",
-            label="Lead-time distribution & percentiles",
-            why=(
+            label=_("Lead-time distribution & percentiles"),
+            why=_(
                 "Reporting the full percentile spread (50/70/85/95), not just the mean, is "
                 "Anderson's ML3 requirement — averages hide the tail that actually breaks "
                 "customer promises."
             ),
-            action=(
-                f"Deliver at least {LOW_CONFIDENCE_SAMPLE} cards in the window so the "
-                "percentile spread stops being a guess."
+            action=_(
+                "Deliver at least {n} cards in the window so the "
+                "percentile spread stops being a guess.",
+                n=LOW_CONFIDENCE_SAMPLE,
             ),
             check=lambda s: (
                 s.distribution.get("sample_size", 0) >= LOW_CONFIDENCE_SAMPLE,
@@ -277,12 +283,12 @@ def _ml3_specs() -> list[_MetricSpec]:
         ),
         _MetricSpec(
             key="sle_attainment",
-            label="SLE & attainment",
-            why=(
+            label=_("SLE & attainment"),
+            why=_(
                 "A committed Service Level Expectation with a measured attainment rate is "
                 "the customer-facing promise Anderson's Managed stage exists to keep."
             ),
-            action=(
+            action=_(
                 "Set a board SLE (days + target percentile) and deliver enough cards to "
                 "measure attainment against it."
             ),
@@ -294,15 +300,16 @@ def _ml3_specs() -> list[_MetricSpec]:
         ),
         _MetricSpec(
             key="cfd",
-            label="Cumulative flow diagram",
-            why=(
+            label=_("Cumulative flow diagram"),
+            why=_(
                 "The CFD is Anderson's canonical Managed-stage instrument: it exposes WIP, "
                 "lead time and where work is piling up in one picture instead of three "
                 "separate numbers."
             ),
-            action=(
-                f"Accumulate at least {LOW_CONFIDENCE_SAMPLE} cards of movement history so "
-                "the cumulative bands are readable rather than noise."
+            action=_(
+                "Accumulate at least {n} cards of movement history so "
+                "the cumulative bands are readable rather than noise.",
+                n=LOW_CONFIDENCE_SAMPLE,
             ),
             check=lambda s: (
                 s.cfd.get("sample_size", 0) >= LOW_CONFIDENCE_SAMPLE and bool(s.cfd.get("series")),
@@ -311,13 +318,13 @@ def _ml3_specs() -> list[_MetricSpec]:
         ),
         _MetricSpec(
             key="due_date_performance",
-            label="Due-date performance",
-            why=(
+            label=_("Due-date performance"),
+            why=_(
                 "Measuring on-time delivery for fixed-date commitments is how Managed-"
                 "stage teams prove a class-of-service policy actually works, not just "
                 "exists on paper."
             ),
-            action="Deliver at least one fixed_date card against a due_date.",
+            action=_("Deliver at least one fixed_date card against a due_date."),
             check=lambda s: (
                 s.demand["meta"]["due_date_performance"].get("total", 0) >= 1,
                 s.demand["meta"]["due_date_performance"].get("pct"),
@@ -325,13 +332,13 @@ def _ml3_specs() -> list[_MetricSpec]:
         ),
         _MetricSpec(
             key="class_of_service_mix",
-            label="Class-of-service mix",
-            why=(
+            label=_("Class-of-service mix"),
+            why=_(
                 "Quantifying the delivered mix across expedite, standard, fixed-date and "
                 "intangible is what lets a Managed-stage team see whether its service "
                 "classes are a real policy or just labels."
             ),
-            action="Deliver cards under at least two different service classes.",
+            action=_("Deliver cards under at least two different service classes."),
             check=lambda s: (
                 len(s.demand["meta"].get("service_class_mix", [])) >= 2,
                 s.demand["meta"].get("service_class_mix"),
@@ -339,15 +346,16 @@ def _ml3_specs() -> list[_MetricSpec]:
         ),
         _MetricSpec(
             key="flow_efficiency",
-            label="Flow efficiency",
-            why=(
+            label=_("Flow efficiency"),
+            why=_(
                 "Splitting lead time into touch and wait time is Anderson's Managed-stage "
                 "diagnostic for where to intervene — Yoshima teaches Brazilian teams to "
                 "attack the queue first, not ask people to work faster."
             ),
-            action=(
-                f"Deliver at least {LOW_CONFIDENCE_SAMPLE} cards through activity and "
-                "queue columns so the touch/wait split is trustworthy."
+            action=_(
+                "Deliver at least {n} cards through activity and "
+                "queue columns so the touch/wait split is trustworthy.",
+                n=LOW_CONFIDENCE_SAMPLE,
             ),
             check=lambda s: (
                 s.flow_efficiency.get("sample_size", 0) >= LOW_CONFIDENCE_SAMPLE,
@@ -366,15 +374,15 @@ def _ml4_specs() -> list[_MetricSpec]:
     return [
         _MetricSpec(
             key="monte_carlo_forecast",
-            label="Monte Carlo forecasts",
-            why=(
+            label=_("Monte Carlo forecasts"),
+            why=_(
                 "Probabilistic forecasting from resampled weekly throughput is Anderson's "
                 "Quantitatively Managed hallmark: a date that comes with a stated "
                 "confidence instead of a single-point guess."
             ),
-            action=(
-                f"Accumulate at least {LOW_CONFIDENCE_SAMPLE} weeks of delivered throughput "
-                "history to resample from."
+            action=_(
+                "Accumulate at least {n} weeks of delivered throughput history to resample from.",
+                n=LOW_CONFIDENCE_SAMPLE,
             ),
             check=lambda s: (
                 s.throughput["meta"].get("periods", 0) >= LOW_CONFIDENCE_SAMPLE
@@ -384,15 +392,16 @@ def _ml4_specs() -> list[_MetricSpec]:
         ),
         _MetricSpec(
             key="throughput_variability",
-            label="Throughput variability",
-            why=(
+            label=_("Throughput variability"),
+            why=_(
                 "Tracking the coefficient of variation of weekly throughput tells a "
                 "Quantitatively Managed team whether its own forecasts can be trusted "
                 "before it ships them to a stakeholder."
             ),
-            action=(
-                f"Keep delivering for {LOW_CONFIDENCE_SAMPLE}+ weeks so variability is "
-                "measured over a real sample, not a handful of lucky weeks."
+            action=_(
+                "Keep delivering for {n}+ weeks so variability is "
+                "measured over a real sample, not a handful of lucky weeks.",
+                n=LOW_CONFIDENCE_SAMPLE,
             ),
             check=lambda s: (
                 _mval(s, "throughput_variability").get("sample_size", 0) >= LOW_CONFIDENCE_SAMPLE,
@@ -401,14 +410,15 @@ def _ml4_specs() -> list[_MetricSpec]:
         ),
         _MetricSpec(
             key="failure_demand",
-            label="Failure demand %",
-            why=(
+            label=_("Failure demand %"),
+            why=_(
                 "Separating failure demand from value demand is Anderson's Quantitatively "
                 "Managed requirement for pricing the true cost of poor quality upstream."
             ),
-            action=(
-                f"Tag at least {LOW_CONFIDENCE_SAMPLE} delivered cards with a demand_type "
-                "so failure demand has a denominator worth trusting."
+            action=_(
+                "Tag at least {n} delivered cards with a demand_type "
+                "so failure demand has a denominator worth trusting.",
+                n=LOW_CONFIDENCE_SAMPLE,
             ),
             check=lambda s: (
                 _mval(s, "failure_demand").get("sample_size", 0) >= LOW_CONFIDENCE_SAMPLE,
@@ -417,13 +427,15 @@ def _ml4_specs() -> list[_MetricSpec]:
         ),
         _MetricSpec(
             key="flow_debt",
-            label="Flow debt (expedite impact)",
-            why=(
+            label=_("Flow debt (expedite impact)"),
+            why=_(
                 "Quantifying flow debt — how much slower standard work moves because of "
                 "expedite interruptions — is what lets Quantitatively Managed teams price "
                 "their own class-of-service policy instead of assuming it is free."
             ),
-            action="Deliver enough expedite and standard cards that both have a measurable p85 lead time.",
+            action=_(
+                "Deliver enough expedite and standard cards that both have a measurable p85 lead time."
+            ),
             check=lambda s: (
                 bool(s.demand["meta"]["flow_debt"].get("available")),
                 s.demand["meta"]["flow_debt"].get("ratio"),
@@ -431,15 +443,16 @@ def _ml4_specs() -> list[_MetricSpec]:
         ),
         _MetricSpec(
             key="discovery_lead_time",
-            label="Discovery (upstream) lead time",
-            why=(
+            label=_("Discovery (upstream) lead time"),
+            why=_(
                 "Measuring upstream discovery lead time alongside delivery lead time is "
                 "Anderson's Quantitatively Managed step toward managing the whole value "
                 "stream, not just the build phase."
             ),
-            action=(
-                f"Commit at least {LOW_CONFIDENCE_SAMPLE} cards that first spent time "
-                "upstream so discovery lead time has a real sample."
+            action=_(
+                "Commit at least {n} cards that first spent time "
+                "upstream so discovery lead time has a real sample.",
+                n=LOW_CONFIDENCE_SAMPLE,
             ),
             check=lambda s: (
                 _mval(s, "discovery_lead_time").get("sample_size", 0) >= LOW_CONFIDENCE_SAMPLE,
@@ -448,13 +461,15 @@ def _ml4_specs() -> list[_MetricSpec]:
         ),
         _MetricSpec(
             key="littles_law_coherence",
-            label="Little's Law coherence",
-            why=(
+            label=_("Little's Law coherence"),
+            why=_(
                 "Checking that observed WIP, throughput and lead time agree via Little's "
                 "Law is the statistical proof Anderson demands before anyone trusts a "
                 "forecast built on top of them."
             ),
-            action="Deliver a stable, non-empty stream of work so WIP, throughput and lead time can be reconciled.",
+            action=_(
+                "Deliver a stable, non-empty stream of work so WIP, throughput and lead time can be reconciled."
+            ),
             check=lambda s: (
                 s.littles_law["meta"].get("coherence_ratio") is not None,
                 s.littles_law["meta"].get("coherence_ratio"),
@@ -472,13 +487,13 @@ def _ml5_specs() -> list[_MetricSpec]:
     return [
         _MetricSpec(
             key="envelope_to_delivery_lead_time",
-            label="Envelope-to-delivery lead time",
-            why=(
+            label=_("Envelope-to-delivery lead time"),
+            why=_(
                 "Measuring the full envelope-to-delivery lead time — including sealed "
                 "pre-discovery time — is Anderson's Optimizing-stage view of the entire "
                 "customer promise, not only the visible part of the flow."
             ),
-            action=(
+            action=_(
                 "Turn on 'count sealed-envelope time in metrics' for this board and "
                 "deliver cards that passed through the envelope."
             ),
@@ -491,13 +506,15 @@ def _ml5_specs() -> list[_MetricSpec]:
         ),
         _MetricSpec(
             key="bottleneck_queue_analysis",
-            label="Bottleneck / queue analysis",
-            why=(
+            label=_("Bottleneck / queue analysis"),
+            why=_(
                 "Ranking queues by their wait-time Pareto to find the single worst offender "
                 "is Anderson's Optimizing-stage discipline of fixing the constraint instead "
                 "of everything at once."
             ),
-            action="Deliver enough cards that a wait-time Pareto across queue columns can be ranked.",
+            action=_(
+                "Deliver enough cards that a wait-time Pareto across queue columns can be ranked."
+            ),
             check=lambda s: (
                 bool(s.flow_efficiency["meta"].get("worst_queue")),
                 s.flow_efficiency["meta"].get("worst_queue"),
@@ -505,13 +522,13 @@ def _ml5_specs() -> list[_MetricSpec]:
         ),
         _MetricSpec(
             key="capability_comparison",
-            label="Cross-board capability comparison",
-            why=(
+            label=_("Cross-board capability comparison"),
+            why=_(
                 "Comparing lead-time capability across boards — or before/after a policy "
                 "change via a cloned simulator board — is Anderson's Optimizing-stage "
                 "practice of treating the process itself as an experiment."
             ),
-            action="Stand up at least one more operational board so capability can be compared.",
+            action=_("Stand up at least one more operational board so capability can be compared."),
             check=lambda s: (
                 s.operational_board_count >= 2,
                 s.operational_board_count,
@@ -519,13 +536,13 @@ def _ml5_specs() -> list[_MetricSpec]:
         ),
         _MetricSpec(
             key="wip_experiment_outcomes",
-            label="WIP experiment outcomes",
-            why=(
+            label=_("WIP experiment outcomes"),
+            why=_(
                 "Running a WIP experiment and reading the resulting Little's-Law delta is "
                 "the Optimizing-stage proof that lowering WIP shortens lead time — "
                 "Anderson's central kanban claim made empirical rather than theoretical."
             ),
-            action="Clone this board into the simulator and run a wip_experiment scenario.",
+            action=_("Clone this board into the simulator and run a wip_experiment scenario."),
             check=lambda s: (
                 s.wip_experiment_count >= 1,
                 s.wip_experiment_count,
@@ -543,13 +560,15 @@ def _ml6_specs() -> list[_MetricSpec]:
     return [
         _MetricSpec(
             key="portfolio_rollup",
-            label="Portfolio roll-up across projects",
-            why=(
+            label=_("Portfolio roll-up across projects"),
+            why=_(
                 "Rolling flow metrics up across every project onto one portfolio view is "
                 "Anderson's Congruent-stage requirement — flow data that speaks to the "
                 "business rather than only to the delivery team."
             ),
-            action="Deliver work under at least two distinct projects so a portfolio roll-up is possible.",
+            action=_(
+                "Deliver work under at least two distinct projects so a portfolio roll-up is possible."
+            ),
             check=lambda s: (
                 sum(1 for row in s.demand["meta"].get("per_project", []) if row.get("delivered"))
                 >= 2,
@@ -558,14 +577,14 @@ def _ml6_specs() -> list[_MetricSpec]:
         ),
         _MetricSpec(
             key="business_outcome_alignment",
-            label="Business-outcome alignment",
-            why=(
+            label=_("Business-outcome alignment"),
+            why=_(
                 "Tying flow metrics to explicit business-value categories — feature, "
                 "defect, risk, debt, compliance — is Anderson's Congruent-stage bridge "
                 "between kanban mechanics and business outcomes, the same dashboard "
                 "Yoshima insists Brazilian leadership and delivery teams should both read."
             ),
-            action="Classify delivered work across at least three distinct value areas.",
+            action=_("Classify delivered work across at least three distinct value areas."),
             check=lambda s: (
                 len(s.demand["meta"].get("value_area_mix", [])) >= 3,
                 s.demand["meta"].get("value_area_mix"),
@@ -574,32 +593,39 @@ def _ml6_specs() -> list[_MetricSpec]:
     ]
 
 
+#: (level, name, focus, metric specs). Names and focus are English catalog keys,
+#: translated when the ladder is computed.
 _LEVEL_DEFS: tuple[tuple[str, str, str, Callable[[], list[_MetricSpec]] | None], ...] = (
-    ("ML0", "Oblivious", "No measurement at all — the pre-kanban baseline.", None),
-    ("ML1", "Emerging", "Visualise the work and count what is in progress.", _ml1_specs),
-    ("ML2", "Defined", "Average lead time, throughput, aging and classification.", _ml2_specs),
+    ("ML0", N_("Oblivious"), N_("No measurement at all — the pre-kanban baseline."), None),
+    ("ML1", N_("Emerging"), N_("Visualise the work and count what is in progress."), _ml1_specs),
+    (
+        "ML2",
+        N_("Defined"),
+        N_("Average lead time, throughput, aging and classification."),
+        _ml2_specs,
+    ),
     (
         "ML3",
-        "Managed",
-        "Distributions, service level expectations, CFD and flow efficiency.",
+        N_("Managed"),
+        N_("Distributions, service level expectations, CFD and flow efficiency."),
         _ml3_specs,
     ),
     (
         "ML4",
-        "Quantitatively Managed",
-        "Probabilistic forecasts, variability, failure demand and flow debt.",
+        N_("Quantitatively Managed"),
+        N_("Probabilistic forecasts, variability, failure demand and flow debt."),
         _ml4_specs,
     ),
     (
         "ML5",
-        "Optimizing",
-        "End-to-end lead time, bottleneck analysis and controlled experiments.",
+        N_("Optimizing"),
+        N_("End-to-end lead time, bottleneck analysis and controlled experiments."),
         _ml5_specs,
     ),
     (
         "ML6",
-        "Congruent",
-        "Portfolio roll-up and alignment between flow and business outcomes.",
+        N_("Congruent"),
+        N_("Portfolio roll-up and alignment between flow and business outcomes."),
         _ml6_specs,
     ),
 )
@@ -678,13 +704,17 @@ def _next_actions(
     if not actions:
         if current_index >= len(levels) - 1:
             actions.append(
-                "ML6 Congruent is fully satisfied — keep monitoring so a regression in any "
-                "metric is caught before it erodes the ladder."
+                _(
+                    "ML6 Congruent is fully satisfied — keep monitoring so a regression in any "
+                    "metric is caught before it erodes the ladder."
+                )
             )
         else:
             actions.append(
-                f"{levels[current_index]['name']} is fully satisfied; no further data gaps "
-                "block the next level."
+                _(
+                    "{level} is fully satisfied; no further data gaps block the next level.",
+                    level=levels[current_index]["name"],
+                )
             )
     # A dashboard, not a novel: cap the list at something a person will read.
     return actions[:6]
@@ -705,7 +735,7 @@ def compute_kmm(ctx: MetricsContext) -> dict[str, Any]:
     for level, name, focus, factory in _LEVEL_DEFS:
         specs = factory() if factory else []
         specs_by_level[level] = specs
-        levels.append(_level_payload(level, name, focus, specs, snapshot if specs else None))
+        levels.append(_level_payload(level, _(name), _(focus), specs, snapshot if specs else None))
 
     # A maturity model is cumulative by definition: the team has not reached
     # level N while any level below N is unmet. Walk up from ML0 and stop at

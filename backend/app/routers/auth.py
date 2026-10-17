@@ -43,6 +43,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .. import texts
 from ..config import (
     NON_INTERACTIVE_ROLES,
     ROLE_CAPABILITIES,
@@ -380,7 +381,7 @@ async def update_me(
 
 def default_locale(via: str) -> str:
     """Portuguese through the Pampufa, English on the Nagare's own login (N2)."""
-    return "pt-BR" if via == "pampufa" else "en"
+    return texts.default_locale(via)
 
 
 async def _me(s: AsyncSession, user: CurrentUser) -> dict[str, Any]:

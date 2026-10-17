@@ -978,6 +978,8 @@ class SimRunOut(OpenSchema):
 
 class SimCompareRequest(Schema):
     run_ids: list[str] = Field(min_length=2, max_length=8)
+    #: The run every delta is measured against (default: the first of ``run_ids``).
+    baseline_run_id: str | None = None
 
 
 class SimCompareOut(OpenSchema):
@@ -986,3 +988,4 @@ class SimCompareOut(OpenSchema):
     rows: list[dict[str, Any]] = Field(default_factory=list)
     deltas: dict[str, Any] = Field(default_factory=dict)
     verdict: str | None = None
+    baseline_run_id: str | None = None
