@@ -26,12 +26,8 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import event, func, select
-from sqlalchemy.ext.asyncio import (
-    AsyncEngine,
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext import asyncio as sa_asyncio
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import ORMExecuteState, Session
 
 from .config import BASE_DIR, settings
@@ -131,10 +127,13 @@ def create_engine(url: str | None = None) -> AsyncEngine:
         path = url.split("///", 1)[-1]
         if path and path != ":memory:":
             Path(path).parent.mkdir(parents=True, exist_ok=True)
-        engine = create_async_engine(url, connect_args={"timeout": 30})
+        engine = sa_asyncio.create_async_engine(url, connect_args={"timeout": 30})
         event.listen(engine.sync_engine, "connect", _sqlite_pragmas)
         return engine
-    return create_async_engine(url, pool_pre_ping=True)
+    # Through the MODULE, resolved at call time: the OpenTelemetry instrumentation
+    # (observability.py) wraps ``sqlalchemy.ext.asyncio.create_async_engine`` after this
+    # module was imported; a name imported here would be the original, without SQL spans.
+    return sa_asyncio.create_async_engine(url, pool_pre_ping=True)
 
 
 def make_sessionmaker(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
