@@ -49,6 +49,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
+from ..texts import N_, _, _n, date_label, delta_pct, num
+
 __all__ = [
     "CONFIDENCE_LEVELS",
     "DEFAULT_CLASS_MIX",
@@ -146,31 +148,17 @@ _DEFAULT_CAPACITY = 4
 #: Six policies that trace the whole Little's Law curve: no limits, loose, the
 #: board's own policy, two progressively tighter buffer settings, and one that
 #: tightens the *activity* columns too so the bottleneck genuinely starves.
+#: The names are English catalog keys, translated when a run uses the defaults.
 DEFAULT_WIP_CONFIGS: tuple[dict[str, Any], ...] = (
-    {"name": "No WIP limits", "unlimited": True},
-    {"name": "Loose buffers (x2)", "queue_scale": 2.0, "flow_scale": 2.0},
-    {"name": "Board policy", "scale": 1.0},
-    {"name": "Tight buffers (x0.6)", "queue_scale": 0.6, "flow_scale": 0.6},
-    {"name": "Very tight buffers (x0.35)", "queue_scale": 0.35, "flow_scale": 0.35},
-    {"name": "Starved (x0.35 everywhere)", "scale": 0.35},
+    {"name": N_("No WIP limits"), "unlimited": True},
+    {"name": N_("Loose buffers (x2)"), "queue_scale": 2.0, "flow_scale": 2.0},
+    {"name": N_("Board policy"), "scale": 1.0},
+    {"name": N_("Tight buffers (x0.6)"), "queue_scale": 0.6, "flow_scale": 0.6},
+    {"name": N_("Very tight buffers (x0.35)"), "queue_scale": 0.35, "flow_scale": 0.35},
+    {"name": N_("Starved (x0.35 everywhere)"), "scale": 0.35},
 )
 
 DEFAULT_EXPEDITE_SHARES: tuple[float, ...] = (0.0, 0.05, 0.10, 0.20, 0.35)
-
-_MONTHS: tuple[str, ...] = (
-    "Jan",
-    "Feb",
-    "Mar",
-    "Apr",
-    "May",
-    "Jun",
-    "Jul",
-    "Aug",
-    "Sep",
-    "Oct",
-    "Nov",
-    "Dec",
-)
 
 _EPS = 1e-9
 _INF = float("inf")
@@ -279,7 +267,7 @@ def histogram(
             bins.append(
                 {
                     "x": int(value) if float(value).is_integer() else round(float(value), 3),
-                    "label": str(int(value)) if float(value).is_integer() else f"{value:.2f}",
+                    "label": num(int(value)) if float(value).is_integer() else num(value, 2),
                     "count": count,
                     "pct": round(count / total * 100.0, 3),
                     "cumulative_pct": round(running / total * 100.0, 3),
@@ -292,7 +280,7 @@ def histogram(
         return [
             {
                 "x": round(low, 3),
-                "label": f"{low:.2f}",
+                "label": num(low, 2),
                 "count": total,
                 "pct": 100.0,
                 "cumulative_pct": 100.0,
@@ -315,7 +303,7 @@ def histogram(
                 "x": round(start + width / 2, 3),
                 "x0": round(start, 3),
                 "x1": round(end, 3),
-                "label": f"{start:.1f}–{end:.1f}",
+                "label": f"{num(start, 1)}–{num(end, 1)}",
                 "count": count,
                 "pct": round(count / total * 100.0, 3),
                 "cumulative_pct": round(running / total * 100.0, 3),
@@ -343,19 +331,16 @@ def _parse_iso(value: Any) -> datetime | None:
 
 
 def _format_day(value: date, reference: date | None = None) -> str:
-    """``12 Oct`` — with the year appended only when it is not the obvious one.
-
-    Hand-rolled rather than ``strftime`` because ``%-d`` is not portable and
-    ``%b`` is locale-dependent; a forecast sentence must read the same everywhere.
-    """
-    label = f"{value.day} {_MONTHS[value.month - 1]}"
-    if reference is not None and value.year == reference.year:
-        return label
-    return f"{label} {value.year}"
+    """``12 Oct`` — with the year appended only when it is not the obvious one."""
+    return date_label(value, reference)
 
 
-def _pluralise(count: float, singular: str, plural: str | None = None) -> str:
-    return singular if abs(count - 1) < _EPS else (plural or f"{singular}s")
+def _items(count: float) -> str:
+    return _n("item", "items", count)
+
+
+def _weeks(count: float) -> str:
+    return _n("week", "weeks", count)
 
 
 def weekly_throughput_from_deliveries(
@@ -497,10 +482,15 @@ def monte_carlo_when(
                 "days": weeks * 7,
                 "date": target.isoformat(),
                 "date_label": _format_day(target, origin),
-                "sentence": (
-                    f"{int(level)}% confidence: all {backlog} "
-                    f"{_pluralise(backlog, 'item')} delivered within {weeks} "
-                    f"{_pluralise(weeks, 'week')} — by {_format_day(target, origin)}."
+                "sentence": _(
+                    "{confidence}% confidence: all {backlog} {items} delivered within "
+                    "{weeks} {weeks_word} — by {date}.",
+                    confidence=int(level),
+                    backlog=backlog,
+                    items=_items(backlog),
+                    weeks=weeks,
+                    weeks_word=_weeks(weeks),
+                    date=_format_day(target, origin),
                 ),
             }
         )
@@ -510,7 +500,9 @@ def monte_carlo_when(
     )
     return {
         "kind": "monte_carlo_when",
-        "question": f"How long to deliver {backlog} {_pluralise(backlog, 'item')}?",
+        "question": _(
+            "How long to deliver {backlog} {items}?", backlog=backlog, items=_items(backlog)
+        ),
         "trials": trials,
         "seed": seed,
         "backlog_size": backlog,
@@ -545,22 +537,37 @@ def _when_verdict(levels: Sequence[dict[str, Any]], backlog: int, pool: Sequence
     average = _mean(list(pool)) or 0.0
     naive = math.ceil(backlog / average) if average > 0 else 0
     parts = [
-        f"A coin-flip date is {optimistic['date_label']} ({optimistic['weeks']} "
-        f"{_pluralise(optimistic['weeks'], 'week')}); the date worth committing to is "
-        f"{safe['date_label']} ({safe['weeks']} {_pluralise(safe['weeks'], 'week')})."
+        _(
+            "A coin-flip date is {optimistic_date} ({optimistic_weeks} {optimistic_word}); "
+            "the date worth committing to is {safe_date} ({safe_weeks} {safe_word}).",
+            optimistic_date=optimistic["date_label"],
+            optimistic_weeks=optimistic["weeks"],
+            optimistic_word=_weeks(optimistic["weeks"]),
+            safe_date=safe["date_label"],
+            safe_weeks=safe["weeks"],
+            safe_word=_weeks(safe["weeks"]),
+        )
     ]
     if spread <= 0:
-        parts.append("Throughput has been steady enough that the risk band is a single week.")
+        parts.append(_("Throughput has been steady enough that the risk band is a single week."))
     else:
         parts.append(
-            f"The {spread}-{_pluralise(spread, 'week')} gap between them is the cost of "
-            f"throughput variability, not of the work itself."
+            _(
+                "The {spread}-{weeks_word} gap between them is the cost of throughput "
+                "variability, not of the work itself.",
+                spread=spread,
+                weeks_word=_weeks(spread),
+            )
         )
     if naive:
         parts.append(
-            f"Dividing the backlog by average throughput would have promised {naive} "
-            f"{_pluralise(naive, 'week')} — a date this simulation only reaches "
-            f"{_reach_probability(levels, naive)}."
+            _(
+                "Dividing the backlog by average throughput would have promised {naive} "
+                "{weeks_word} — a date this simulation only reaches {probability}.",
+                naive=naive,
+                weeks_word=_weeks(naive),
+                probability=_reach_probability(levels, naive),
+            )
         )
     return " ".join(parts)
 
@@ -569,8 +576,8 @@ def _reach_probability(levels: Sequence[dict[str, Any]], weeks: int) -> str:
     """Describe how safe a naive week count is, in words rather than a number."""
     for row in levels:
         if row["weeks"] >= weeks:
-            return f"about {row['confidence']}% of the time"
-    return "less often than 95% of the time"
+            return _("about {confidence}% of the time", confidence=row["confidence"])
+    return _("less often than 95% of the time")
 
 
 def monte_carlo_how_many(
@@ -640,9 +647,12 @@ def monte_carlo_how_many(
                 "items": value,
                 "date": target.isoformat(),
                 "date_label": target_label,
-                "sentence": (
-                    f"{int(level)}% confidence: {value} "
-                    f"{_pluralise(value, 'item')} or more by {target_label}."
+                "sentence": _(
+                    "{confidence}% confidence: {value} {items} or more by {date}.",
+                    confidence=int(level),
+                    value=value,
+                    items=_items(value),
+                    date=target_label,
                 ),
             }
         )
@@ -652,7 +662,7 @@ def monte_carlo_how_many(
     )
     return {
         "kind": "monte_carlo_how_many",
-        "question": f"How many items can we deliver in {horizon_days} days?",
+        "question": _("How many items can we deliver in {days} days?", days=horizon_days),
         "trials": trials,
         "seed": seed,
         "days": horizon_days,
@@ -694,16 +704,27 @@ def _how_many_verdict(
     average = _mean(list(pool)) or 0.0
     naive = int(average * weeks)
     parts = [
-        f"Plan on {safe['items']} {_pluralise(safe['items'], 'item')} by {target_label} and you will be "
-        f"right {safe['confidence']}% of the time; plan on {optimistic['items']} and it is a coin flip."
+        _(
+            "Plan on {safe_items} {items} by {date} and you will be right {confidence}% of the "
+            "time; plan on {optimistic_items} and it is a coin flip.",
+            safe_items=safe["items"],
+            items=_items(safe["items"]),
+            date=target_label,
+            confidence=safe["confidence"],
+            optimistic_items=optimistic["items"],
+        )
     ]
     gap = optimistic["items"] - safe["items"]
     if gap > 0:
         parts.append(
-            f"Those {gap} {_pluralise(gap, 'item')} are the negotiating room variability takes away from you."
+            _(
+                "Those {gap} {items} are the negotiating room variability takes away from you.",
+                gap=gap,
+                items=_items(gap),
+            )
         )
     if naive:
-        parts.append(f"Average throughput alone would have promised {naive}.")
+        parts.append(_("Average throughput alone would have promised {naive}.", naive=naive))
     return " ".join(parts)
 
 
@@ -1302,7 +1323,9 @@ def simulate_flow(
                 flow_wip -= 1
             return
         cols[index].append(item)
-        if previous is None or previous < commit_index <= index:
+        # Only the commitment point puts work in the flow: an arrival upstream of
+        # it is still an option and must not hold a slot of the whole-flow limit.
+        if index >= commit_index and (previous is None or previous < commit_index):
             flow_wip += 1
             flow_wip_peak = max(flow_wip_peak, flow_wip)
         if spec.is_activity:
@@ -1740,6 +1763,11 @@ def _config_kwargs(config: Mapping[str, Any], baseline_flow: int | None) -> dict
     }
 
 
+def _default_wip_configs() -> list[dict[str, Any]]:
+    """:data:`DEFAULT_WIP_CONFIGS` with their names in the caller's language."""
+    return [{**entry, "name": _(entry["name"])} for entry in DEFAULT_WIP_CONFIGS]
+
+
 def _experiment_row(
     name: str, result: SimulationResult, kwargs: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -1819,10 +1847,10 @@ def wip_experiment(
         seed=seed,
         variability=variability,
     )
-    rows_config = list(configs) if configs else [dict(entry) for entry in DEFAULT_WIP_CONFIGS]
+    rows_config = list(configs) if configs else _default_wip_configs()
     rows: list[dict[str, Any]] = []
     for index, config in enumerate(rows_config):
-        name = str(config.get("name") or f"Configuration {index + 1}")
+        name = str(config.get("name") or _("Configuration {n}", n=index + 1))
         kwargs = _config_kwargs(config, baseline_flow_wip_max)
         result = simulate_flow(
             specs,
@@ -1882,8 +1910,13 @@ def _wip_verdict(rows: Sequence[Mapping[str, Any]]) -> str:
     """A written read-out of the experiment, in the language of a coach."""
     usable = [row for row in rows if row.get("lead_time_avg") is not None]
     if len(usable) < 2:
-        return "Not enough delivered work to compare these policies."
-    loosest = max(usable, key=lambda row: row.get("avg_wip") or 0.0)
+        return _("Not enough delivered work to compare these policies.")
+    # The reference is the row without limits; a custom experiment without one
+    # falls back to its loosest row (the highest average WIP).
+    loosest = next(
+        (row for row in usable if (row.get("policy") or {}).get("unlimited")),
+        max(usable, key=lambda row: row.get("avg_wip") or 0.0),
+    )
     best_throughput = max((row.get("throughput_per_week") or 0.0) for row in usable)
     # The best policy is the one with the shortest lead time that still keeps
     # throughput within 5% of the best any policy achieved. Anything below that
@@ -1896,51 +1929,103 @@ def _wip_verdict(rows: Sequence[Mapping[str, Any]]) -> str:
         row for row in usable if (row.get("throughput_per_week") or 0.0) < best_throughput * 0.95
     ]
 
-    parts: list[str] = []
     lead_drop = _pct_change(winner.get("lead_time_p85"), loosest.get("lead_time_p85"))
+    if winner is loosest or lead_drop is None or lead_drop >= 0:
+        return _wip_verdict_no_gain(loosest, starved)
+
+    parts: list[str] = []
     wip_drop = _pct_change(winner.get("avg_wip"), loosest.get("avg_wip"))
     throughput_delta = _pct_change(
         winner.get("throughput_per_week"), loosest.get("throughput_per_week")
     )
     parts.append(
-        f"“{winner['name']}” is the policy to run: 85th-percentile system lead time "
-        f"{winner.get('lead_time_p85')} days against {loosest.get('lead_time_p85')} days under "
-        f"“{loosest['name']}”"
-        + (f" ({lead_drop:+.1f}%)" if lead_drop is not None else "")
-        + ", while throughput held at "
-        f"{winner.get('throughput_per_week')} items/week"
-        + (f" ({throughput_delta:+.1f}%)" if throughput_delta is not None else "")
-        + "."
+        _(
+            "“{winner}” is the policy to run: 85th-percentile system lead time {lead} days "
+            "against {loosest_lead} days under “{loosest}”{lead_change}, while throughput held "
+            "at {throughput} items/week{throughput_change}.",
+            winner=winner["name"],
+            lead=num(winner.get("lead_time_p85")),
+            loosest_lead=num(loosest.get("lead_time_p85")),
+            loosest=loosest["name"],
+            lead_change=delta_pct(lead_drop),
+            throughput=num(winner.get("throughput_per_week")),
+            throughput_change=delta_pct(throughput_delta),
+        )
     )
     if wip_drop is not None:
         parts.append(
-            f"Average work in progress fell from {loosest.get('avg_wip')} to {winner.get('avg_wip')} "
-            f"items ({wip_drop:+.1f}%) — lead time tracked it almost exactly, which is Little's Law "
-            "doing its job: the only way to finish sooner is to start less."
+            _(
+                "Average work in progress fell from {loosest_wip} to {wip} items ({change}%) — "
+                "lead time tracked it almost exactly, which is Little's Law doing its job: the "
+                "only way to finish sooner is to start less.",
+                loosest_wip=num(loosest.get("avg_wip")),
+                wip=num(winner.get("avg_wip")),
+                change=num(wip_drop, "+.1f"),
+            )
         )
     if starved:
         worst = min(starved, key=lambda row: row.get("throughput_per_week") or 0.0)
-        parts.append(
-            f"Past that point the trade turns: “{worst['name']}” cut throughput to "
-            f"{worst.get('throughput_per_week')} items/week"
-            + (
-                f" with the bottleneck ({worst.get('bottleneck')}) only "
-                f"{worst.get('bottleneck_utilization_pct')}% busy"
-                if worst.get("bottleneck_utilization_pct") is not None
-                else ""
+        if worst.get("bottleneck_utilization_pct") is not None:
+            parts.append(
+                _(
+                    "Past that point the trade turns: “{policy}” cut throughput to {throughput} "
+                    "items/week with the bottleneck ({bottleneck}) only {utilization}% busy — "
+                    "the limits are now below the team's capacity and the board is starving.",
+                    policy=worst["name"],
+                    throughput=num(worst.get("throughput_per_week")),
+                    bottleneck=worst.get("bottleneck"),
+                    utilization=num(worst.get("bottleneck_utilization_pct")),
+                )
             )
-            + " — the limits are now below the team's capacity and the board is starving."
-        )
+        else:
+            parts.append(
+                _(
+                    "Past that point the trade turns: “{policy}” cut throughput to {throughput} "
+                    "items/week — the limits are now below the team's capacity and the board is "
+                    "starving.",
+                    policy=worst["name"],
+                    throughput=num(worst.get("throughput_per_week")),
+                )
+            )
     customer_change = _pct_change(
         winner.get("customer_lead_time_avg"), loosest.get("customer_lead_time_avg")
     )
     if customer_change is not None and abs(customer_change) < 12:
         parts.append(
-            "Note the honest part: end-to-end customer lead time barely moved "
-            f"({customer_change:+.1f}%). Tight WIP does not make the queue disappear, it moves it "
-            "in front of the commitment point where it is still visible, still negotiable, and not "
-            "yet a promise."
+            _(
+                "Note the honest part: end-to-end customer lead time barely moved ({change}%). "
+                "Tight WIP does not make the queue disappear, it moves it in front of the "
+                "commitment point where it is still visible, still negotiable, and not yet a "
+                "promise.",
+                change=num(customer_change, "+.1f"),
+            )
         )
+    return " ".join(parts)
+
+
+def _wip_verdict_no_gain(reference: Mapping[str, Any], starved: Sequence[Mapping[str, Any]]) -> str:
+    """No limit bought a shorter lead time: say so instead of comparing a row with itself."""
+    parts = [
+        _(
+            "With this demand no WIP limit shortened the 85th-percentile system lead time "
+            "without costing throughput: “{reference}” already finishes in {lead} days at "
+            "{throughput} items/week. The board has slack, so the limits make no difference here.",
+            reference=reference["name"],
+            lead=num(reference.get("lead_time_p85")),
+            throughput=num(reference.get("throughput_per_week")),
+        )
+    ]
+    if starved:
+        worst = min(starved, key=lambda row: row.get("throughput_per_week") or 0.0)
+        parts.append(
+            _(
+                "Tighter limits only starve it: “{policy}” cut throughput to {throughput} "
+                "items/week.",
+                policy=worst["name"],
+                throughput=num(worst.get("throughput_per_week")),
+            )
+        )
+    parts.append(_("Keep the current policy and test again with more arrivals per week."))
     return " ".join(parts)
 
 
@@ -2015,6 +2100,7 @@ def class_of_service_experiment(
             column_keys=base.column_keys,
             label=f"expedite-{share:.2f}",
         )
+        name = _("{share}% expedite", share=num(share * 100, 0))
         result = simulate_flow(
             specs,
             stream=stream,
@@ -2026,7 +2112,7 @@ def class_of_service_experiment(
             target_utilization=target_utilization,
             warmup_weeks=warmup_weeks,
             expedite_preemption=expedite_preemption,
-            label=f"{share * 100:.0f}% expedite",
+            label=name,
             collect_series=True,
         )
         by_class = result.metrics["by_class"]
@@ -2037,7 +2123,7 @@ def class_of_service_experiment(
                 "expedite_share": round(share, 4),
                 "expedite_share_pct": round(share * 100, 1),
                 "expedite_cards": len(promote),
-                "name": f"{share * 100:.0f}% expedite",
+                "name": name,
                 "standard_lead_time_avg": standard.get("lead_time_avg"),
                 "standard_lead_time_p85": standard.get("lead_time_p85"),
                 "standard_delivered": standard.get("delivered"),
@@ -2093,23 +2179,30 @@ def class_of_service_experiment(
 def _class_verdict(rows: Sequence[Mapping[str, Any]]) -> str:
     usable = [row for row in rows if row.get("standard_lead_time_p85") is not None]
     if len(usable) < 2:
-        return "Not enough standard-class deliveries to measure the cost of expediting."
+        return _("Not enough standard-class deliveries to measure the cost of expediting.")
     baseline = usable[0]
     worst = max(usable, key=lambda row: row.get("standard_lead_time_p85") or 0.0)
     change = _pct_change(
         worst.get("standard_lead_time_p85"), baseline.get("standard_lead_time_p85")
     )
     parts = [
-        f"Going from {baseline['expedite_share_pct']:.0f}% to {worst['expedite_share_pct']:.0f}% expedite "
-        f"pushed the standard class's 85th-percentile lead time from "
-        f"{baseline.get('standard_lead_time_p85')} to {worst.get('standard_lead_time_p85')} days"
-        + (f" ({change:+.1f}%)" if change is not None else "")
-        + "."
+        _(
+            "Going from {from_share}% to {to_share}% expedite pushed the standard class's "
+            "85th-percentile lead time from {from_lead} to {to_lead} days{change}.",
+            from_share=num(baseline["expedite_share_pct"], 0),
+            to_share=num(worst["expedite_share_pct"], 0),
+            from_lead=num(baseline.get("standard_lead_time_p85")),
+            to_lead=num(worst.get("standard_lead_time_p85")),
+            change=delta_pct(change),
+        )
     ]
     if worst.get("expedite_lead_time_p85") is not None:
         parts.append(
-            f"The expedited items themselves came through in {worst.get('expedite_lead_time_p85')} days "
-            "at the 85th percentile — the queue did not get shorter, it got reordered."
+            _(
+                "The expedited items themselves came through in {lead} days at the 85th "
+                "percentile — the queue did not get shorter, it got reordered.",
+                lead=num(worst.get("expedite_lead_time_p85")),
+            )
         )
     extra_items = (worst.get("expedite_cards") or 0) - (baseline.get("expedite_cards") or 0)
     if extra_items > 0 and change:
@@ -2118,16 +2211,22 @@ def _class_verdict(rows: Sequence[Mapping[str, Any]]) -> str:
         )
         per_item = delay / extra_items
         parts.append(
-            f"That is roughly {per_item:.2f} days of delay imposed on the standard class for every "
-            "extra item somebody called urgent."
+            _(
+                "That is roughly {delay} days of delay imposed on the standard class for every "
+                "extra item somebody called urgent.",
+                delay=num(per_item, 2),
+            )
         )
     throughput_change = _pct_change(
         worst.get("throughput_per_week"), baseline.get("throughput_per_week")
     )
     if throughput_change is not None:
         parts.append(
-            f"Total throughput moved {throughput_change:+.1f}% — expediting does not create capacity, "
-            "it only decides who waits."
+            _(
+                "Total throughput moved {change}% — expediting does not create capacity, it only "
+                "decides who waits.",
+                change=num(throughput_change, "+.1f"),
+            )
         )
     return " ".join(parts)
 
@@ -2269,7 +2368,7 @@ def replay(
         arrival_days=kept,
     )
 
-    rows_config = list(policies) if policies else [dict(entry) for entry in DEFAULT_WIP_CONFIGS]
+    rows_config = list(policies) if policies else _default_wip_configs()
     baseline_flow = baseline_flow_wip_max
     if baseline_flow is None:
         from sqlalchemy import select
@@ -2281,7 +2380,7 @@ def replay(
 
     rows: list[dict[str, Any]] = []
     for index, config in enumerate(rows_config):
-        name = str(config.get("name") or f"Policy {index + 1}")
+        name = str(config.get("name") or _("Policy {n}", n=index + 1))
         kwargs = _config_kwargs(config, baseline_flow)
         result = simulate_flow(
             specs,
@@ -2336,14 +2435,22 @@ def replay(
 
 def _replay_verdict(rows: Sequence[Mapping[str, Any]], history: Mapping[str, Any]) -> str:
     if not rows:
-        return "No policy produced enough delivered work to judge."
+        return _("No policy produced enough delivered work to judge.")
     observed = _mean(history.get("observed_weekly_throughput") or [])
     parts = [
-        f"Replayed {len(history.get('arrival_days') or [])} real arrivals from this board through "
-        f"{len(rows)} policies."
+        _(
+            "Replayed {arrivals} real arrivals from this board through {policies} policies.",
+            arrivals=len(history.get("arrival_days") or []),
+            policies=len(rows),
+        )
     ]
     if observed:
-        parts.append(f"The board itself delivered {observed:.1f} items/week over the same demand.")
+        parts.append(
+            _(
+                "The board itself delivered {throughput} items/week over the same demand.",
+                throughput=num(observed, 1),
+            )
+        )
     parts.append(_wip_verdict(rows))
     return " ".join(part for part in parts if part)
 
@@ -2352,16 +2459,16 @@ def _replay_verdict(rows: Sequence[Mapping[str, Any]], history: Mapping[str, Any
 # Cross-run comparison (SPEC §8.6)
 # ---------------------------------------------------------------------------
 
-#: metric key -> (label, unit, lower_is_better)
+#: metric key -> (label, unit, lower_is_better). Labels are English catalog keys.
 COMPARABLE_METRICS: tuple[tuple[str, str, str, bool], ...] = (
-    ("lead_time_avg", "Lead time (avg)", "days", True),
-    ("lead_time_p85", "Lead time (85th)", "days", True),
-    ("customer_lead_time_avg", "Customer lead time (avg)", "days", True),
-    ("throughput_per_week", "Throughput", "items/week", False),
-    ("flow_efficiency_pct", "Flow efficiency", "%", False),
-    ("avg_wip", "Average WIP", "items", True),
-    ("delivered", "Delivered", "items", False),
-    ("due_date_performance_pct", "Due-date performance", "%", False),
+    ("lead_time_avg", N_("Lead time (avg)"), "days", True),
+    ("lead_time_p85", N_("Lead time (85th)"), "days", True),
+    ("customer_lead_time_avg", N_("Customer lead time (avg)"), "days", True),
+    ("throughput_per_week", N_("Throughput"), "items/week", False),
+    ("flow_efficiency_pct", N_("Flow efficiency"), "%", False),
+    ("avg_wip", N_("Average WIP"), "items", True),
+    ("delivered", N_("Delivered"), "items", False),
+    ("due_date_performance_pct", N_("Due-date performance"), "%", False),
 )
 
 
@@ -2430,9 +2537,9 @@ def compare_runs(runs: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 
     metric_defs = (
         (
-            ("forecast_p50", "Forecast (50%)", "", False),
-            ("forecast_p85", "Forecast (85%)", "", False),
-            ("forecast_p95", "Forecast (95%)", "", False),
+            ("forecast_p50", N_("Forecast (50%)"), "", False),
+            ("forecast_p85", N_("Forecast (85%)"), "", False),
+            ("forecast_p95", N_("Forecast (95%)"), "", False),
         )
         if forecast_only
         else COMPARABLE_METRICS
@@ -2466,7 +2573,7 @@ def compare_runs(runs: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         rows.append(
             {
                 "key": key,
-                "label": label,
+                "label": _(label),
                 "unit": unit,
                 "lower_is_better": lower_is_better,
                 "cells": cells,
@@ -2494,17 +2601,20 @@ def _compare_verdict(
     present: Sequence[tuple[str, str, str, bool]],
 ) -> str:
     baseline_run, baseline_flat = flattened[0]
-    baseline_name = baseline_run.get("name") or "the baseline run"
+    baseline_name = baseline_run.get("name") or _("the baseline run")
     keys = {definition[0] for definition in present}
 
     if "forecast_p85" in keys:
-        parts = [f"Measured against “{baseline_name}”:"]
+        parts = [_("Measured against “{baseline}”:", baseline=baseline_name)]
         for run, flat in flattened[1:]:
             delta = _pct_change(flat.get("forecast_p85"), baseline_flat.get("forecast_p85"))
             parts.append(
-                f"“{run.get('name')}” forecasts {flat.get('forecast_p85')} at 85% confidence"
-                + (f" ({delta:+.1f}%)" if delta is not None else "")
-                + "."
+                _(
+                    "“{run}” forecasts {forecast} at 85% confidence{change}.",
+                    run=run.get("name"),
+                    forecast=num(flat.get("forecast_p85")),
+                    change=delta_pct(delta),
+                )
             )
         return " ".join(parts)
 
@@ -2514,7 +2624,10 @@ def _compare_verdict(
         if flat.get("lead_time_p85") is not None and flat.get("throughput_per_week") is not None
     ]
     if not ranked:
-        return f"“{baseline_name}” is the only run with enough delivered work to compare."
+        return _(
+            "“{baseline}” is the only run with enough delivered work to compare.",
+            baseline=baseline_name,
+        )
     best_throughput = max((flat.get("throughput_per_week") or 0.0) for _, flat in ranked)
     healthy = [
         (run, flat)
@@ -2530,22 +2643,48 @@ def _compare_verdict(
         winner_flat.get("throughput_per_week"), baseline_flat.get("throughput_per_week")
     )
     if winner_run is baseline_run:
-        return (
-            f"“{baseline_name}” is still the best of these {len(flattened)} runs: "
-            f"{winner_flat.get('lead_time_p85')} days at the 85th percentile on "
-            f"{winner_flat.get('throughput_per_week')} items/week. Nothing tried here beat it without "
-            "costing delivery."
+        return _(
+            "“{baseline}” is still the best of these {runs} runs: {lead} days at the 85th "
+            "percentile on {throughput} items/week. Nothing tried here beat it without costing "
+            "delivery.",
+            baseline=baseline_name,
+            runs=len(flattened),
+            lead=num(winner_flat.get("lead_time_p85")),
+            throughput=num(winner_flat.get("throughput_per_week")),
         )
-    parts = [
-        f"“{winner_run.get('name')}” wins: 85th-percentile lead time "
-        f"{winner_flat.get('lead_time_p85')} days"
-        + (f" ({lead_delta:+.1f}% vs “{baseline_name}”)" if lead_delta is not None else "")
-        + f" at {winner_flat.get('throughput_per_week')} items/week"
-        + (f" ({throughput_delta:+.1f}%)" if throughput_delta is not None else "")
-        + "."
-    ]
+    values = {
+        "winner": winner_run.get("name"),
+        "lead": num(winner_flat.get("lead_time_p85")),
+        "throughput": num(winner_flat.get("throughput_per_week")),
+        "throughput_change": delta_pct(throughput_delta),
+    }
+    if lead_delta is not None:
+        first = _(
+            "“{winner}” wins: 85th-percentile lead time {lead} days ({change}% vs “{baseline}”) "
+            "at {throughput} items/week{throughput_change}.",
+            change=num(lead_delta, "+.1f"),
+            baseline=baseline_name,
+            **values,
+        )
+    else:
+        first = _(
+            "“{winner}” wins: 85th-percentile lead time {lead} days at {throughput} "
+            "items/week{throughput_change}.",
+            **values,
+        )
+    parts = [first]
     if wip_delta is not None:
-        parts.append(f"It carries {wip_delta:+.1f}% work in progress to do it.")
+        parts.append(
+            _(
+                "It carries {change}% work in progress to do it.",
+                change=num(wip_delta, "+.1f"),
+            )
+        )
     if winner_flat.get("highlight"):
-        parts.append(f"Recommended policy inside that run: “{winner_flat['highlight']}”.")
+        parts.append(
+            _(
+                "Recommended policy inside that run: “{policy}”.",
+                policy=winner_flat["highlight"],
+            )
+        )
     return " ".join(parts)

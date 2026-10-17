@@ -6,8 +6,9 @@
 
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Aviso, useProduto } from '@pampufa/ui'
+import { Aviso } from '@pampufa/ui'
 
+import { useNagare } from '../../app/contexto'
 import { chaves, nagare } from '../../api/nagare'
 import type { Lista, Quadro, Vinculo } from '../../api/tipos'
 import { useAvisos } from '../../componentes/Avisos'
@@ -27,7 +28,7 @@ const MODELOS_CONHECIDOS = new Set(['upstream_downstream', 'simple_delivery', 'd
 
 export function TrocarFluxo({ atual, fechar }: { atual: NonNullable<Vinculo['link']>; fechar: () => void }) {
   const { t } = useT()
-  const produto = useProduto().id
+  const produto = useNagare().produto
   const queryClient = useQueryClient()
   const avisar = useAvisos()
   const projetos = useProjetos()

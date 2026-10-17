@@ -8,8 +8,9 @@
 
 import { createContext, useCallback, useContext, useMemo, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ErroApi, useProduto } from '@pampufa/ui'
+import { ErroApi } from '@pampufa/ui'
 
+import { useNagare } from '../app/contexto'
 import { chaves, nagare } from '../api/nagare'
 import type { Eu, Idioma } from '../api/tipos'
 import { chaveDoErro, traducao, type Traducao } from './texto'
@@ -26,7 +27,7 @@ const Contexto = createContext<ContextoIdioma | null>(null)
 
 /** O Nagare desta pessoa neste produto: papel, capacidades, flags e a lingua. */
 export function useEuNagare() {
-  const produto = useProduto().id
+  const produto = useNagare().produto
   return useQuery({
     queryKey: chaves.eu(produto),
     queryFn: () => nagare<Eu>(produto, '/auth/me'),
@@ -35,13 +36,20 @@ export function useEuNagare() {
 }
 
 export function ProvedorIdioma({ children }: { children: ReactNode }) {
-  const produto = useProduto().id
+  const { produto, modo } = useNagare()
   const queryClient = useQueryClient()
   const eu = useEuNagare()
-  const idioma: Idioma = eu.data?.locale ?? 'pt-BR'
+  // Ate saber quem e: o padrao do modo (portugues na Pampufa, ingles no Nagare sozinho).
+  const idioma: Idioma = eu.data?.locale ?? (modo === 'sozinho' ? 'en' : 'pt-BR')
   const escolha = useMutation({
     mutationFn: (novo: Idioma | null) => nagare<Eu>(produto, '/auth/me', { metodo: 'PATCH', corpo: { locale: novo } }),
     onSuccess: (atualizado) => {
+      // A entrada do Nagare sozinho abre na ultima lingua usada neste navegador.
+      try {
+        window.localStorage.setItem('nagare.idioma', atualizado.locale)
+      } catch {
+        /* sem armazenamento */
+      }
       // A escolha vale em todo produto: o cache de cada um e refeito.
       void queryClient.invalidateQueries({ queryKey: ['nagare'] })
       queryClient.setQueryData(chaves.eu(produto), atualizado)

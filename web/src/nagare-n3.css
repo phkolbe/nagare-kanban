@@ -1,0 +1,622 @@
+/* Telas da N3: Nagare sozinho (shell, entrada, tema escuro), graficos, metricas, KMM,
+   simulador e administracao. A base e o @pampufa/ui e o nagare.css. */
+
+:root {
+  --ng-rampa-a: #b9d3e6;
+  --ng-rampa-b: #24548f;
+}
+
+/* ------------------------------------------------------------------ tema escuro (so no Nagare sozinho) */
+html[data-theme='dark'] {
+  --bg: #0f1722;
+  --card: #172231;
+  --line: #2a3a4f;
+  --line-soft: #1d2b3c;
+  --text: #e3eaf2;
+  --muted: #9fb0c3;
+  --navy: #8fb6e0;
+  --navy-ativo: #22344b;
+  --green: #5cc493;
+  --red: #f08a80;
+  --amber: #e8b45a;
+  --gold-texto: #e3c08c;
+  --ng-standard: #7aa7d8;
+  --ng-intangible: #a3b1c2;
+  --ng-fixed_date: #e2b25c;
+  --ng-expedite: #f08a80;
+  --ng-rampa-a: #2a4563;
+  --ng-rampa-b: #8fb6e0;
+  color-scheme: dark;
+}
+html[data-theme='dark'] body {
+  background: var(--bg);
+  color: var(--text);
+}
+html[data-theme='dark'] .ng-faixa.upstream {
+  background: #1b2a3b;
+}
+html[data-theme='dark'] .ng-faixa.downstream {
+  background: #2a2619;
+}
+html[data-theme='dark'] input,
+html[data-theme='dark'] select,
+html[data-theme='dark'] textarea {
+  background: var(--card);
+  color: var(--text);
+  border-color: var(--line);
+}
+html[data-theme='dark'] .ng-melhor {
+  background: #1d3b2c;
+}
+
+/* ------------------------------------------------------------------ shell e entrada do Nagare sozinho */
+.ng-marca {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.ng-marca h1 {
+  margin: 0;
+}
+.ng-marca-glifo {
+  display: inline-grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: #0b6b78;
+  color: #fff;
+  font-size: 22px;
+  font-weight: 700;
+}
+.ng-entrar .card {
+  max-width: 400px;
+}
+.ng-dica-demo {
+  margin-top: 14px;
+}
+.ng-marca-trilho {
+  cursor: default;
+}
+.ng-sozinho .side nav .ng-item-bloqueado {
+  display: flex;
+  gap: 11px;
+  align-items: center;
+  padding: 10px 20px;
+  color: var(--side-muted);
+  border-left: 3px solid transparent;
+  font-size: 14px;
+  cursor: not-allowed;
+}
+.ng-cadeado {
+  margin-left: auto;
+  font-size: 12px;
+}
+.ng-topo-acoes {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ng-busca-global {
+  position: relative;
+}
+.ng-busca-pop {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 260px;
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+}
+.ng-busca-pop button,
+.ng-menu-pop > button {
+  display: block;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ng-busca-pop button:hover,
+.ng-menu-pop > button:hover {
+  background: var(--line-soft);
+}
+.ng-menu-pessoa {
+  position: relative;
+}
+.ng-avatar-grande {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ng-menu-pop {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 240px;
+  padding: 8px;
+}
+.ng-menu-tags {
+  display: flex;
+  gap: 6px;
+  padding: 4px 10px 8px;
+}
+kbd {
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+/* ------------------------------------------------------------------ graficos */
+.ng-figura {
+  margin: 0;
+}
+.ng-figura-topo {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.ng-figura-topo h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+.ng-figura-nota {
+  margin: 0 0 8px;
+}
+.ng-figura-corpo {
+  position: relative;
+  width: 100%;
+}
+.ng-figura-desenho {
+  position: relative;
+  outline: none;
+}
+.ng-figura-desenho:focus-visible {
+  box-shadow: 0 0 0 2px var(--navy);
+  border-radius: 6px;
+}
+.ng-figura-vazia {
+  padding: 24px 0;
+  text-align: center;
+}
+.ng-figura-desenho svg {
+  display: block;
+  overflow: visible;
+}
+.ng-eixo,
+.ng-eixo text,
+.ng-eixo-rotulo {
+  fill: var(--muted);
+  font-size: 11px;
+}
+.ng-grade-linha {
+  stroke: var(--line-soft);
+}
+.ng-referencia {
+  stroke-dasharray: 4 3;
+  stroke-width: 1.2;
+}
+.ng-mira {
+  stroke: var(--muted);
+  stroke-dasharray: 2 2;
+}
+.ng-dica {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  max-width: 70%;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--text);
+  color: var(--card);
+  font-size: 12px;
+  pointer-events: none;
+}
+.ng-legenda {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  color: var(--muted);
+}
+.ng-legenda li {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.ng-figura-tabela {
+  margin-top: 6px;
+}
+.ng-centralizado {
+  display: block;
+  margin: 0 auto;
+  text-align: center;
+}
+.ng-centro-valor {
+  fill: var(--text);
+  font-size: 22px;
+  font-weight: 700;
+}
+.ng-anel-texto {
+  fill: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* ------------------------------------------------------------------ metricas */
+.ng-barra-metricas select {
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  font: inherit;
+  font-size: 13px;
+}
+.ng-indicadores {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+.ng-indicador {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+.ng-indicador.principal {
+  border-top: 3px solid var(--navy);
+}
+.ng-indicador.fechado {
+  opacity: 0.7;
+}
+.ng-indicador-rotulo {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.ng-indicador-valor {
+  margin: 4px 0;
+  font-size: 26px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.ng-indicador-unidade {
+  margin-left: 3px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.ng-indicador-pe {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.ng-bom {
+  color: var(--green);
+}
+.ng-ruim {
+  color: var(--red);
+}
+.ng-paineis {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 460px), 1fr));
+  gap: 12px;
+}
+.ng-painel.largo {
+  grid-column: 1 / -1;
+}
+.ng-painel.ocupado {
+  opacity: 0.6;
+}
+.ng-duas {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr));
+  gap: 16px;
+}
+.ng-bloqueado {
+  padding: 18px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  text-align: center;
+  color: var(--muted);
+}
+
+/* ------------------------------------------------------------------ KMM */
+.ng-kmm {
+  margin-top: 12px;
+}
+.ng-kmm-status {
+  margin-bottom: 10px;
+}
+.ng-kmm-acoes {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+}
+.ng-kmm-escada {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ng-kmm-escada li.apagado {
+  opacity: 0.5;
+}
+.ng-kmm-escada button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.ng-kmm-escada button[aria-expanded='true'] {
+  border-color: var(--navy);
+}
+.ng-kmm-detalhe {
+  margin-top: 12px;
+}
+.ng-kmm-detalhe h3 {
+  margin: 0 0 4px;
+}
+.ng-kmm-metricas {
+  margin: 8px 0;
+  padding: 0;
+  list-style: none;
+}
+.ng-kmm-metricas li {
+  display: grid;
+  grid-template-columns: 20px minmax(160px, 1fr) minmax(100px, auto);
+  gap: 4px 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+.ng-kmm-metricas li .mini {
+  grid-column: 2 / -1;
+}
+.ng-kmm-metricas li.ok > span:first-child {
+  color: var(--green);
+}
+.ng-kmm-metricas li.falta > span:first-child {
+  color: var(--red);
+}
+.ng-kmm-falta {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--line-soft);
+  font-size: 13px;
+}
+
+/* ------------------------------------------------------------------ simulador */
+.ng-linha-campos > .campo.ng-campo-curto {
+  flex: 0 1 180px;
+}
+.ng-mix-barra {
+  display: flex;
+  height: 10px;
+  margin: 4px 0 10px;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.ng-mix-barra .classe-expedite {
+  background: var(--ng-expedite);
+}
+.ng-mix-barra .classe-fixed_date {
+  background: var(--ng-fixed_date);
+}
+.ng-mix-barra .classe-standard {
+  background: var(--ng-standard);
+}
+.ng-mix-barra .classe-intangible {
+  background: var(--ng-intangible);
+}
+.ng-frase {
+  font-size: 16px;
+}
+.ng-niveis {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 10px 0;
+}
+.ng-nivel {
+  min-width: 130px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.ng-nivel.recomendado {
+  border: 2px solid var(--green);
+}
+.ng-nivel-confianca {
+  font-size: 12px;
+  color: var(--muted);
+}
+.ng-nivel-valor {
+  font-size: 20px;
+  font-weight: 700;
+}
+.ng-veredito {
+  margin-top: 12px;
+  padding: 10px 14px;
+  border-left: 4px solid var(--navy);
+  border-radius: 6px;
+  background: var(--line-soft);
+  font-size: 14px;
+}
+.ng-runs {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ng-runs li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+.ng-runs li.aberto {
+  background: var(--line-soft);
+}
+.ng-barra-comparar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--navy);
+  color: #fff;
+}
+.ng-melhor {
+  background: #e8f3ec;
+}
+.ng-delta {
+  margin-left: 6px;
+  font-size: 12px;
+}
+
+/* ------------------------------------------------------------------ administracao */
+.ng-aba-bloqueada {
+  padding: 6px 12px;
+  color: var(--muted);
+  cursor: not-allowed;
+}
+.ng-matriz td,
+.ng-matriz th {
+  text-align: center;
+}
+.ng-matriz td:first-child,
+.ng-matriz th:first-child {
+  text-align: left;
+}
+.ng-meu {
+  background: var(--line-soft);
+}
+.ng-legenda-papeis {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px 16px;
+  margin-top: 12px;
+}
+.ng-legenda-papeis dt {
+  font-weight: 600;
+}
+.ng-legenda-papeis dd {
+  margin: 0;
+}
+.ng-flags {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ng-flags li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+.ng-flags li > label {
+  flex: 1;
+  align-items: flex-start;
+}
+.ng-plano.ativo {
+  border-top: 3px solid var(--green);
+}
+.ng-flags-plano,
+.ng-flags-escolha {
+  margin: 8px 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+.ng-flags-plano .exclui {
+  color: var(--muted);
+}
+
+/* ------------------------------------------------------------------ movimento reduzido e impressao */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+@media print {
+  .side,
+  .topbar,
+  .ng-barra,
+  .ng-figura-tabela,
+  .ng-idioma,
+  .ng-avisos {
+    display: none !important;
+  }
+  .ng-paineis {
+    grid-template-columns: 1fr;
+  }
+  .ng-painel {
+    break-inside: avoid;
+  }
+}
+
+/* ------------------------------------------------------------------ eficiencia do cartao e vazao do projeto */
+.ng-eficiencia-cartao {
+  margin-bottom: 12px;
+}
+.ng-barra-eficiencia {
+  display: flex;
+  height: 10px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--line-soft);
+}
+.ng-barra-eficiencia .trabalho {
+  background: var(--green);
+}
+.ng-barra-eficiencia .espera {
+  background: var(--amber);
+}
+.ng-barra-eficiencia .envelope {
+  background: var(--gold);
+}
+.ng-vazao-projeto {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}

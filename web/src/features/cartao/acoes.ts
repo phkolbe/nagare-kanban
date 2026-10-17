@@ -1,8 +1,8 @@
 /** Consultas e acoes do cartao, usadas pela gaveta e pelas abas. */
 
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { useProduto } from '@pampufa/ui'
 
+import { useNagare } from '../../app/contexto'
 import { chaves, nagare } from '../../api/nagare'
 import type { Cartao, CartaoDetalhe } from '../../api/tipos'
 import { useAvisos } from '../../componentes/Avisos'
@@ -10,7 +10,7 @@ import { mensagemDeErro, useT, type Chave } from '../../i18n'
 import { useRecarregarQuadro } from '../quadro/consultas'
 
 export function useCartao(id: string) {
-  const produto = useProduto().id
+  const produto = useNagare().produto
   return useQuery({
     queryKey: chaves.cartao(produto, id),
     queryFn: () => nagare<CartaoDetalhe>(produto, `/cards/${encodeURIComponent(id)}`),
@@ -19,7 +19,7 @@ export function useCartao(id: string) {
 
 /** Uma acao no cartao que refaz o cartao e o quadro ao terminar. */
 export function useAcaoNoCartao<T = unknown>(cartao: Pick<Cartao, 'id' | 'board_id'>, sucesso?: Chave) {
-  const produto = useProduto().id
+  const produto = useNagare().produto
   const avisar = useAvisos()
   const { t } = useT()
   const recarregar = useRecarregarQuadro()

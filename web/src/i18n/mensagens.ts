@@ -5,8 +5,9 @@
  */
 
 import type { Idioma } from '../api/tipos'
+import { enN3, ptN3 } from './mensagens_n3'
 
-export const pt = {
+const ptBase = {
   // ------------------------------------------------------------------ comum
   'comum.adicionar': 'Adicionar',
   'comum.atualizando': 'Atualizando…',
@@ -430,9 +431,11 @@ export const pt = {
   'erro.auth.sem_permissao': 'Você não tem permissão para esta ação.',
 } as const
 
+export const pt = { ...ptBase, ...ptN3 } as const
+
 export type Chave = keyof typeof pt
 
-const en: Record<Chave, string> = {
+const enBase: Record<keyof typeof ptBase, string> = {
   'comum.adicionar': 'Add',
   'comum.atualizando': 'Updating…',
   'comum.cancelar': 'Cancel',
@@ -846,5 +849,7 @@ const en: Record<Chave, string> = {
   'erro.nagare.classe_invalida': 'Invalid class of service.',
   'erro.auth.sem_permissao': 'You are not allowed to perform this action.',
 }
+
+const en: Record<Chave, string> = { ...enBase, ...enN3 }
 
 export const CATALOGOS: Record<Idioma, Record<Chave, string>> = { 'pt-BR': pt, en }

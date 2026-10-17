@@ -6,8 +6,9 @@
 
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Aviso, Carregando, ErroDeApi, Tag, useProduto } from '@pampufa/ui'
+import { Aviso, Carregando, ErroDeApi, Tag } from '@pampufa/ui'
 
+import { useNagare } from '../../app/contexto'
 import { chaves } from '../../api/nagare'
 import type { Cartao, CartaoDetalhe, Coluna, Quadro, SituacaoWip } from '../../api/tipos'
 import { Gaveta, Janela } from '../../componentes/Sobreposicao'
@@ -130,7 +131,7 @@ export function GavetaCartao({
       <div className="ng-gaveta-aba" role="tabpanel">
         {aba === 'detalhes' && <AbaDetalhes cartao={c} quadro={quadro} editavel={editavel && !lacrado} />}
         {aba === 'tarefas' && <AbaTarefas cartao={c} editavel={editavel} />}
-        {aba === 'historico' && <AbaHistorico cartao={c} />}
+        {aba === 'historico' && <AbaHistorico cartao={c} colunas={colunas} />}
         {aba === 'bloqueios' && <AbaBloqueios cartao={c} editavel={editavel} />}
         {aba === 'comentarios' && <AbaComentarios cartao={c} podeComentar={Boolean(eu?.capabilities.manage_cards)} />}
       </div>
@@ -169,7 +170,7 @@ export function GavetaCartao({
 function AbrirEnvelope({ cartao }: { cartao: CartaoDetalhe }) {
   const { t } = useT()
   const queryClient = useQueryClient()
-  const produto = useProduto().id
+  const produto = useNagare().produto
   const acao = useAcaoNoCartao(cartao, 'cartao.envelope_aberto')
   return (
     <button

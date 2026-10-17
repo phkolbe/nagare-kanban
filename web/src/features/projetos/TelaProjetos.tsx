@@ -5,20 +5,23 @@
 
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Aviso, Cabecalho, Carregando, ErroDeApi, Tag, Vazio, useProduto } from '@pampufa/ui'
+import { Aviso, Cabecalho, Carregando, ErroDeApi, Tag, Vazio } from '@pampufa/ui'
 
+import { useNagare } from '../../app/contexto'
 import { SITUACOES_PROJETO, type Projeto, type SituacaoProjeto } from '../../api/tipos'
 import { SeletorIdioma } from '../../componentes/SeletorIdioma'
 import { useT } from '../../i18n'
-import { useProjetos, useVinculo } from '../quadro/consultas'
+import { useProjetos, useQuadros, useVinculo } from '../quadro/consultas'
 import { FormProjeto } from './FormProjeto'
 import { TrocarFluxo } from './TrocarFluxo'
+import { VazaoDoProjeto } from './VazaoDoProjeto'
 
 export function TelaProjetos() {
   const { t, eu, dataHora } = useT()
-  const produto = useProduto().id
+  const { produto, rota } = useNagare()
   const projetos = useProjetos()
   const vinculo = useVinculo()
+  const quadros = useQuadros()
   const [situacao, setSituacao] = useState<SituacaoProjeto | ''>('')
   const [editando, setEditando] = useState<Projeto | 'novo' | null>(null)
   const [trocar, setTrocar] = useState(false)
@@ -28,6 +31,7 @@ export function TelaProjetos() {
 
   const lista = (projetos.data?.items ?? []).filter((p) => !situacao || p.status === situacao)
   const link = vinculo.data?.link
+  const quadroDasMetricas = link?.board_id ?? quadros.data?.items.find((q) => !q.archived && !q.read_only)?.id
 
   return (
     <>
@@ -58,7 +62,7 @@ export function TelaProjetos() {
             <>
               <p>
                 {t('vinculo.atual', { projeto: `${link.project.key} · ${link.project.name}`, quadro: link.board.name })}{' '}
-                <Link className="link" to={`/${produto}/tarefas/quadro/${link.board.id}`}>
+                <Link className="link" to={rota(`quadro/${link.board.id}`)}>
                   {t('vinculo.abrir_quadro')}
                 </Link>
               </p>
@@ -136,6 +140,7 @@ export function TelaProjetos() {
                   <dd>{p.delivered_count ?? 0}</dd>
                 </div>
               </dl>
+              {quadroDasMetricas && <VazaoDoProjeto projetoId={p.id} quadroId={quadroDasMetricas} />}
               {podeGerir && (
                 <button type="button" className="link" onClick={() => setEditando(p)}>
                   {t('comum.editar')}

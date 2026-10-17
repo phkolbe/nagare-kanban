@@ -2,8 +2,9 @@
 
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Aviso, useProduto } from '@pampufa/ui'
+import { Aviso } from '@pampufa/ui'
 
+import { useNagare } from '../../app/contexto'
 import { chaves, nagare } from '../../api/nagare'
 import { SITUACOES_PROJETO, type Projeto, type SituacaoProjeto } from '../../api/tipos'
 import { Janela } from '../../componentes/Sobreposicao'
@@ -19,7 +20,7 @@ export function FormProjeto({
   criado?: (projeto: Projeto) => void
 }) {
   const { t } = useT()
-  const produto = useProduto().id
+  const produto = useNagare().produto
   const queryClient = useQueryClient()
   const [nome, setNome] = useState(projeto?.name ?? '')
   const [chave, setChave] = useState(projeto?.key ?? '')

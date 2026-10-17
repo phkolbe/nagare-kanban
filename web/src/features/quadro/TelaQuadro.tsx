@@ -7,8 +7,9 @@
 
 import { useCallback, useMemo, useState } from 'react'
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { Aviso, Cabecalho, Carregando, ErroDeApi, Vazio, useProduto } from '@pampufa/ui'
+import { Aviso, Cabecalho, Carregando, ErroDeApi, Vazio } from '@pampufa/ui'
 
+import { useNagare } from '../../app/contexto'
 import type { Cartao, ClasseServico, Coluna, SegmentoVisao } from '../../api/tipos'
 import { Janela } from '../../componentes/Sobreposicao'
 import { SeletorIdioma } from '../../componentes/SeletorIdioma'
@@ -61,7 +62,7 @@ function lerRecolhidas(quadroId: string): Set<string> {
 }
 
 function QuadroDoProduto({ quadroId }: { quadroId: string }) {
-  const produto = useProduto().id
+  const { rota } = useNagare()
   const { t, eu } = useT()
   const navegar = useNavigate()
   const [busca, setBusca] = useSearchParams()
@@ -154,7 +155,7 @@ function QuadroDoProduto({ quadroId }: { quadroId: string }) {
               <select
                 value={quadroId}
                 aria-label={t('quadro.trocar')}
-                onChange={(e) => navegar(`/${produto}/tarefas/quadro/${e.target.value}`)}
+                onChange={(e) => navegar(rota(`quadro/${e.target.value}`))}
               >
                 {(quadros.data?.items ?? [])
                   .filter((x) => !x.archived)

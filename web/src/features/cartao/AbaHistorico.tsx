@@ -1,10 +1,12 @@
 /** Linha do tempo do cartao: movimentos e eventos (flag `card_history`). */
 
 import { useQuery } from '@tanstack/react-query'
-import { Carregando, ErroDeApi, useProduto } from '@pampufa/ui'
+import { Carregando, ErroDeApi } from '@pampufa/ui'
 
+import { useNagare } from '../../app/contexto'
 import { chaves, nagare } from '../../api/nagare'
-import type { CartaoDetalhe, Historico } from '../../api/tipos'
+import type { CartaoDetalhe, Coluna, Historico } from '../../api/tipos'
+import { eficienciaDoCartao } from './eficiencia'
 import { useT, type Chave } from '../../i18n'
 
 const EVENTOS = new Set([
@@ -20,9 +22,9 @@ const EVENTOS = new Set([
   'task_completed',
 ])
 
-export function AbaHistorico({ cartao }: { cartao: CartaoDetalhe }) {
-  const { t, dataHora } = useT()
-  const produto = useProduto().id
+export function AbaHistorico({ cartao, colunas }: { cartao: CartaoDetalhe; colunas: Coluna[] }) {
+  const { t, dataHora, numero } = useT()
+  const produto = useNagare().produto
   const historico = useQuery({
     queryKey: chaves.historico(produto, cartao.id),
     queryFn: () => nagare<Historico>(produto, `/cards/${cartao.id}/history`),
@@ -54,7 +56,24 @@ export function AbaHistorico({ cartao }: { cartao: CartaoDetalhe }) {
   ].sort((a, b) => b.quando.localeCompare(a.quando))
 
   if (linhas.length === 0) return <p className="mini">{t('historico.vazio')}</p>
+  const ef = eficienciaDoCartao(historico.data.movements, colunas, cartao.column_id, Boolean(cartao.delivered_at), Date.now())
+  const dias = (s: number) => numero(s / 86_400, 1)
+  const total = ef.trabalhoS + ef.esperaS + ef.envelopeS || 1
   return (
+    <>
+      {ef.pct !== null && (
+        <div className="ng-eficiencia-cartao">
+          <div className="ng-subtitulo">{t('historico.eficiencia', { pct: numero(ef.pct, 0) })}</div>
+          <div className="ng-barra-eficiencia" aria-hidden="true">
+            <span className="trabalho" style={{ width: `${(ef.trabalhoS / total) * 100}%` }} />
+            <span className="espera" style={{ width: `${(ef.esperaS / total) * 100}%` }} />
+            <span className="envelope" style={{ width: `${(ef.envelopeS / total) * 100}%` }} />
+          </div>
+          <p className="mini">
+            {t('historico.tempos', { trabalho: dias(ef.trabalhoS), espera: dias(ef.esperaS), envelope: dias(ef.envelopeS) })}
+          </p>
+        </div>
+      )}
     <ol className="ng-linha-do-tempo">
       {linhas.map((linha) => (
         <li key={linha.id}>
@@ -67,5 +86,6 @@ export function AbaHistorico({ cartao }: { cartao: CartaoDetalhe }) {
         </li>
       ))}
     </ol>
+    </>
   )
 }

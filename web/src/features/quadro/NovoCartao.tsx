@@ -2,8 +2,9 @@
 
 import { useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
-import { Aviso, useProduto } from '@pampufa/ui'
+import { Aviso } from '@pampufa/ui'
 
+import { useNagare } from '../../app/contexto'
 import { nagare } from '../../api/nagare'
 import { CLASSES, type Cartao, type ClasseServico, type Coluna } from '../../api/tipos'
 import { Janela } from '../../componentes/Sobreposicao'
@@ -24,7 +25,7 @@ export function NovoCartao({
   criado: (cartao: Cartao) => void
 }) {
   const { t, eu } = useT()
-  const produto = useProduto().id
+  const produto = useNagare().produto
   const projetos = useProjetos()
   const recarregar = useRecarregarQuadro()
   const [titulo, setTitulo] = useState('')

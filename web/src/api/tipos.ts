@@ -95,6 +95,7 @@ export interface Quadro {
   sle_days: number | null
   sle_percentile: number | null
   archived: boolean
+  created_at?: string | null
   product_id: string | null
   read_only: boolean
   product_board: boolean
@@ -191,6 +192,8 @@ export interface Comentario {
 
 export interface Movimento {
   id: string
+  from_column_id: string | null
+  seconds_in_from_column: number | null
   from_column_name: string | null
   to_column_name: string | null
   moved_at: string

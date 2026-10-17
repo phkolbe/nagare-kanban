@@ -42,6 +42,7 @@ from .tenancy import (
     role_from_pampufa,
     set_current_product,
 )
+from .texts import effective_locale, set_locale, set_via
 
 __all__ = [
     "CurrentUser",
@@ -148,7 +149,8 @@ async def get_current_user(request: Request, s: AsyncSession = Depends(get_sessi
     Two kinds of token are accepted (NG5): the local login (HS256, the database
     holds the role) and the Pampufa login (EdDSA, the role comes from the token's
     roles in the product named by ``X-Produto``). Either way the product of the
-    request is fixed here, for every query that follows (see :mod:`.tenancy`).
+    request is fixed here, for every query that follows (see :mod:`.tenancy`), and so
+    is its locale, for every text the flow engine writes (see :mod:`.texts`).
     """
     token = _bearer_token(request)
     if not token:
@@ -165,6 +167,9 @@ async def get_current_user(request: Request, s: AsyncSession = Depends(get_sessi
         user["product_id"] = local_product(str(user["role"]), requested)
         user["via"] = "local"
     set_current_product(user["product_id"])
+    # The language of every human-readable text this request generates (see .texts).
+    set_locale(effective_locale(user.get("locale"), str(user.get("via"))))
+    set_via(str(user.get("via")))
     return user
 
 

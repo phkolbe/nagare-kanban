@@ -1,21 +1,24 @@
 /**
- * Cliente da API do Nagare para as telas da plataforma.
+ * Cliente da API do Nagare, nos dois modos (ver `app/contexto.tsx`).
  *
- * O Nagare e um sistema a parte (NG1): a API fica atras do gateway em `/nagare/api/v1`, com o
- * MESMO token da Pampufa (login unico, NG5) e o produto no cabecalho `X-Produto`. O token, a
- * renovacao e o problem+json vem do `@pampufa/ui` (o Nagare responde `codigo` e `title`).
+ * - Na plataforma (NG1): a API fica atras do gateway em `/nagare/api/v1`, com o MESMO token da
+ *   Pampufa (login unico, NG5) e o produto em `X-Produto`. Token, renovacao e problem+json vem
+ *   do `@pampufa/ui` (o Nagare responde `codigo` e `title`).
+ * - Sozinho: a API no proprio servidor, com o token do login local (`sessaoLocal.ts`).
  */
 
 import { requisitar, type Opcoes } from '@pampufa/ui'
+
+import { MODO } from '../app/contexto'
+import { requisitarLocal } from './sessaoLocal'
 
 /** Onde o gateway publica a API do Nagare (prefixo retirado, ver `infra/Caddyfile`). */
 export const API_NAGARE = '/nagare/api/v1'
 
 export function nagare<T>(produto: string, caminho: string, opcoes: Opcoes = {}): Promise<T> {
-  return requisitar<T>(`${API_NAGARE}${caminho}`, {
-    ...opcoes,
-    cabecalhos: { 'X-Produto': produto, ...opcoes.cabecalhos },
-  })
+  const comProduto = { ...opcoes, cabecalhos: { 'X-Produto': produto, ...opcoes.cabecalhos } }
+  if (MODO === 'sozinho') return requisitarLocal<T>(caminho, comProduto)
+  return requisitar<T>(`${API_NAGARE}${caminho}`, comProduto)
 }
 
 /** Monta `?a=1&b=2` sem os valores vazios. */

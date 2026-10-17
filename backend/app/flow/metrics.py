@@ -40,6 +40,7 @@ from sqlalchemy.orm import Session
 
 from ..db import parse_iso
 from ..models import Blocker, Board, Card, Project, SimulationRun
+from ..texts import N_, _, num
 from .intervals import (
     ACTIVITY,
     DAY,
@@ -94,17 +95,51 @@ _SERVICE_CLASS_ROLE = {
     "intangible": "sc-intangible",
 }
 
+#: Display labels (English catalog keys; translate with ``_`` at use time).
 _SERVICE_CLASS_LABEL = {
-    "expedite": "Expedite",
-    "standard": "Standard",
-    "fixed_date": "Fixed date",
-    "intangible": "Intangible",
+    "expedite": N_("Expedite"),
+    "standard": N_("Standard"),
+    "fixed_date": N_("Fixed date"),
+    "intangible": N_("Intangible"),
 }
 
 _DEMAND_TYPE_LABEL = {
-    "value": "Value demand",
-    "failure": "Failure demand",
-    "maintenance": "Maintenance",
+    "value": N_("Value demand"),
+    "failure": N_("Failure demand"),
+    "maintenance": N_("Maintenance"),
+}
+
+#: ``key.replace("_", " ").title()`` for every known value, so it can be translated.
+_VALUE_AREA_LABEL = {
+    "feature": N_("Feature"),
+    "defect": N_("Defect"),
+    "risk": N_("Risk"),
+    "debt": N_("Debt"),
+    "compliance": N_("Compliance"),
+    "unknown": N_("Unknown"),
+}
+
+_BLOCKER_CATEGORY_LABEL = {
+    "dependency": N_("Dependency"),
+    "external_vendor": N_("External Vendor"),
+    "waiting_on_customer": N_("Waiting On Customer"),
+    "technical": N_("Technical"),
+    "people": N_("People"),
+    "compliance": N_("Compliance"),
+    "environment": N_("Environment"),
+    "other": N_("Other"),
+}
+
+_PERIOD_TITLE = {"day": N_("Day"), "week": N_("Week"), "month": N_("Month")}
+_DELIVERED_PER = {
+    "day": N_("Delivered per day"),
+    "week": N_("Delivered per week"),
+    "month": N_("Delivered per month"),
+}
+_ROLLING_AVERAGE = {
+    "day": N_("{n}-day rolling average"),
+    "week": N_("{n}-week rolling average"),
+    "month": N_("{n}-month rolling average"),
 }
 
 _DEMAND_TYPE_ROLE = {"value": "success", "failure": "danger", "maintenance": "info"}
@@ -631,6 +666,17 @@ class MetricsContext:
         return payload
 
 
+def _titled(key: str, table: Mapping[str, str]) -> str:
+    """The translated label of a known key, else the key in title case."""
+    label = table.get(key)
+    return _(label) if label else key.replace("_", " ").title()
+
+
+def _percentile_label(name: str, value: float) -> str:
+    """``85th percentile — 6.2d`` for a ``p85`` reference line."""
+    return _("{p}th percentile — {value}d", p=name[1:], value=num(value, 1))
+
+
 def _series(
     key: str,
     label: str,
@@ -810,10 +856,14 @@ def summary(ctx: MetricsContext) -> dict[str, Any]:
         "customer_lead_time": _metric(
             _mean(customer),
             "days",
-            label="Customer lead time",
+            label=_("Customer lead time"),
             description=(
-                "Mean elapsed time from the moment demand entered the flow to delivery"
-                + (" (sealed-envelope time counted)." if ctx.include_envelope else ".")
+                _(
+                    "Mean elapsed time from the moment demand entered the flow to delivery "
+                    "(sealed-envelope time counted)."
+                )
+                if ctx.include_envelope
+                else _("Mean elapsed time from the moment demand entered the flow to delivery.")
             ),
             sample_size=len(customer),
             previous=_mean(previous["lead_customer"]),
@@ -822,8 +872,8 @@ def summary(ctx: MetricsContext) -> dict[str, Any]:
         "customer_lead_time_p85": _metric(
             percentiles.get("p85"),
             "days",
-            label="Lead time (85th pct)",
-            description="85% of delivered work finished within this many days.",
+            label=_("Lead time (85th pct)"),
+            description=_("85% of delivered work finished within this many days."),
             sample_size=len(customer),
             previous=percentile_set(previous["lead_customer"]).get("p85"),
             higher_is_better=False,
@@ -831,8 +881,8 @@ def summary(ctx: MetricsContext) -> dict[str, Any]:
         "system_lead_time": _metric(
             _mean(system),
             "days",
-            label="System lead time",
-            description="Mean cycle time from the commitment point to delivery.",
+            label=_("System lead time"),
+            description=_("Mean cycle time from the commitment point to delivery."),
             sample_size=len(system),
             previous=_mean(previous["lead_system"]),
             higher_is_better=False,
@@ -840,8 +890,8 @@ def summary(ctx: MetricsContext) -> dict[str, Any]:
         "discovery_lead_time": _metric(
             _mean(discovery),
             "days",
-            label="Discovery lead time",
-            description="Mean time demand spends upstream before the team commits to it.",
+            label=_("Discovery lead time"),
+            description=_("Mean time demand spends upstream before the team commits to it."),
             sample_size=len(discovery),
             previous=_mean(previous["lead_discovery"]),
             higher_is_better=False,
@@ -849,8 +899,8 @@ def summary(ctx: MetricsContext) -> dict[str, Any]:
         "touch_time": _metric(
             current["touch_seconds"] / DAY / delivered_n if delivered_n else None,
             "days",
-            label="Touch time",
-            description="Mean time per delivered item spent in activity columns.",
+            label=_("Touch time"),
+            description=_("Mean time per delivered item spent in activity columns."),
             sample_size=delivered_n,
             previous=(
                 previous["touch_seconds"] / DAY / previous["delivered_count"]
@@ -862,8 +912,8 @@ def summary(ctx: MetricsContext) -> dict[str, Any]:
         "wait_time": _metric(
             current["wait_seconds"] / DAY / delivered_n if delivered_n else None,
             "days",
-            label="Wait time",
-            description="Mean time per delivered item spent parked in queue columns.",
+            label=_("Wait time"),
+            description=_("Mean time per delivered item spent parked in queue columns."),
             sample_size=delivered_n,
             previous=(
                 previous["wait_seconds"] / DAY / previous["delivered_count"]
@@ -875,8 +925,8 @@ def summary(ctx: MetricsContext) -> dict[str, Any]:
         "flow_efficiency": _metric(
             current["flow_efficiency"],
             "percent",
-            label="Flow efficiency",
-            description="Touch time as a share of total lead time. Most teams start near 15%.",
+            label=_("Flow efficiency"),
+            description=_("Touch time as a share of total lead time. Most teams start near 15%."),
             sample_size=delivered_n,
             previous=previous["flow_efficiency"],
             higher_is_better=True,
@@ -884,8 +934,8 @@ def summary(ctx: MetricsContext) -> dict[str, Any]:
         "throughput": _metric(
             current["throughput_per_week"],
             "cards/week",
-            label="Throughput",
-            description="Delivered items per week across the selected window.",
+            label=_("Throughput"),
+            description=_("Delivered items per week across the selected window."),
             sample_size=delivered_n,
             previous=previous["throughput_per_week"],
             higher_is_better=True,
@@ -893,8 +943,8 @@ def summary(ctx: MetricsContext) -> dict[str, Any]:
         "delivered": _metric(
             delivered_n,
             "count",
-            label="Delivered",
-            description="Items that reached the delivery point inside the window.",
+            label=_("Delivered"),
+            description=_("Items that reached the delivery point inside the window."),
             sample_size=delivered_n,
             previous=previous["delivered_count"],
             higher_is_better=True,
@@ -903,8 +953,8 @@ def summary(ctx: MetricsContext) -> dict[str, Any]:
         "arrival_rate": _metric(
             current["arrivals"] / (current["window_days"] / 7.0),
             "cards/week",
-            label="Arrival rate",
-            description="New demand entering the flow per week. Compare with throughput.",
+            label=_("Arrival rate"),
+            description=_("New demand entering the flow per week. Compare with throughput."),
             sample_size=current["arrivals"],
             previous=previous["arrivals"] / (previous["window_days"] / 7.0),
             higher_is_better=None,
@@ -912,8 +962,10 @@ def summary(ctx: MetricsContext) -> dict[str, Any]:
         "net_flow": _metric(
             current["arrivals"] - delivered_n,
             "count",
-            label="Net flow",
-            description="Arrivals minus departures. Sustained positive net flow grows the queue.",
+            label=_("Net flow"),
+            description=_(
+                "Arrivals minus departures. Sustained positive net flow grows the queue."
+            ),
             sample_size=current["arrivals"] + delivered_n,
             previous=previous["arrivals"] - previous["delivered_count"],
             higher_is_better=False,
@@ -922,8 +974,8 @@ def summary(ctx: MetricsContext) -> dict[str, Any]:
         "wip": _metric(
             current["wip"],
             "count",
-            label="Work in progress",
-            description="Committed items not yet delivered, as of the end of the window.",
+            label=_("Work in progress"),
+            description=_("Committed items not yet delivered, as of the end of the window."),
             sample_size=current["wip"],
             previous=previous["wip"],
             higher_is_better=False,
@@ -932,8 +984,8 @@ def summary(ctx: MetricsContext) -> dict[str, Any]:
         "avg_wip": _metric(
             avg_wip,
             "count",
-            label="Average WIP",
-            description="Mean daily work in progress across the window.",
+            label=_("Average WIP"),
+            description=_("Mean daily work in progress across the window."),
             sample_size=current["wip"],
             previous=previous["avg_wip"],
             higher_is_better=False,
@@ -941,8 +993,8 @@ def summary(ctx: MetricsContext) -> dict[str, Any]:
         "average_age": _metric(
             _mean(current["ages"]),
             "days",
-            label="Average age",
-            description="Mean age of items currently in flight, measured from commitment.",
+            label=_("Average age"),
+            description=_("Mean age of items currently in flight, measured from commitment."),
             sample_size=len(current["ages"]),
             previous=_mean(previous["ages"]),
             higher_is_better=False,
@@ -950,8 +1002,8 @@ def summary(ctx: MetricsContext) -> dict[str, Any]:
         "oldest_age": _metric(
             max(current["ages"]) if current["ages"] else None,
             "days",
-            label="Oldest item",
-            description="Age of the longest-running item in flight. The first thing to unblock.",
+            label=_("Oldest item"),
+            description=_("Age of the longest-running item in flight. The first thing to unblock."),
             sample_size=len(current["ages"]),
             previous=max(previous["ages"]) if previous["ages"] else None,
             higher_is_better=False,
@@ -959,12 +1011,16 @@ def summary(ctx: MetricsContext) -> dict[str, Any]:
         "sle_attainment": _metric(
             current["sle_pct"],
             "percent",
-            label="SLE attainment",
+            label=_("SLE attainment"),
             description=(
-                f"Share of delivered work inside the {ctx.board.get('sle_days')}-day service "
-                f"level expectation (target {ctx.board.get('sle_percentile')}%)."
+                _(
+                    "Share of delivered work inside the {days}-day service level expectation "
+                    "(target {percentile}%).",
+                    days=num(ctx.board.get("sle_days")),
+                    percentile=num(ctx.board.get("sle_percentile")),
+                )
                 if ctx.board.get("sle_days")
-                else "No service level expectation is set on this board."
+                else _("No service level expectation is set on this board.")
             ),
             sample_size=len(customer),
             previous=previous["sle_pct"],
@@ -973,8 +1029,8 @@ def summary(ctx: MetricsContext) -> dict[str, Any]:
         "due_date_performance": _metric(
             current["due_date_pct"],
             "percent",
-            label="Due-date performance",
-            description="Fixed-date items delivered on or before their due date.",
+            label=_("Due-date performance"),
+            description=_("Fixed-date items delivered on or before their due date."),
             sample_size=current["fixed_date_total"],
             previous=previous["due_date_pct"],
             higher_is_better=True,
@@ -982,8 +1038,8 @@ def summary(ctx: MetricsContext) -> dict[str, Any]:
         "failure_demand": _metric(
             current["failure_pct"],
             "percent",
-            label="Failure demand",
-            description="Delivered items that existed only because something else failed.",
+            label=_("Failure demand"),
+            description=_("Delivered items that existed only because something else failed."),
             sample_size=delivered_n,
             previous=previous["failure_pct"],
             higher_is_better=False,
@@ -991,8 +1047,8 @@ def summary(ctx: MetricsContext) -> dict[str, Any]:
         "blocked_time": _metric(
             current["blocked_lead_pct"],
             "percent",
-            label="Lead time blocked",
-            description="Share of delivered items' lead time spent explicitly blocked.",
+            label=_("Lead time blocked"),
+            description=_("Share of delivered items' lead time spent explicitly blocked."),
             sample_size=delivered_n,
             previous=previous["blocked_lead_pct"],
             higher_is_better=False,
@@ -1000,8 +1056,8 @@ def summary(ctx: MetricsContext) -> dict[str, Any]:
         "blocked_cards": _metric(
             current["blocked_cards"],
             "count",
-            label="Cards blocked",
-            description="Distinct cards that were blocked at some point in the window.",
+            label=_("Cards blocked"),
+            description=_("Distinct cards that were blocked at some point in the window."),
             sample_size=current["blocked_cards"],
             previous=previous["blocked_cards"],
             higher_is_better=False,
@@ -1010,8 +1066,8 @@ def summary(ctx: MetricsContext) -> dict[str, Any]:
         "throughput_variability": _metric(
             variability,
             "ratio",
-            label="Throughput variability",
-            description=(
+            label=_("Throughput variability"),
+            description=_(
                 "Coefficient of variation of weekly throughput. Below 0.5 the flow is "
                 "predictable enough to forecast without heroics."
             ),
@@ -1022,8 +1078,8 @@ def summary(ctx: MetricsContext) -> dict[str, Any]:
         "littles_law_coherence": _metric(
             (avg_wip / predicted_wip) if avg_wip is not None and predicted_wip else None,
             "ratio",
-            label="Little's Law coherence",
-            description=(
+            label=_("Little's Law coherence"),
+            description=_(
                 "Observed average WIP divided by throughput × cycle time. A value near "
                 "1.0 means the system is stable and the metrics can be trusted."
             ),
@@ -1076,8 +1132,8 @@ def cfd(ctx: MetricsContext, interval: str = "auto") -> dict[str, Any]:
             "cfd",
             [],
             meta={"render": "areas", "reason": "no_columns"},
-            x_label="Date",
-            y_label="Cards",
+            x_label=_("Date"),
+            y_label=_("Cards"),
             unit="count",
         )
 
@@ -1198,8 +1254,8 @@ def cfd(ctx: MetricsContext, interval: str = "auto") -> dict[str, Any]:
             "approx_lead_time_avg_days": _r(_mean(lead_values), 2),
             "total_cards": len(ctx.records),
         },
-        x_label="Date",
-        y_label="Cards",
+        x_label=_("Date"),
+        y_label=_("Cards"),
         unit="count",
         sample_size=len(ctx.records),
     )
@@ -1235,9 +1291,9 @@ def _horizontal_gap(
 
 
 _SCATTER_METRICS = {
-    "customer": ("customer_days", "Customer lead time"),
-    "system": ("system_days", "System lead time"),
-    "discovery": ("discovery_days", "Discovery lead time"),
+    "customer": ("customer_days", N_("Customer lead time")),
+    "system": ("system_days", N_("System lead time")),
+    "discovery": ("discovery_days", N_("Discovery lead time")),
 }
 
 
@@ -1245,6 +1301,7 @@ def scatter(ctx: MetricsContext, metric: str = "customer") -> dict[str, Any]:
     """One dot per delivered card plus the percentile and SLE reference lines."""
     metric = metric if metric in _SCATTER_METRICS else "customer"
     attribute, label = _SCATTER_METRICS[metric]
+    label = _(label)
 
     delivered = sorted(ctx.delivered_between(), key=lambda record: record.delivered_at or ctx.now)
     points: list[dict[str, Any]] = []
@@ -1292,7 +1349,7 @@ def scatter(ctx: MetricsContext, metric: str = "customer") -> dict[str, Any]:
         series.append(
             _series(
                 name,
-                f"{name[1:]}th percentile — {value:.1f}d",
+                _percentile_label(name, value),
                 role_for.get(name, "muted"),
                 [{"x": x_from, "y": value}, {"x": x_to, "y": value}],
                 mark="rule",
@@ -1304,7 +1361,11 @@ def scatter(ctx: MetricsContext, metric: str = "customer") -> dict[str, Any]:
         series.append(
             _series(
                 "sle",
-                f"SLE — {ctx.board.get('sle_percentile') or 85}% in {sle_days}d",
+                _(
+                    "SLE — {percentile}% in {days}d",
+                    percentile=num(ctx.board.get("sle_percentile") or 85),
+                    days=num(sle_days),
+                ),
                 "info",
                 [{"x": x_from, "y": float(sle_days)}, {"x": x_to, "y": float(sle_days)}],
                 mark="rule",
@@ -1330,8 +1391,8 @@ def scatter(ctx: MetricsContext, metric: str = "customer") -> dict[str, Any]:
             "sle_attainment_pct": _r(_pct(within_sle, len(values)), 1),
             "available_metrics": list(_SCATTER_METRICS),
         },
-        x_label="Delivered",
-        y_label=f"{label} (days)",
+        x_label=_("Delivered"),
+        y_label=_("{metric} (days)", metric=label),
         unit="days",
         sample_size=len(values),
     )
@@ -1388,10 +1449,10 @@ def throughput(ctx: MetricsContext, period: str = "week", rolling: int = 4) -> d
     return ctx.envelope(
         "throughput",
         [
-            _series("throughput", f"Delivered per {period}", "accent", points, mark="bar"),
+            _series("throughput", _(_DELIVERED_PER[period]), "accent", points, mark="bar"),
             _series(
                 "rolling",
-                f"{rolling}-{period} rolling average",
+                _(_ROLLING_AVERAGE[period], n=rolling),
                 "info",
                 rolling_points,
                 mark="line",
@@ -1413,8 +1474,8 @@ def throughput(ctx: MetricsContext, period: str = "week", rolling: int = 4) -> d
             "min": min(counts) if counts else 0,
             "zero_periods": sum(1 for value in counts if value == 0),
         },
-        x_label=period.title(),
-        y_label="Delivered",
+        x_label=_(_PERIOD_TITLE[period]),
+        y_label=_("Delivered"),
         unit="count",
         sample_size=sum(counts),
     )
@@ -1423,14 +1484,14 @@ def throughput(ctx: MetricsContext, period: str = "week", rolling: int = 4) -> d
 def _variability_label(cov: float | None) -> str:
     """Plain words for a coefficient of variation, the way a coach would say it."""
     if cov is None:
-        return "Not enough periods to judge variability."
+        return _("Not enough periods to judge variability.")
     if cov < 0.35:
-        return "Highly predictable — forecasts from this history will be tight."
+        return _("Highly predictable — forecasts from this history will be tight.")
     if cov < 0.75:
-        return "Normal variability — probabilistic forecasting works well here."
+        return _("Normal variability — probabilistic forecasting works well here.")
     if cov < 1.2:
-        return "Lumpy delivery — expect wide forecast ranges until batch sizes drop."
-    return "Erratic — investigate batching, blockers and unplanned work before forecasting."
+        return _("Lumpy delivery — expect wide forecast ranges until batch sizes drop.")
+    return _("Erratic — investigate batching, blockers and unplanned work before forecasting.")
 
 
 # ---------------------------------------------------------------------------
@@ -1506,7 +1567,7 @@ def aging(ctx: MetricsContext) -> dict[str, Any]:
 
     return ctx.envelope(
         "aging",
-        [_series("cards", "In-flight cards", "accent", points, mark="dot"), *band_series],
+        [_series("cards", _("In-flight cards"), "accent", points, mark="dot"), *band_series],
         percentiles=system_bands,
         categories=[
             {
@@ -1524,7 +1585,7 @@ def aging(ctx: MetricsContext) -> dict[str, Any]:
         meta={
             "bands": system_bands,
             "customer_bands": customer_bands,
-            "band_basis": "system lead time of items delivered in this window",
+            "band_basis": _("system lead time of items delivered in this window"),
             "sle_days": ctx.board.get("sle_days"),
             "sle_percentile": ctx.board.get("sle_percentile"),
             "as_of": _iso(moment),
@@ -1535,8 +1596,8 @@ def aging(ctx: MetricsContext) -> dict[str, Any]:
             "over_p85": sum(1 for point in points if point["band"] in {"p85", "p95"}),
             "blocked": sum(1 for point in points if point["is_blocked"]),
         },
-        x_label="Column",
-        y_label="Age (days)",
+        x_label=_("Column"),
+        y_label=_("Age (days)"),
         unit="days",
         sample_size=len(points),
     )
@@ -1574,7 +1635,7 @@ def _band_series(bands: Mapping[str, float], ctx: MetricsContext) -> list[dict[s
         out.append(
             _series(
                 name,
-                f"{name[1:]}th percentile — {value:.1f}d",
+                _percentile_label(name, value),
                 role_for[name],
                 [
                     {"x": column["id"], "y": value}
@@ -1692,7 +1753,7 @@ def flow_efficiency(ctx: MetricsContext) -> dict[str, Any]:
     split_series = [
         _series(
             "touch",
-            "Touch time",
+            _("Touch time"),
             "success",
             [
                 {
@@ -1705,7 +1766,7 @@ def flow_efficiency(ctx: MetricsContext) -> dict[str, Any]:
         ),
         _series(
             "wait",
-            "Wait time",
+            _("Wait time"),
             "warning",
             [
                 {
@@ -1721,7 +1782,7 @@ def flow_efficiency(ctx: MetricsContext) -> dict[str, Any]:
         split_series.append(
             _series(
                 "envelope",
-                "Sealed envelope",
+                _("Sealed envelope"),
                 "muted",
                 [
                     {
@@ -1736,7 +1797,7 @@ def flow_efficiency(ctx: MetricsContext) -> dict[str, Any]:
     split_series.append(
         _series(
             "by_column",
-            "Average days per card by column",
+            _("Average days per card by column"),
             "neutral",
             column_points,
             mark="bar",
@@ -1772,8 +1833,8 @@ def flow_efficiency(ctx: MetricsContext) -> dict[str, Any]:
             "per_card": per_card,
             "interpretation": _efficiency_label(_pct(touch_total, grand_total)),
         },
-        x_label="Column",
-        y_label="Days",
+        x_label=_("Column"),
+        y_label=_("Days"),
         unit="days",
         sample_size=len(delivered),
     )
@@ -1781,14 +1842,14 @@ def flow_efficiency(ctx: MetricsContext) -> dict[str, Any]:
 
 def _efficiency_label(value: float | None) -> str:
     if value is None:
-        return "No delivered work in this window, so there is no efficiency to report."
+        return _("No delivered work in this window, so there is no efficiency to report.")
     if value >= 40:
-        return "Excellent — very little of the lead time is spent waiting."
+        return _("Excellent — very little of the lead time is spent waiting.")
     if value >= 25:
-        return "Healthy for knowledge work; most teams sit below this."
+        return _("Healthy for knowledge work; most teams sit below this.")
     if value >= 15:
-        return "Typical. The lever is queue removal, not working faster."
-    return "Queue-dominated: over 85% of lead time is waiting. Attack the biggest queue first."
+        return _("Typical. The lever is queue removal, not working faster.")
+    return _("Queue-dominated: over 85% of lead time is waiting. Attack the biggest queue first.")
 
 
 # ---------------------------------------------------------------------------
@@ -1802,6 +1863,7 @@ def distribution(
     """Lead-time histogram with a configurable bin width and percentile markers."""
     metric = metric if metric in _SCATTER_METRICS else "customer"
     attribute, label = _SCATTER_METRICS[metric]
+    label = _(label)
     values = [
         value
         for value in (getattr(record.lead, attribute) for record in ctx.delivered_between())
@@ -1829,7 +1891,7 @@ def distribution(
                     "x": _r(low, 3),
                     "x_end": _r(high, 3),
                     "y": count,
-                    "label": f"{low:g}–{high:g}d",
+                    "label": _("{low}–{high}d", low=num(low, "g"), high=num(high, "g")),
                     "pct": _r(_pct(count, len(values)), 1),
                     "cumulative_pct": _r(_pct(sum(counts[: index + 1]), len(values)), 1),
                 }
@@ -1837,13 +1899,15 @@ def distribution(
 
     sle_days = ctx.board.get("sle_days")
     within = sum(1 for value in values if sle_days and value <= float(sle_days))
-    series = [_series("count", f"{label} distribution", "accent", points, mark="bar")]
+    series = [
+        _series("count", _("{metric} distribution", metric=label), "accent", points, mark="bar")
+    ]
     role_for = {"p50": "info", "p70": "success", "p85": "warning", "p95": "danger"}
     for name, value in percentiles.items():
         series.append(
             _series(
                 name,
-                f"{name[1:]}th percentile — {value:.1f}d",
+                _percentile_label(name, value),
                 role_for.get(name, "muted"),
                 [{"x": value, "y": None}],
                 mark="rule",
@@ -1876,8 +1940,8 @@ def distribution(
             "sle_attainment_pct": _r(_pct(within, len(values)), 1),
             "shape": _shape_label(tail_ratio),
         },
-        x_label=f"{label} (days)",
-        y_label="Items",
+        x_label=_("{metric} (days)", metric=label),
+        y_label=_("Items"),
         unit="count",
         sample_size=len(values),
     )
@@ -1901,12 +1965,16 @@ def _auto_bin_width(values: Sequence[float]) -> float:
 
 def _shape_label(tail_ratio: float | None) -> str:
     if tail_ratio is None:
-        return "Not enough delivered work to describe the shape of the distribution."
+        return _("Not enough delivered work to describe the shape of the distribution.")
     if tail_ratio < 2:
-        return "Tight distribution — the process behaves consistently across item types."
+        return _("Tight distribution — the process behaves consistently across item types.")
     if tail_ratio < 3.5:
-        return "Typical right-skewed Kanban distribution. Forecast with percentiles, not averages."
-    return "Long tail: the slowest 5% take several times the median. Look for blocked or oversized items."
+        return _(
+            "Typical right-skewed Kanban distribution. Forecast with percentiles, not averages."
+        )
+    return _(
+        "Long tail: the slowest 5% take several times the median. Look for blocked or oversized items."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1964,7 +2032,7 @@ def blockers(ctx: MetricsContext) -> dict[str, Any]:
         pareto.append(
             {
                 "category": bucket["category"],
-                "label": str(bucket["category"]).replace("_", " ").title(),
+                "label": _titled(str(bucket["category"]), _BLOCKER_CATEGORY_LABEL),
                 "count": bucket["count"],
                 "days": _r(bucket["days"], 2),
                 "mean_days": _r(bucket["days"] / bucket["count"], 2),
@@ -2017,7 +2085,7 @@ def blockers(ctx: MetricsContext) -> dict[str, Any]:
         [
             _series(
                 "blocked_days",
-                "Blocked days by category",
+                _("Blocked days by category"),
                 "danger",
                 [
                     {
@@ -2032,7 +2100,7 @@ def blockers(ctx: MetricsContext) -> dict[str, Any]:
             ),
             _series(
                 "cumulative",
-                "Cumulative share",
+                _("Cumulative share"),
                 "muted",
                 [{"x": bucket["label"], "y": bucket["cumulative_pct"]} for bucket in pareto],
                 mark="line",
@@ -2066,8 +2134,8 @@ def blockers(ctx: MetricsContext) -> dict[str, Any]:
                 reverse=True,
             ),
         },
-        x_label="Category",
-        y_label="Blocked days",
+        x_label=_("Category"),
+        y_label=_("Blocked days"),
         unit="days",
         sample_size=len(entries),
     )
@@ -2092,9 +2160,9 @@ def demand(ctx: MetricsContext) -> dict[str, Any]:
         return [
             {
                 "key": key,
-                "label": _SERVICE_CLASS_LABEL.get(key)
-                or _DEMAND_TYPE_LABEL.get(key)
-                or key.replace("_", " ").title(),
+                "label": _titled(
+                    key, {**_VALUE_AREA_LABEL, **_DEMAND_TYPE_LABEL, **_SERVICE_CLASS_LABEL}
+                ),
                 "count": count,
                 "pct": _r(_pct(count, total), 1),
             }
@@ -2119,7 +2187,7 @@ def demand(ctx: MetricsContext) -> dict[str, Any]:
         by_class.append(
             {
                 "service_class": name,
-                "label": _SERVICE_CLASS_LABEL[name],
+                "label": _(_SERVICE_CLASS_LABEL[name]),
                 "count": len(values),
                 "mean_days": _r(_mean(values), 2),
                 "p50_days": _r(percentile(values, 50), 2),
@@ -2137,7 +2205,7 @@ def demand(ctx: MetricsContext) -> dict[str, Any]:
             project_id,
             {
                 "project_id": project_id or None,
-                "name": project.get("name") if project else "Unassigned",
+                "name": project.get("name") if project else _("Unassigned"),
                 "key": project.get("key") if project else None,
                 "color": project.get("color") if project else None,
                 "status": project.get("status") if project else None,
@@ -2193,7 +2261,7 @@ def demand(ctx: MetricsContext) -> dict[str, Any]:
     series = [
         _series(
             "service_class",
-            "Class of service (delivered)",
+            _("Class of service (delivered)"),
             "accent",
             [
                 {
@@ -2209,7 +2277,7 @@ def demand(ctx: MetricsContext) -> dict[str, Any]:
         ),
         _series(
             "demand_type",
-            "Demand type (delivered)",
+            _("Demand type (delivered)"),
             "info",
             [
                 {
@@ -2225,7 +2293,7 @@ def demand(ctx: MetricsContext) -> dict[str, Any]:
         ),
         _series(
             "per_project",
-            "Delivered by project",
+            _("Delivered by project"),
             "neutral",
             [
                 {
@@ -2279,8 +2347,8 @@ def demand(ctx: MetricsContext) -> dict[str, Any]:
                 "worst_lateness_days": _r(max(lateness), 2) if lateness else None,
             },
         },
-        x_label="Class",
-        y_label="Items",
+        x_label=_("Class"),
+        y_label=_("Items"),
         unit="count",
         sample_size=delivered_total,
     )
@@ -2296,7 +2364,11 @@ def _flow_debt(by_class: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     expedite = next((row for row in by_class if row["service_class"] == "expedite"), None)
     standard = next((row for row in by_class if row["service_class"] == "standard"), None)
     if not expedite or not standard or not standard.get("p85_days"):
-        return {"available": False, "ratio": None, "note": "Needs delivered work in both classes."}
+        return {
+            "available": False,
+            "ratio": None,
+            "note": _("Needs delivered work in both classes."),
+        }
     ratio = (expedite.get("p85_days") or 0) / standard["p85_days"]
     return {
         "available": True,
@@ -2305,11 +2377,15 @@ def _flow_debt(by_class: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "ratio": _r(ratio, 3),
         "expedite_share_pct": None,
         "note": (
-            "Expedite work clears far faster than standard work; the standard class is "
-            "absorbing the interruption cost."
+            _(
+                "Expedite work clears far faster than standard work; the standard class is "
+                "absorbing the interruption cost."
+            )
             if ratio < 0.6
-            else "Expedite and standard classes finish at comparable speed — the expedite "
-            "lane is not distorting the flow."
+            else _(
+                "Expedite and standard classes finish at comparable speed — the expedite "
+                "lane is not distorting the flow."
+            )
         ),
     }
 
@@ -2348,7 +2424,7 @@ def littles_law(ctx: MetricsContext) -> dict[str, Any]:
     series = [
         _series(
             "wip",
-            "Work in progress",
+            _("Work in progress"),
             "accent",
             [{"x": _day_key(moment), "y": count, "t": _iso(moment)} for moment, count in samples],
             mark="line",
@@ -2375,8 +2451,8 @@ def littles_law(ctx: MetricsContext) -> dict[str, Any]:
             "stable": bool(coherence is not None and 0.75 <= coherence <= 1.35),
             "verdict": _littles_law_verdict(coherence, conservation, len(delivered)),
         },
-        x_label="Date",
-        y_label="WIP",
+        x_label=_("Date"),
+        y_label=_("WIP"),
         unit="count",
         sample_size=len(delivered),
     )
@@ -2384,23 +2460,32 @@ def littles_law(ctx: MetricsContext) -> dict[str, Any]:
 
 def _littles_law_verdict(coherence: float | None, conservation: int, delivered: int) -> str:
     if delivered == 0:
-        return "Nothing was delivered in this window, so Little's Law cannot be evaluated."
+        return _("Nothing was delivered in this window, so Little's Law cannot be evaluated.")
     if coherence is None:
-        return "Not enough committed work in flight to compare observed and predicted WIP."
+        return _("Not enough committed work in flight to compare observed and predicted WIP.")
     if 0.75 <= coherence <= 1.35:
-        base = "The system is behaving as a stable queue: observed WIP matches throughput × cycle time."
+        base = _(
+            "The system is behaving as a stable queue: observed WIP matches throughput × "
+            "cycle time."
+        )
     elif coherence > 1.35:
-        base = (
+        base = _(
             "Observed WIP is well above throughput × cycle time — work is entering faster "
             "than it leaves, so lead times will keep growing."
         )
     else:
-        base = (
+        base = _(
             "Observed WIP is below throughput × cycle time — the window probably closed on a "
             "batch of deliveries, or items are leaving the board without a delivery movement."
         )
     if conservation > max(3, delivered * 0.25):
-        return base + " Arrivals are outpacing departures; the queue is still growing."
+        return _(
+            "{verdict} Arrivals are outpacing departures; the queue is still growing.",
+            verdict=base,
+        )
     if conservation < -max(3, delivered * 0.25):
-        return base + " Departures outpaced arrivals; the team is draining an existing queue."
-    return base + " Arrivals and departures are balanced."
+        return _(
+            "{verdict} Departures outpaced arrivals; the team is draining an existing queue.",
+            verdict=base,
+        )
+    return _("{verdict} Arrivals and departures are balanced.", verdict=base)
