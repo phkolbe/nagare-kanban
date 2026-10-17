@@ -3,7 +3,7 @@ import { Navigate, Outlet, Route, Routes, useParams } from 'react-router-dom'
 import { Carregando, EmConstrucao, PRODUTO_PAMPUFA, RotaDeProduto, useAuth, useProduto } from '@pampufa/ui'
 
 import { ProvedorNagare } from './app/contexto'
-import { TelaMetricas, TelaSimulador } from './app/telasSobDemanda'
+import { TelaMetricas } from './app/telasSobDemanda'
 import { AjudaDeAtalhos, useAtalhos } from './componentes/Atalhos'
 import { ProvedorAvisos } from './componentes/Avisos'
 import { NaoEncontrada } from './componentes/NaoEncontrada'
@@ -17,6 +17,7 @@ import { ProvedorIdioma } from './i18n'
 /**
  * Telas React do Nagare Kanban no modulo Tarefas (NG7, N2): `/grupo-sr/<produto>/tarefas/...`.
  * O Nagare e um sistema a parte, so por API (NG1); o menu, o sino e o login sao da plataforma.
+ * Simulador e administracao sao so do Nagare sozinho (decisao de 17/10/2026).
  */
 export function AppPlataforma() {
   const { estado } = useAuth()
@@ -34,8 +35,6 @@ export function AppPlataforma() {
           <Route path="tarefas/projetos/:projetoId" element={<TelaProjeto />} />
           <Route path="tarefas/metricas" element={<TelaMetricas />} />
           <Route path="tarefas/metricas/:quadroId" element={<TelaMetricas />} />
-          <Route path="tarefas/simulador" element={<TelaSimulador />} />
-          <Route path="tarefas/simulador/:quadroId" element={<TelaSimulador />} />
           <Route path="tarefas/regras" element={<TelaRegras />} />
           <Route path="tarefas/*" element={<NaoEncontrada />} />
           <Route path="*" element={<EmConstrucao />} />

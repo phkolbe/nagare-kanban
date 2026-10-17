@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..db import iso
-from ..texts import N_, _
+from ..texts import N_, _, on_platform
 from .metrics import (
     LOW_CONFIDENCE_SAMPLE,
     MetricsContext,
@@ -542,7 +542,12 @@ def _ml5_specs() -> list[_MetricSpec]:
                 "the Optimizing-stage proof that lowering WIP shortens lead time — "
                 "Anderson's central kanban claim made empirical rather than theoretical."
             ),
-            action=_("Clone this board into the simulator and run a wip_experiment scenario."),
+            # The simulator is a Nagare-only screen: inside the Pampufa it is not there.
+            action=(
+                _("Run a WIP experiment in the Nagare simulator.")
+                if on_platform()
+                else _("Clone this board into the simulator and run a wip_experiment scenario.")
+            ),
             check=lambda s: (
                 s.wip_experiment_count >= 1,
                 s.wip_experiment_count,

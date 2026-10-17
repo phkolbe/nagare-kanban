@@ -84,3 +84,19 @@ def test_the_no_gain_verdict_in_portuguese() -> None:
     assert "“Sem limites de WIP”" in verdict
     assert verdict.endswith("mais chegadas por semana.")
 
+
+def _wip_practice_action() -> str:
+    from backend.app.flow import kmm
+
+    return next(spec.action for spec in kmm._ml5_specs() if spec.key == "wip_experiment_outcomes")
+
+
+def test_inside_the_pampufa_the_kmm_points_to_the_nagare_simulator() -> None:
+    from backend.app.texts import current_via, set_via
+
+    assert "Clone this board into the simulator" in _wip_practice_action()
+    token = set_via("pampufa")
+    try:
+        assert _wip_practice_action() == "Run a WIP experiment in the Nagare simulator."
+    finally:
+        current_via.reset(token)

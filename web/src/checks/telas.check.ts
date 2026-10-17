@@ -6,6 +6,7 @@
  */
 
 import { baseDoSozinho, modoDoCaminho, montarRota } from '../app/contexto'
+import { ehSoDoNagare } from '../componentes/Atalhos'
 import type { Cartao, Coluna, SituacaoWip } from '../api/tipos'
 import { travaDoUsuario } from '../features/admin/travas'
 import { eficienciaDoCartao } from '../features/cartao/eficiencia'
@@ -263,6 +264,7 @@ confere(
   ],
   ['plano', 'papel', null],
 )
+confere('simulador e admin so no Nagare sozinho', ['g s', 'g a', 'g m', 'g b', '/', 'Enter'].map(ehSoDoNagare), [true, true, false, false, false, false])
 confere('o trilho tem as cinco telas', TRILHO.map((i) => i.caminho), ['quadro', 'projetos', 'metricas', 'simulador', 'admin'])
 
 // ----------------------------------------------------------------- N3: metricas

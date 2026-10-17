@@ -11,7 +11,7 @@ import { useNagare } from '../app/contexto'
 import { useT, type Chave } from '../i18n'
 import { Janela } from './Sobreposicao'
 
-/** Destinos do `g` (o admin so existe fora da plataforma). */
+/** Destinos do `g`. */
 export const IR_PARA: Record<string, string> = {
   b: 'quadro',
   p: 'projetos',
@@ -19,6 +19,9 @@ export const IR_PARA: Record<string, string> = {
   s: 'simulador',
   a: 'admin',
 }
+
+/** Telas que so existem no Nagare sozinho: simulador e admin nao entram na plataforma. */
+export const SO_NO_NAGARE = new Set(['simulador', 'admin'])
 
 export function digitando(alvo: EventTarget | null): boolean {
   const el = alvo as HTMLElement | null
@@ -37,7 +40,7 @@ export function useAtalhos({ abrirAjuda }: { abrirAjuda: () => void }) {
         window.clearTimeout(esperandoG.current)
         esperandoG.current = null
         const destino = IR_PARA[e.key]
-        if (destino && !(destino === 'admin' && modo === 'plataforma')) {
+        if (destino && !(SO_NO_NAGARE.has(destino) && modo === 'plataforma')) {
           e.preventDefault()
           navegar(rota(destino))
         }
@@ -75,6 +78,12 @@ const LINHAS: [string, Chave][] = [
   ['← ↑ → ↓', 'atalhos.navegar_cartoes'],
 ]
 
+/** `g s`, `g a`: atalhos de telas que nao existem na plataforma. */
+export function ehSoDoNagare(teclas: string): boolean {
+  const [g, tecla] = teclas.split(' ')
+  return g === 'g' && tecla !== undefined && SO_NO_NAGARE.has(IR_PARA[tecla] ?? '')
+}
+
 export function AjudaDeAtalhos({ fechar }: { fechar: () => void }) {
   const { t } = useT()
   const { modo } = useNagare()
@@ -82,7 +91,7 @@ export function AjudaDeAtalhos({ fechar }: { fechar: () => void }) {
     <Janela titulo={t('atalhos.titulo')} fechar={fechar} largura={460}>
       <table className="ng-tabela">
         <tbody>
-          {LINHAS.filter(([teclas]) => !(teclas === 'g a' && modo === 'plataforma')).map(([teclas, chave]) => (
+          {LINHAS.filter(([teclas]) => !(modo === 'plataforma' && ehSoDoNagare(teclas))).map(([teclas, chave]) => (
             <tr key={teclas}>
               <td>
                 <kbd>{teclas}</kbd>

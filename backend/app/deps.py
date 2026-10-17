@@ -42,7 +42,7 @@ from .tenancy import (
     role_from_pampufa,
     set_current_product,
 )
-from .texts import effective_locale, set_locale
+from .texts import effective_locale, set_locale, set_via
 
 __all__ = [
     "CurrentUser",
@@ -169,6 +169,7 @@ async def get_current_user(request: Request, s: AsyncSession = Depends(get_sessi
     set_current_product(user["product_id"])
     # The language of every human-readable text this request generates (see .texts).
     set_locale(effective_locale(user.get("locale"), str(user.get("via"))))
+    set_via(str(user.get("via")))
     return user
 
 

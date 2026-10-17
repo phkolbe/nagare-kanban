@@ -45,7 +45,9 @@ __all__ = [
     "effective_locale",
     "locale",
     "num",
+    "on_platform",
     "set_locale",
+    "set_via",
 ]
 
 EN = "en"
@@ -54,6 +56,8 @@ SUPPORTED_LOCALES: tuple[str, ...] = (PT_BR, EN)
 
 #: The effective locale of the current request.
 current_locale: ContextVar[str] = ContextVar("nagare_locale", default=EN)
+#: Where the current request came from: ``pampufa`` (the platform) or ``local``.
+current_via: ContextVar[str] = ContextVar("nagare_via", default="local")
 
 
 def default_locale(via: str | None) -> str:
@@ -74,6 +78,16 @@ def set_locale(value: str | None) -> Token[str]:
 def locale() -> str:
     """The locale of the current request."""
     return current_locale.get()
+
+
+def set_via(value: str | None) -> Token[str]:
+    """Remember whether this request came through the Pampufa platform."""
+    return current_via.set("pampufa" if value == "pampufa" else "local")
+
+
+def on_platform() -> bool:
+    """True inside the Pampufa, where the Nagare-only screens (simulator) do not exist."""
+    return current_via.get() == "pampufa"
 
 
 # ---------------------------------------------------------------------------
@@ -807,6 +821,9 @@ PT: dict[str, str] = {
     ),
     "Clone this board into the simulator and run a wip_experiment scenario.": (
         "Clone este quadro no simulador e rode um cenário de experimento de WIP (wip_experiment)."
+    ),
+    "Run a WIP experiment in the Nagare simulator.": (
+        "Rode um experimento de WIP no simulador do Nagare."
     ),
     "Portfolio roll-up across projects": "Consolidação do portfólio entre projetos",
     (
