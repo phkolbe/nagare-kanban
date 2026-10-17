@@ -47,6 +47,7 @@ from ..deps import (
     get_active_plan,
     get_session,
     require_capability,
+    require_standalone,
 )
 from ..errors import BadRequest, Conflict, Forbidden, NotFound
 from ..models import FeatureFlag, Plan, Workspace, as_dict
@@ -65,7 +66,9 @@ from ..schemas import (
 
 __all__ = ["FlagCategoryOut", "FlagListOut", "WorkspaceDetailOut", "router"]
 
-router = APIRouter(tags=["flags & plans"])
+#: Flags, plans and the workspace are the standalone Nagare's administration (N3-c);
+#: inside the platform the shell reads the effective flags from ``GET /auth/me``.
+router = APIRouter(tags=["flags & plans"], dependencies=[Depends(require_standalone)])
 
 #: SPEC §4 — only the master manages the commercial surface.
 manage_flags = require_capability("manage_plans_flags")

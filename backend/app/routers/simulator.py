@@ -43,7 +43,14 @@ from sqlalchemy import delete, func, insert, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import iso, new_id, utcnow
-from ..deps import CurrentUser, get_board_or_404, get_session, require_capability, require_flag
+from ..deps import (
+    CurrentUser,
+    get_board_or_404,
+    get_session,
+    require_capability,
+    require_flag,
+    require_standalone,
+)
 from ..errors import BadRequest, NotFound
 from ..flow import forecast
 from ..models import Board, Card, CardEvent, CardMovement, SimulationRun, User, as_dict, json_dumps
@@ -69,9 +76,10 @@ from .boards import (
     create_board,
 )
 
+#: The simulator is a Nagare-only screen (A9-c): not reachable through the Pampufa.
 router = APIRouter(
     tags=["simulator"],
-    dependencies=[Depends(require_flag("simulator"))],
+    dependencies=[Depends(require_standalone), Depends(require_flag("simulator"))],
 )
 
 #: The two run kinds SPEC §3 gates behind the (separately purchasable) Monte

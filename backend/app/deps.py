@@ -60,6 +60,7 @@ __all__ = [
     "require_capability",
     "require_flag",
     "require_roles",
+    "require_standalone",
 ]
 
 
@@ -235,6 +236,21 @@ def assert_can_login(user: dict[str, Any]) -> None:
         )
     if not user.get("is_active"):
         raise Forbidden("This account is deactivated.", code="account_disabled")
+
+
+async def require_standalone(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+    """Only the standalone Nagare: refuse a request signed with a Pampufa token.
+
+    Administration (people, workspace, flags and plans) and the simulator are screens of
+    the Nagare on its own (decisions N3-c and A9-c): inside the platform, people and roles
+    belong to the Pampufa, and the users table and the workspace are not split by product.
+    """
+    if user.get("via") == "pampufa":
+        raise Forbidden(
+            "This is only available in the standalone Nagare, not through the Pampufa.",
+            code="standalone_only",
+        )
+    return user
 
 
 # ---------------------------------------------------------------------------

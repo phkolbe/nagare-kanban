@@ -32,7 +32,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import ROLE_CAPABILITIES, ROLE_DESCRIPTIONS, ROLE_LABELS, ROLES
 from ..db import new_id, utcnow
-from ..deps import CurrentUser, get_session, require_capability, require_flag
+from ..deps import (
+    CurrentUser,
+    get_session,
+    require_capability,
+    require_flag,
+    require_standalone,
+)
 from ..errors import BadRequest, Conflict, Forbidden, NotFound
 from ..models import User, as_dict
 from ..schemas import (
@@ -47,7 +53,8 @@ from ..schemas import (
 
 __all__ = ["CAPABILITY_LABELS", "RoleCatalogueDetailOut", "router"]
 
-router = APIRouter(prefix="/users", tags=["users"])
+#: People are the Pampufa's inside the platform: this is the standalone Nagare only (N3-c).
+router = APIRouter(prefix="/users", tags=["users"], dependencies=[Depends(require_standalone)])
 
 #: master + administrator (SPEC §4 "Manage users/roles")
 manage_users = require_capability("manage_users")

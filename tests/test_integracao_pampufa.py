@@ -772,3 +772,31 @@ def test_the_tarefas_screens_are_served_under_the_platform_path(
     assert asset.status_code == 200 and "javascript" in asset.headers["content-type"]
     assert client.get("/grupo-sr/_nagare/../pyproject.toml").status_code == 404
     assert client.get("/grupo-sr/sr-adv/financeiro").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# isolation fixes of 17/10/2026 (found while rewriting docs/API.md)
+# ---------------------------------------------------------------------------
+
+STANDALONE_ONLY = (
+    ("GET", "/users"),
+    ("GET", "/users/roles"),
+    ("GET", "/workspace"),
+    ("PATCH", "/workspace"),
+    ("GET", "/flags"),
+    ("GET", "/plans"),
+    ("GET", "/simulator/boards"),
+    ("GET", "/simulator/runs"),
+)
+
+
+@pytest.mark.parametrize(("method", "path"), STANDALONE_ONLY)
+def test_admin_and_simulator_are_not_reachable_through_the_pampufa(
+    client, auth, pampufa, method: str, path: str
+) -> None:
+    token = pampufa.person({PRODUCT: ["nagare.admin"]})
+    response = client.request(method, f"{API}{path}", headers=headers(token), json={})
+    assert response.status_code == 403, response.text
+    assert response.json()["error"]["code"] == "standalone_only"
+    if method == "GET":
+        assert client.get(f"{API}{path}", headers=auth("master")).status_code == 200
