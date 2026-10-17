@@ -77,6 +77,18 @@ class Settings:
     port: int = field(default_factory=lambda: _env_int("NAGARE_PORT", 8770))
     dev: bool = field(default_factory=lambda: _env_bool("NAGARE_DEV", True))
 
+    # --- observability (platform decision OBS-I) ------------------------------
+    #: OpenTelemetry collector, OTLP/HTTP (e.g. http://127.0.0.1:4318): traces and logs.
+    #: Empty: nothing is exported. The standard OpenTelemetry variable name.
+    otel_exporter_otlp_endpoint: str = field(
+        default_factory=lambda: os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+    )
+    #: ``deployment.environment`` of the exported telemetry (dev | teste | prod).
+    environment: str = field(default_factory=lambda: os.environ.get("NAGARE_AMBIENTE", "dev"))
+    #: Bearer the collector sends to read /metrics (the platform's METRICS_TOKEN).
+    #: Empty: /metrics answers only to the loopback.
+    metrics_token: str = field(default_factory=lambda: os.environ.get("NAGARE_METRICS_TOKEN", ""))
+
     # --- frontend ----------------------------------------------------------
     #: The React screens (``web/``, built by Vite): the platform's Tarefas module under
     #: ``/grupo-sr/`` (N2) and the standalone Nagare at ``/`` (N3; the old screen is gone).

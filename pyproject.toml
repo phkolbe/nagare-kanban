@@ -18,6 +18,14 @@ dependencies = [
     "asyncpg>=0.30",
     "alembic>=1.14",
     "httpx>=0.28",
+    # Observabilidade (OBS-I): tracing e logs OpenTelemetry por conta propria (nao usa a
+    # fabrica do SDK), instrumentacao de FastAPI, SQLAlchemy e httpx, e /metrics Prometheus.
+    "opentelemetry-sdk>=1.30",
+    "opentelemetry-exporter-otlp-proto-http>=1.30",
+    "opentelemetry-instrumentation-fastapi>=0.60b0",
+    "opentelemetry-instrumentation-sqlalchemy>=0.60b0",
+    "opentelemetry-instrumentation-httpx>=0.60b0",
+    "prometheus-client>=0.21",
 ]
 
 [project.optional-dependencies]

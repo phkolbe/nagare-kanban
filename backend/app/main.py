@@ -28,7 +28,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse
 from sqlalchemy import func, select
 
-from . import __version__
+from . import __version__, observability
 from .config import settings
 from .db import Database, migrate
 from .errors import ApiError, install_error_handlers
@@ -81,6 +81,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             with contextlib.suppress(asyncio.CancelledError):
                 await sender
         await database.dispose()
+        observability.shutdown()
 
 
 def _mount_routers(app: FastAPI) -> list[str]:
@@ -137,6 +138,10 @@ def create_app(
         redoc_url="/redoc",
         openapi_url="/openapi.json",
     )
+    # Observability (OBS-I) before the engine exists: the SQLAlchemy instrumentation
+    # wraps the ``create_async_engine`` the ``Database`` below calls; the FastAPI span is
+    # the outermost middleware and continues the Caddy's ``traceparent``.
+    observability.install(app)
     app.state.database = Database(database_url)
     #: The Pampufa gateway (``None``: standalone). Tests pass an in-memory double.
     app.state.pampufa = pampufa
@@ -152,7 +157,11 @@ def create_app(
         expose_headers=["*"],
     )
 
+    app.add_middleware(observability.RequestMetrics)
     install_error_handlers(app)
+
+    # ---- observability: /metrics for the platform's collector (before the SPA catch-all)
+    app.include_router(observability.metrics_router)
 
     # ---- meta ------------------------------------------------------------
 

@@ -23,11 +23,13 @@ from datetime import timedelta
 from typing import Any
 
 import httpx
+from opentelemetry import trace
 from pampufa_sdk.auth.token import Identidade, TokenInvalido, ValidadorDeToken
 from pampufa_sdk.servicos import ClienteDeServico, ErroDeIntegracao
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from . import observability
 from .config import Settings
 from .db import add_days, iso, new_id, parse_iso, utcnow
 from .errors import Unauthorized
@@ -225,26 +227,56 @@ async def deliver_pending(
             )
         ).all()
         for row in rows:
-            try:
-                await gateway.post_event(row.event, {"product_id": row.product_id, **row.payload})
-            except (ErroDeIntegracao, httpx.HTTPError, TokenInvalido) as error:
-                row.attempts += 1
-                row.last_error = str(error)[:500]
-                moment = parse_iso(now)
-                row.next_attempt_at = (
-                    iso(moment + _backoff(row.attempts)) if moment else add_days(now, 0)
-                )
-                log.warning(
-                    "pampufa.webhook_failed",
-                    extra={"event": row.event, "attempts": row.attempts, "error": row.last_error},
-                )
-            else:
-                row.attempts += 1
-                row.delivered_at = utcnow()
-                row.last_error = None
+            await _deliver_one(gateway, row, now)
+            if row.delivered_at is not None:
                 delivered += 1
+        pending = await s.scalar(
+            select(func.count())
+            .select_from(WebhookOutbox)
+            .where(WebhookOutbox.delivered_at.is_(None))
+        )
+        observability.WEBHOOK_PENDING.set(int(pending or 0))
         await s.commit()
     return delivered
+
+
+async def _deliver_one(gateway: PampufaGateway, row: WebhookOutbox, now: str) -> None:
+    """One delivery inside a producer span (OBS-I).
+
+    The httpx instrumentation carries the ``traceparent`` to the Pampufa, so its
+    server span joins this trace: the card delivered in the Nagare and the
+    providência closed in the platform are one picture.
+    """
+    with observability.tracer().start_as_current_span(
+        f"webhook {row.event}",
+        kind=trace.SpanKind.PRODUCER,
+        attributes={
+            "messaging.destination.name": row.event,
+            "pampufa.product_id": row.product_id or "-",
+            "nagare.webhook.attempts": row.attempts,
+        },
+    ) as span:
+        try:
+            await gateway.post_event(row.event, {"product_id": row.product_id, **row.payload})
+        except (ErroDeIntegracao, httpx.HTTPError, TokenInvalido) as error:
+            span.record_exception(error)
+            span.set_status(trace.Status(trace.StatusCode.ERROR, str(error)[:200]))
+            observability.WEBHOOKS.labels(row.event, "failed").inc()
+            row.attempts += 1
+            row.last_error = str(error)[:500]
+            moment = parse_iso(now)
+            row.next_attempt_at = (
+                iso(moment + _backoff(row.attempts)) if moment else add_days(now, 0)
+            )
+            log.warning(
+                "pampufa.webhook_failed",
+                extra={"event": row.event, "attempts": row.attempts, "error": row.last_error},
+            )
+        else:
+            observability.WEBHOOKS.labels(row.event, "delivered").inc()
+            row.attempts += 1
+            row.delivered_at = utcnow()
+            row.last_error = None
 
 
 async def webhook_loop(
