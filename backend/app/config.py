@@ -79,6 +79,8 @@ class Settings:
 
     # --- frontend ----------------------------------------------------------
     frontend_dir: Path = field(default_factory=lambda: BASE_DIR / "frontend")
+    #: The React screens of the platform's Tarefas module (``web/``, built by Vite, N2).
+    screens_dir: Path = field(default_factory=lambda: BASE_DIR / "web" / "dist")
 
     # --- Pampufa integration (NG1-NG17) ---------------------------------------
     #: Base URL of the ``pampufa`` service. Empty: the Nagare runs standalone and
@@ -106,6 +108,12 @@ class Settings:
         default_factory=lambda: os.environ.get(
             "NAGARE_URL_PUBLICA", "http://127.0.0.1:8770"
         ).rstrip("/")
+    )
+
+    #: The platform's screens (``.../grupo-sr``): a platform product's card opens in its
+    #: Tarefas module (N2). Empty: on this server's old screen, as before.
+    screens_url: str = field(
+        default_factory=lambda: os.environ.get("NAGARE_URL_TELAS", "").rstrip("/")
     )
 
     @property

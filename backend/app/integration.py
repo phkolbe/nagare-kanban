@@ -23,9 +23,10 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import SERVICE_CLASSES, settings
-from .db import new_id, utcnow
+from .db import add_days, new_id, utcnow
 from .errors import BadRequest, Conflict, NotFound
 from .models import (
+    PRODUCT_STANDALONE,
     Board,
     Card,
     CardEvent,
@@ -43,13 +44,18 @@ from .routers.boards import canonical_columns, create_board_from_template, next_
 from .tenancy import project_key_for
 
 __all__ = [
+    "STAGES",
     "TAG_RESOLVED_AT_ORIGIN",
     "card_for_providencia",
     "card_url",
     "close_card",
     "ensure_product_link",
     "find_ref",
+    "overview",
+    "person_user",
+    "product_people",
     "resolve_at_origin",
+    "stages_of",
     "swap_product_project",
 ]
 
@@ -60,7 +66,14 @@ TAG_RESOLVED_AT_ORIGIN = "resolvido-na-origem"
 
 
 def card_url(card: dict[str, Any]) -> str:
-    """Where a person opens the card (the board, until the React screen of N2)."""
+    """Where a person opens the card: the product's Tarefas module (N2), or the
+    standalone Nagare's own board."""
+    product = card.get("product_id")
+    if settings.screens_url and product and product != PRODUCT_STANDALONE:
+        return (
+            f"{settings.screens_url}/{product}/tarefas/quadro/{card['board_id']}"
+            f"?cartao={card['id']}"
+        )
     return f"{settings.public_url}/#/board/{card['board_id']}"
 
 
@@ -141,7 +154,12 @@ async def find_ref(s: AsyncSession, providencia_id: str) -> dict[str, Any] | Non
 
 
 async def _assignee(s: AsyncSession, person: dict[str, Any] | None) -> str | None:
-    """The Nagare user for the responsible person, created without a password if new.
+    user = await person_user(s, person)
+    return user.id if user else None
+
+
+async def person_user(s: AsyncSession, person: dict[str, Any] | None) -> User | None:
+    """The Nagare user for a Pampufa person, created without a password if new.
 
     Same rule as the sign-in: the Pampufa ``sub`` first, then the e-mail (linked).
     """
@@ -171,7 +189,170 @@ async def _assignee(s: AsyncSession, person: dict[str, Any] | None) -> str | Non
         )
         s.add(user)
         await s.flush()
-    return user.id
+    return user
+
+
+#: The product's people, mirrored from the Pampufa for a minute (the assignee picker
+#: asks on every card drawer; the directory changes rarely).
+_PEOPLE_TTL_S = 60
+_people_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+
+
+async def product_people(s: AsyncSession, gateway: Any, product_id: str) -> list[dict[str, Any]]:
+    """Who can take a card in the product: the Pampufa's ``nagare.*`` people (17/10/2026).
+
+    Each person gets (or keeps) a Nagare user, so an assignee can be picked before
+    the person ever opens the Nagare. Returns ``[{id, name, email, sub, roles}]``.
+    """
+    import time
+
+    cached = _people_cache.get(product_id)
+    if cached and time.monotonic() - cached[0] < _PEOPLE_TTL_S:
+        return cached[1]
+    out: list[dict[str, Any]] = []
+    for person in await gateway.people(product_id):
+        user = await person_user(s, person)
+        if user is None or not user.is_active:
+            continue
+        out.append(
+            {
+                "id": user.id,
+                "name": user.name,
+                "email": user.email,
+                "sub": user.external_subject,
+                "roles": list(person.get("papeis") or []),
+            }
+        )
+    await s.commit()
+    out.sort(key=lambda p: (p["name"].lower(), p["email"]))
+    _people_cache[product_id] = (time.monotonic(), out)
+    return out
+
+
+def forget_people(product_id: str | None = None) -> None:
+    """Drop the mirror (tests; or after the Pampufa says the directory changed)."""
+    if product_id is None:
+        _people_cache.clear()
+    else:
+        _people_cache.pop(product_id, None)
+
+
+# ---------------------------------------------------------------------------
+# the PO's consolidated board (N2, decision of 17/10/2026)
+# ---------------------------------------------------------------------------
+
+#: The stages every product board is read in, whatever its own columns are called.
+STAGES: tuple[str, ...] = ("entrada", "a_fazer", "fazendo", "aguardando", "entregue")
+#: How far back the consolidated board shows delivered cards.
+DELIVERED_WINDOW_DAYS = 14
+
+
+def stages_of(columns: list[dict[str, Any]]) -> dict[str, str]:
+    """``{column_id: stage}`` for a board's columns in flow order.
+
+    Upstream is *entrada*; downstream, the queues before the first activity are
+    *a_fazer* (the commitment side), activities are *fazendo*, queues after an
+    activity are *aguardando* (waiting on someone), and the done column *entregue*.
+    """
+    out: dict[str, str] = {}
+    seen_activity = False
+    for column in columns:
+        if column["kind"] == "done":
+            out[column["id"]] = "entregue"
+        elif column["segment"] == "upstream":
+            out[column["id"]] = "entrada"
+        elif column["kind"] == "activity":
+            seen_activity = True
+            out[column["id"]] = "fazendo"
+        else:
+            out[column["id"]] = "aguardando" if seen_activity else "a_fazer"
+    return out
+
+
+def _visible_products(user: dict[str, Any], linked: list[str]) -> list[str]:
+    """Every linked product for the gestor and the master; else the caller's own."""
+    if user.get("via") != "pampufa":
+        return linked if user.get("role") == "master" else []
+    roles: dict[str, list[str]] = user.get("pampufa_roles") or {}
+    if "pampufa.gestor" in roles.get("pampufa", []):
+        return linked
+    return [p for p in linked if any(r.startswith("nagare.") for r in roles.get(p, []))]
+
+
+async def overview(s: AsyncSession, user: dict[str, Any]) -> dict[str, Any]:
+    """The four product boards read by stage, one lane per product, no card twice.
+
+    Open cards of each product's linked board, plus the ones delivered in the last
+    ``DELIVERED_WINDOW_DAYS``. Read only: a card opens on its own product's board.
+    """
+    links = (await s.scalars(select(ProductLink).order_by(ProductLink.product_id))).all()
+    allowed = set(_visible_products(user, [link.product_id for link in links]))
+    since = add_days(utcnow(), -DELIVERED_WINDOW_DAYS)
+    lanes: list[dict[str, Any]] = []
+    for link in links:
+        if link.product_id not in allowed:
+            continue
+        board = as_dict(await s.get(Board, link.board_id)) or {}
+        project = as_dict(await s.get(Project, link.project_id)) or {}
+        columns = await canonical_columns(s, link.board_id)
+        stage = stages_of(columns)
+        by_id = {c["id"]: c for c in columns}
+        rows = (
+            await s.execute(
+                select(Card, User.name)
+                .outerjoin(User, User.id == Card.assignee_id)
+                .where(
+                    Card.board_id == link.board_id,
+                    Card.archived.is_(False),
+                    (Card.delivered_at.is_(None)) | (Card.delivered_at >= since),
+                )
+                .order_by(Card.created_at, Card.id)
+            )
+        ).all()
+        cards = []
+        for card, assignee_name in rows:
+            data = as_dict(card) or {}
+            column = by_id.get(data.get("column_id"))
+            if column is None:
+                continue
+            # A sealed envelope keeps its content on the board too (the board hides it).
+            sealed = data.get("envelope_state") == "sealed"
+            cards.append(
+                {
+                    "id": data["id"],
+                    "key": data["key"],
+                    "title": None if sealed else data["title"],
+                    "sealed": sealed,
+                    "stage": stage[column["id"]],
+                    "column": column["name"],
+                    "service_class": data.get("service_class"),
+                    "assignee_name": None if sealed else assignee_name,
+                    "due_date": None if sealed else data.get("due_date"),
+                    "is_blocked": bool(data.get("is_blocked")),
+                    "created_at": data.get("created_at"),
+                    "delivered_at": data.get("delivered_at"),
+                    "tags": list(data.get("tags") or []),
+                }
+            )
+        wip: dict[str, int | None] = {}
+        for name in STAGES:
+            limits = [c.get("wip_max") for c in columns if stage[c["id"]] == name]
+            wip[name] = sum(limits) if limits and all(limits) else None
+        lanes.append(
+            {
+                "product_id": link.product_id,
+                "board": {"id": board.get("id"), "name": board.get("name")},
+                "project": {"key": project.get("key"), "name": project.get("name")},
+                "counts": {name: sum(1 for c in cards if c["stage"] == name) for name in STAGES},
+                "wip": wip,
+                "cards": cards,
+            }
+        )
+    return {
+        "stages": list(STAGES),
+        "delivered_window_days": DELIVERED_WINDOW_DAYS,
+        "products": lanes,
+    }
 
 
 def _event(

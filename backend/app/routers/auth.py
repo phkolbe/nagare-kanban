@@ -36,9 +36,10 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Request, status
+from pydantic import BaseModel
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -91,6 +92,21 @@ class MeOut(UserOut):
     flags: dict[str, bool]
     #: seconds until the presented token expires
     expires_in: int
+    #: the language of the screens: the person's choice, else the default of the way in
+    locale: str
+    #: what the person chose (``None``: following the default)
+    locale_chosen: str | None = None
+    #: ``pampufa`` (platform sign-in) or ``local``
+    via: str
+    #: the product this request acts on
+    product_id: str
+
+
+class MePatch(BaseModel):
+    """``PATCH /auth/me`` — the person's own preferences."""
+
+    #: ``None`` goes back to the default of the way in
+    locale: Literal["pt-BR", "en"] | None
 
 
 # ---------------------------------------------------------------------------
@@ -341,8 +357,37 @@ async def me(
     s: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     """Everything the shell needs to draw itself for this identity."""
+    return await _me(s, user)
+
+
+@router.patch(
+    "/me",
+    response_model=MeOut,
+    summary="Change the signed-in person's preferences (the language of the screens)",
+)
+async def update_me(
+    payload: MePatch,
+    user: CurrentUser = Depends(get_current_user),
+    s: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """The choice is the person's, on every device (decision of 17/10/2026)."""
+    if user["role"] == "system":
+        raise Forbidden("A service identity has no preferences.", code="system_has_no_preferences")
+    await s.execute(update(User).where(User.id == user["id"]).values(locale=payload.locale))
+    await s.commit()
+    return await _me(s, {**user, "locale": payload.locale})
+
+
+def default_locale(via: str) -> str:
+    """Portuguese through the Pampufa, English on the Nagare's own login (N2)."""
+    return "pt-BR" if via == "pampufa" else "en"
+
+
+async def _me(s: AsyncSession, user: CurrentUser) -> dict[str, Any]:
     role = str(user["role"])
     capabilities = _capabilities_for(role)
+    via = str(user.get("via") or "local")
+    chosen = user.get("locale")
     return {
         **_public_user(dict(user)),
         "role_label": ROLE_LABELS.get(role, role.title()),
@@ -351,6 +396,10 @@ async def me(
         "granted": [name for name, held in capabilities.items() if held],
         "flags": await effective_flags(s),
         "expires_in": token_ttl(),
+        "locale": chosen or default_locale(via),
+        "locale_chosen": chosen,
+        "via": via,
+        "product_id": str(user.get("product_id") or ""),
     }
 
 

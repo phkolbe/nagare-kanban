@@ -466,6 +466,13 @@ class BoardOut(Schema):
     sle_percentile: int | None = None
     created_at: str | None = None
     archived: bool = False
+    product_id: str | None = None
+    #: swapped out of its product (NG14): history and metrics only
+    read_only: bool = False
+    #: a product's board (not the standalone Nagare, not a simulator)
+    product_board: bool = False
+    #: the structure is locked: it already holds work (NG13)
+    flow_locked: bool = False
     # Present on GET /boards/{id}; omitted from the collection listing.
     groups: list[GroupOut] | None = None
     columns: list[ColumnOut] | None = None

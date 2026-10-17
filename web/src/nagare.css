@@ -1,0 +1,804 @@
+/* Telas do Nagare no modulo Tarefas: a base e o `@pampufa/ui` (tokens, botoes, campos, abas);
+   aqui so o que e do quadro. Cores das classes de servico como no Nagare antigo. */
+
+:root {
+  --ng-expedite: #b3261e;
+  --ng-fixed_date: #8a5d12;
+  --ng-standard: #24548f;
+  --ng-intangible: #5f6e80;
+  --ng-coluna: 248px;
+}
+
+/* ------------------------------------------------------------------ barra do quadro */
+.ng-barra {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+.ng-barra .abas {
+  margin: 0;
+}
+.ng-espaco {
+  flex: 1;
+}
+.ng-pilula {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  font-size: 13px;
+  color: var(--text);
+}
+button.ng-pilula {
+  cursor: pointer;
+}
+.ng-alternar {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.ng-idioma select,
+.ng-seletor-quadro select {
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  font: inherit;
+  font-size: 13px;
+}
+
+.ng-filtros {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.ng-busca {
+  width: 220px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 13px;
+}
+.ng-filtros-pop,
+.ng-wip-pop {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 6px);
+  left: 0;
+  width: 420px;
+  max-width: calc(100vw - 32px);
+  padding: 12px 14px;
+}
+.ng-wip-pop {
+  width: 260px;
+  left: auto;
+  right: 0;
+}
+.ng-classes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  border: 0;
+  padding: 0;
+  margin: 6px 0;
+}
+.ng-linha-campos {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.ng-linha-campos > .campo {
+  flex: 1 1 160px;
+}
+.ng-alinhar-baixo {
+  align-self: flex-end;
+  margin-bottom: 12px;
+}
+
+/* ------------------------------------------------------------------ a grade */
+.ng-grade-rolagem {
+  overflow-x: auto;
+  padding-bottom: 12px;
+}
+.ng-grade {
+  display: grid;
+  gap: 0 10px;
+  grid-auto-rows: auto;
+  min-width: min-content;
+  align-items: stretch;
+}
+.ng-faixa {
+  padding: 4px 10px;
+  border-radius: 8px 8px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: var(--line-soft);
+}
+.ng-faixa.upstream {
+  background: #eef3f8;
+}
+.ng-faixa.downstream {
+  background: #f5f0e6;
+}
+.ng-grupo {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 3px 10px;
+  border-bottom: 2px solid var(--line);
+  font-size: 12px;
+  color: var(--muted);
+}
+.ng-grupo.vazio {
+  border-bottom-color: transparent;
+}
+.ng-cabecalho {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 8px 10px 8px 30px;
+  border: 1px solid var(--line);
+  border-top: 3px solid var(--line);
+  border-radius: 10px 10px 0 0;
+  background: var(--card);
+  min-height: 56px;
+}
+.ng-cabecalho.recolhida {
+  padding: 8px 4px;
+  align-items: center;
+}
+.ng-cabecalho-nome {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+}
+.ng-cabecalho-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.ng-recolher {
+  position: absolute;
+  left: 6px;
+  top: 8px;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.ng-cabecalho.recolhida .ng-recolher {
+  position: static;
+}
+.ng-ponto {
+  color: var(--gold-texto);
+  font-size: 12px;
+}
+.ng-ponto.entrega {
+  color: var(--green);
+}
+.ng-tipo {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.ng-etapa {
+  padding-left: 10px;
+}
+
+.ng-raia {
+  margin-top: 10px;
+  padding: 4px 10px;
+  border-left: 4px solid var(--line);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.ng-celula {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 90px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-top: 0;
+  background: var(--line-soft);
+  transition: background-color 0.12s, box-shadow 0.12s;
+}
+.ng-celula.recolhida {
+  padding: 4px;
+}
+.alvo-ok {
+  background: #e8f3ec;
+  box-shadow: inset 0 0 0 2px var(--green);
+}
+.alvo-aviso {
+  background: #fbf3e2;
+  box-shadow: inset 0 0 0 2px var(--amber);
+}
+.alvo-invalido {
+  background: #f7f1f1;
+  opacity: 0.75;
+}
+.ng-novo {
+  margin-top: auto;
+  padding: 6px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.ng-novo:hover {
+  border-color: var(--muted);
+  color: var(--text);
+}
+
+/* ------------------------------------------------------------------ o cartao */
+.ng-cartao {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--ng-standard);
+  border-radius: 8px;
+  background: var(--card);
+  box-shadow: 0 1px 2px rgba(15, 40, 64, 0.06);
+  cursor: grab;
+  text-align: left;
+  color: inherit;
+  text-decoration: none;
+  touch-action: none;
+}
+.ng-cartao:focus-visible {
+  outline: 2px solid var(--navy);
+  outline-offset: 2px;
+}
+.ng-cartao.arrastando {
+  opacity: 0.4;
+}
+.ng-cartao.lacrado {
+  background: repeating-linear-gradient(135deg, #fbf8f1, #fbf8f1 8px, #f6f0e2 8px, #f6f0e2 16px);
+  cursor: pointer;
+}
+.classe-expedite {
+  border-left-color: var(--ng-expedite);
+}
+.classe-fixed_date {
+  border-left-color: var(--ng-fixed_date);
+}
+.classe-standard {
+  border-left-color: var(--ng-standard);
+}
+.classe-intangible {
+  border-left-color: var(--ng-intangible);
+}
+.ng-cartao-topo,
+.ng-cartao-pe {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.ng-chave {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.ng-titulo {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 14px;
+  line-height: 1.3;
+}
+.ng-sinal.bloqueado {
+  color: var(--red);
+}
+.ng-prazo {
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--line-soft);
+  font-size: 11px;
+}
+.ng-prazo.vencido {
+  background: #fbe9e7;
+  color: var(--red);
+}
+.ng-prazo.proximo {
+  background: #fbf3e2;
+  color: var(--amber);
+}
+.ng-projeto {
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-size: 11px;
+}
+.ng-providencia {
+  padding: 0 6px;
+  border-radius: 4px;
+  background: #f5f0e6;
+  color: var(--gold-texto);
+  font-size: 11px;
+}
+.ng-providencia.resolvida {
+  background: #fbf3e2;
+  color: var(--amber);
+}
+.ng-tarefas {
+  color: var(--muted);
+}
+.ng-idade {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--green);
+}
+.ng-idade.atencao {
+  background: var(--amber);
+}
+.ng-idade.risco {
+  background: var(--red);
+}
+.ng-avatar {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--navy);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+}
+.ng-sombra {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--card);
+  box-shadow: 0 8px 24px rgba(15, 40, 64, 0.22);
+  max-width: var(--ng-coluna);
+  font-size: 14px;
+}
+
+/* ------------------------------------------------------------------ WIP */
+.ng-wip {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--line-soft);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.ng-wip.at_limit {
+  background: #fbf3e2;
+  color: var(--amber);
+}
+.ng-wip.over {
+  background: #fbe9e7;
+  color: var(--red);
+  font-weight: 600;
+}
+.ng-wip.under {
+  background: #eef3f8;
+  color: var(--navy);
+}
+.ng-wip.compacto {
+  writing-mode: vertical-rl;
+}
+.ng-wip-editor {
+  position: relative;
+}
+.ng-wip-botao {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+/* ------------------------------------------------------------------ janela e gaveta */
+.ng-fundo {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(15, 40, 64, 0.36);
+}
+.ng-fundo-gaveta {
+  /* A gaveta fica sob as janelas que ela mesma abre (mover, arquivar). */
+  z-index: 45;
+  place-items: stretch end;
+  padding: 0;
+}
+.ng-janela {
+  width: 100%;
+  max-height: calc(100vh - 32px);
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius);
+  background: var(--card);
+  box-shadow: 0 18px 48px rgba(15, 40, 64, 0.28);
+  outline: none;
+}
+.ng-janela-topo {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px 8px;
+}
+.ng-janela-topo h2 {
+  margin: 0;
+  font-family: var(--font-titulo);
+  font-size: 19px;
+}
+.ng-janela-corpo {
+  padding: 4px 18px 12px;
+  overflow: auto;
+}
+.ng-janela-pe {
+  display: flex;
+  gap: 8px;
+  padding: 12px 18px 16px;
+  border-top: 1px solid var(--line-soft);
+}
+.ng-fechar {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+.ng-fechar:hover {
+  background: var(--line-soft);
+}
+.ng-gaveta {
+  position: relative;
+  width: min(640px, 100vw);
+  height: 100vh;
+  overflow-y: auto;
+  padding: 18px 22px 32px;
+  background: var(--card);
+  box-shadow: -12px 0 32px rgba(15, 40, 64, 0.2);
+  outline: none;
+}
+.ng-fechar-gaveta {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+}
+.ng-gaveta-topo {
+  margin-bottom: 10px;
+  padding-right: 36px;
+}
+.ng-gaveta-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.ng-gaveta-titulo {
+  margin: 6px 0 2px;
+  font-family: var(--font-titulo);
+  font-size: 21px;
+}
+.ng-classe {
+  padding: 1px 8px;
+  border-left: 4px solid var(--ng-standard);
+  border-radius: 4px;
+  background: var(--line-soft);
+  font-size: 12px;
+}
+.ng-gaveta-aba {
+  padding-top: 10px;
+}
+.ng-subtitulo {
+  margin: 14px 0 8px;
+  font-size: 15px;
+}
+.ng-detalhes textarea,
+.ng-detalhes input,
+.ng-detalhes select {
+  width: 100%;
+}
+.ng-personalizados {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin: 8px 0;
+}
+.ng-par {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+}
+.ng-par > input {
+  flex: 1;
+}
+.ng-progresso {
+  height: 6px;
+  margin: 4px 0 10px;
+  border-radius: 999px;
+  background: var(--line-soft);
+  overflow: hidden;
+}
+.ng-progresso > div {
+  height: 100%;
+  background: var(--green);
+}
+.ng-tarefas-lista,
+.ng-comentarios,
+.ng-lista-destinos,
+.ng-demandas {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.ng-tarefas-lista li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+.feita {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+.ng-comentarios li {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+.ng-comentarios p {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+}
+.ng-linha-do-tempo {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.ng-linha-do-tempo li {
+  display: grid;
+  grid-template-columns: 130px 1fr;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+.ng-bloqueio-ativo {
+  padding: 10px 12px;
+  border-left: 4px solid var(--red);
+  border-radius: 6px;
+  background: #fbe9e7;
+}
+.ng-destino {
+  display: block;
+  width: 100%;
+  margin: 4px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ng-destino.aviso {
+  border-color: var(--amber);
+}
+.ng-destino:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+/* ------------------------------------------------------------------ estrutura */
+.ng-secao {
+  margin: 10px 0 16px;
+  border: 0;
+  padding: 0;
+}
+.ng-tabela-estrutura,
+.ng-tabela {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.ng-tabela-estrutura th,
+.ng-tabela th {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-weight: 600;
+  text-align: left;
+}
+.ng-tabela-estrutura td,
+.ng-tabela td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line-soft);
+  vertical-align: top;
+}
+.ng-tabela-estrutura input,
+.ng-tabela-estrutura select {
+  width: 100%;
+  margin-bottom: 4px;
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: inherit;
+}
+.ng-tabela-estrutura input[type='color'] {
+  width: 42px;
+  padding: 0;
+}
+.ng-ordem {
+  white-space: nowrap;
+}
+.ng-wip-campos {
+  min-width: 140px;
+}
+.ng-wip-campos input {
+  width: 64px;
+  display: inline-block;
+  margin-right: 4px;
+}
+.ng-nova {
+  align-items: flex-end;
+  margin-top: 8px;
+}
+.ng-grupo-linha {
+  display: grid;
+  grid-template-columns: 180px 1fr 90px 50px auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+/* ------------------------------------------------------------------ projetos */
+.ng-projetos {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+.ng-projeto-cartao {
+  border-top: 4px solid var(--line);
+}
+.ng-projeto-cartao h3 {
+  margin: 6px 0;
+  font-size: 16px;
+}
+.ng-projeto-topo {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ng-numeros {
+  display: flex;
+  gap: 16px;
+  margin: 10px 0;
+}
+.ng-numeros dt {
+  font-size: 11px;
+  color: var(--muted);
+}
+.ng-numeros dd {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+.ng-demanda {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-left: 4px solid var(--ng-standard);
+  border-bottom: 1px solid var(--line-soft);
+}
+.ng-historico-vinculo {
+  margin-top: 8px;
+}
+
+/* ------------------------------------------------------------------ consolidado */
+.ng-consolidado {
+  display: grid;
+  gap: 8px;
+  min-width: min-content;
+}
+.ng-raia-produto {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 4px;
+}
+.ng-celula-consolidada {
+  border-top: 1px solid var(--line);
+  border-radius: 8px;
+}
+.ng-contagem {
+  font-size: 20px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.ng-contagem.cheio {
+  color: var(--red);
+}
+.ng-cartao-compacto {
+  gap: 2px;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+.ng-cartao-compacto .ng-titulo {
+  font-size: 13px;
+}
+
+/* ------------------------------------------------------------------ avisos passageiros */
+.ng-avisos {
+  position: fixed;
+  z-index: 80;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: min(420px, calc(100vw - 32px));
+}
+.ng-aviso {
+  padding: 10px 14px;
+  border-left: 4px solid var(--navy);
+  border-radius: 8px;
+  background: var(--card);
+  box-shadow: 0 8px 24px rgba(15, 40, 64, 0.18);
+  font-size: 14px;
+}
+.ng-aviso.ok {
+  border-left-color: var(--green);
+}
+.ng-aviso.erro {
+  border-left-color: var(--red);
+}
+
+@media (max-width: 720px) {
+  .ng-busca {
+    width: 150px;
+  }
+  .ng-linha-do-tempo li {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+  .ng-grupo-linha {
+    grid-template-columns: 1fr 1fr;
+  }
+}

@@ -76,3 +76,36 @@ jobs:
         env:
           TEST_DATABASE_URL: postgresql+asyncpg://nagare:nagare@127.0.0.1:5432/nagare_teste
         run: uv run pytest -q -rs
+
+  web:
+    name: Telas React (typecheck, checks e build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Acesso de leitura ao pampufa-sdk
+        env:
+          TOKEN: ${{ secrets.PAMPUFA_SDK_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::Falta o secret PAMPUFA_SDK_TOKEN (Settings > Secrets and variables > Actions)."
+            exit 1
+          fi
+          URL="https://x-access-token:${TOKEN}@github.com/phkolbe/pampufa-sdk"
+          git config --global url."$URL".insteadOf "https://github.com/phkolbe/pampufa-sdk"
+          git config --global --add url."$URL".insteadOf "ssh://git@github.com/phkolbe/pampufa-sdk"
+          git config --global --add url."$URL".insteadOf "git@github.com:phkolbe/pampufa-sdk"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run check
+      - run: npm run build

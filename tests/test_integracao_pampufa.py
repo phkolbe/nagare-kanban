@@ -41,6 +41,8 @@ class FakePampufa:
         self.profiles: dict[str, PampufaProfile] = {}
         self.events: list[tuple[str, dict[str, Any]]] = []
         self.fail_webhooks = False
+        #: product -> the people with ``nagare.*`` there, as the Pampufa lists them
+        self.directory: dict[str, list[dict[str, Any]]] = {}
 
     def token(self, sub: str, papeis: dict[str, list[str]], **extra: Any) -> str:
         now = int(time.time())
@@ -74,6 +76,9 @@ class FakePampufa:
     async def profile(self, token: str) -> PampufaProfile:
         claims = jwt.decode(token, options={"verify_signature": False})
         return self.profiles[claims["sub"]]
+
+    async def people(self, product_id: str) -> list[dict[str, Any]]:
+        return list(self.directory.get(product_id, []))
 
     async def post_event(self, event: str, payload: dict[str, Any]) -> None:
         if self.fail_webhooks:
@@ -555,3 +560,215 @@ def test_another_product_cannot_reach_this_products_card(client, pampufa) -> Non
         ).status_code
         == 404
     )
+
+
+# ---------------------------------------------------------------------------
+# what the React screens need (N2)
+# ---------------------------------------------------------------------------
+
+
+def test_people_of_the_product_come_from_the_pampufa(client, pampufa, db: Database) -> None:
+    """17/10/2026: the assignee picker lists the product's nagare.* people, even
+    those who never opened the Nagare; each gets a Nagare user to be assigned."""
+    from backend.app.integration import forget_people
+
+    newcomer = str(uuid.uuid4())
+    pampufa.directory[PRODUCT] = [
+        {
+            "sub": newcomer,
+            "email": "Nova@Grupo-SR.test",
+            "nome": "Nova Pessoa",
+            "papeis": ["nagare.editor"],
+        },
+    ]
+    forget_people()
+    editor = pampufa.person({PRODUCT: ["nagare.editor"]})
+    out = client.get(f"{API}/integration/people", headers=headers(editor))
+    assert out.status_code == 200, out.text
+    body = out.json()
+    assert body["source"] == "pampufa"
+    [person] = body["people"]
+    assert (person["email"], person["sub"], person["roles"]) == (
+        "nova@grupo-sr.test",
+        newcomer,
+        ["nagare.editor"],
+    )
+    assert db.scalar("SELECT role FROM users WHERE id = ?", person["id"]) == "viewer"
+
+    service = pampufa.service()
+    card = client.post(
+        f"{API}/integration/providencias", json=providencia(), headers=headers(service)
+    ).json()["card"]
+    assigned = client.patch(
+        f"{API}/cards/{card['id']}", json={"assignee_id": person["id"]}, headers=headers(editor)
+    )
+    assert assigned.status_code == 200, assigned.text
+    assert assigned.json()["assignee_id"] == person["id"]
+
+    pampufa.directory[OTHER] = []
+    other = pampufa.person({OTHER: ["nagare.leitor"]})
+    assert (
+        client.get(f"{API}/integration/people", headers=headers(other, OTHER)).json()["people"]
+        == []
+    )
+
+
+def test_the_standalone_nagare_lists_its_own_users(client, auth) -> None:
+    out = client.get(f"{API}/integration/people", headers=auth("master")).json()
+    assert out["source"] == "local"
+    assert out["people"] and all(p["roles"] != ["system"] for p in out["people"])
+
+
+def test_language_defaults_by_the_way_in_and_follows_the_choice(client, auth, pampufa) -> None:
+    """Portuguese through the Pampufa, English on the local login; the person's choice
+    wins and is kept on the user (every device)."""
+    person = pampufa.person({PRODUCT: ["nagare.leitor"]})
+    me = client.get(f"{API}/auth/me", headers=headers(person)).json()
+    assert (me["locale"], me["locale_chosen"], me["via"], me["product_id"]) == (
+        "pt-BR",
+        None,
+        "pampufa",
+        PRODUCT,
+    )
+    assert client.get(f"{API}/auth/me", headers=auth("master")).json()["locale"] == "en"
+
+    chosen = client.patch(f"{API}/auth/me", json={"locale": "en"}, headers=headers(person))
+    assert chosen.status_code == 200, chosen.text
+    assert client.get(f"{API}/auth/me", headers=headers(person)).json()["locale"] == "en"
+    back = client.patch(f"{API}/auth/me", json={"locale": None}, headers=headers(person)).json()
+    assert (back["locale"], back["locale_chosen"]) == ("pt-BR", None)
+    refused = client.patch(f"{API}/auth/me", json={"locale": "fr"}, headers=headers(person))
+    assert refused.status_code == 422
+
+
+def test_errors_are_also_problem_json_for_the_platform(client, pampufa) -> None:
+    """``@pampufa/ui`` reads title/status/codigo and renews on auth.token_expirado."""
+    person = pampufa.person({PRODUCT: ["nagare.leitor"]})
+    missing = client.get(f"{API}/cards/{uuid.uuid4()}", headers=headers(person))
+    body = missing.json()
+    assert missing.status_code == 404
+    assert body["status"] == 404 and body["codigo"] == body["error"]["code"] and body["title"]
+
+    expired = pampufa.token(
+        str(uuid.uuid4()), {PRODUCT: ["nagare.leitor"]}, exp=int(time.time()) - 60
+    )
+    out = client.get(f"{API}/boards", headers=headers(expired))
+    assert out.status_code == 401
+    assert (out.json()["codigo"], out.json()["error"]["code"]) == (
+        "auth.token_expirado",
+        "token_expired",
+    )
+
+
+def test_stages_read_any_flow_the_same_way() -> None:
+    from backend.app.integration import stages_of
+
+    def col(id_: str, segment: str, kind: str) -> dict[str, Any]:
+        return {"id": id_, "segment": segment, "kind": kind}
+
+    flow = [
+        col("in", "upstream", "queue"),
+        col("todo", "downstream", "queue"),
+        col("doing", "downstream", "activity"),
+        col("wait", "downstream", "queue"),
+        col("review", "downstream", "activity"),
+        col("done", "downstream", "done"),
+    ]
+    assert stages_of(flow) == {
+        "in": "entrada",
+        "todo": "a_fazer",
+        "doing": "fazendo",
+        "wait": "aguardando",
+        "review": "fazendo",
+        "done": "entregue",
+    }
+
+
+def test_the_consolidated_board_shows_each_product_once(client, pampufa) -> None:
+    """The gestor sees every linked product by stage; a product person, only theirs."""
+    service = pampufa.service()
+    mine = client.post(
+        f"{API}/integration/providencias", json=providencia(), headers=headers(service)
+    ).json()["card"]
+    theirs = client.post(
+        f"{API}/integration/providencias",
+        json=providencia(produto_nome="SR GJ"),
+        headers=headers(service, OTHER),
+    ).json()["card"]
+
+    gestor = pampufa.person({"pampufa": ["pampufa.gestor"]})
+    out = client.get(f"{API}/integration/overview", headers=headers(gestor, "pampufa"))
+    assert out.status_code == 200, out.text
+    body = out.json()
+    assert body["stages"] == ["entrada", "a_fazer", "fazendo", "aguardando", "entregue"]
+    lanes = {lane["product_id"]: lane for lane in body["products"]}
+    assert {PRODUCT, OTHER} <= set(lanes)
+    keys = [c["key"] for lane in body["products"] for c in lane["cards"]]
+    assert len(keys) == len(set(keys)), "no card twice"
+    card = next(c for c in lanes[PRODUCT]["cards"] if c["id"] == mine["id"])
+    assert (card["stage"], card["column"]) == ("entrada", "Entrada")
+    assert lanes[PRODUCT]["counts"]["entrada"] >= 1
+    assert lanes[PRODUCT]["wip"]["fazendo"] == 3
+
+    leitor = pampufa.person({PRODUCT: ["nagare.leitor"]})
+    own = client.get(f"{API}/integration/overview", headers=headers(leitor)).json()
+    assert [lane["product_id"] for lane in own["products"]] == [PRODUCT]
+    assert theirs["id"] not in {c["id"] for c in own["products"][0]["cards"]}
+
+
+def test_the_board_says_whether_its_flow_is_locked(client, pampufa) -> None:
+    """N2: the screens offer only the edits the lock allows (NG13)."""
+    admin = pampufa.person({PRODUCT: ["nagare.admin"]})
+    board = client.post(
+        f"{API}/boards",
+        json={"name": f"Trava {uuid.uuid4().hex[:6]}", "template": "providencias"},
+        headers=headers(admin),
+    ).json()
+    before = client.get(f"{API}/boards/{board['id']}", headers=headers(admin)).json()
+    assert (before["product_board"], before["flow_locked"], before["read_only"]) == (
+        True,
+        False,
+        False,
+    )
+    assert before["product_id"] == PRODUCT
+    client.post(
+        f"{API}/cards", json={"board_id": board["id"], "title": "Um"}, headers=headers(admin)
+    )
+    after = client.get(f"{API}/boards/{board['id']}", headers=headers(admin)).json()
+    assert after["flow_locked"] is True
+
+
+def test_platform_cards_open_in_the_tarefas_module(monkeypatch) -> None:
+    from backend.app.config import settings
+    from backend.app.integration import card_url
+
+    card = {"id": "c1", "board_id": "b1", "product_id": PRODUCT}
+    monkeypatch.setattr(settings, "screens_url", "http://gw/grupo-sr")
+    assert card_url(card) == "http://gw/grupo-sr/sr-adv/tarefas/quadro/b1?cartao=c1"
+    assert card_url({**card, "product_id": "nagare"}).endswith("/#/board/b1")
+    monkeypatch.setattr(settings, "screens_url", "")
+    assert card_url(card).endswith("/#/board/b1")
+
+
+def test_the_tarefas_screens_are_served_under_the_platform_path(
+    client, tmp_path, monkeypatch
+) -> None:
+    """N2: the gateway keeps /grupo-sr/; the Nagare answers the build and the screens."""
+    from backend.app.config import settings
+
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "index.html").write_text("<div id=root></div>", encoding="utf-8")
+    (tmp_path / "assets" / "app.js").write_text("console.log(1)", encoding="utf-8")
+    monkeypatch.setattr(settings, "screens_dir", tmp_path)
+
+    for path in (
+        "/grupo-sr/sr-adv/tarefas",
+        "/grupo-sr/sr-adv/tarefas/quadro/x",
+        "/grupo-sr/pampufa/tarefas",
+    ):
+        page = client.get(path)
+        assert page.status_code == 200 and "root" in page.text, path
+    asset = client.get("/grupo-sr/_nagare/assets/app.js")
+    assert asset.status_code == 200 and "javascript" in asset.headers["content-type"]
+    assert client.get("/grupo-sr/_nagare/../pyproject.toml").status_code == 404
+    assert client.get("/grupo-sr/sr-adv/financeiro").status_code == 404

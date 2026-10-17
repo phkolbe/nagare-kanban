@@ -634,7 +634,10 @@ def _business_hour(rnd: random.Random, moment: datetime) -> datetime:
         second=0,
         microsecond=0,
     )
-    if moment.weekday() >= 5 and rnd.random() < 0.78:
+    # Always draw: the random stream must not depend on the calendar, or the demo mix
+    # (and the tests that check it) would change with the day the seed runs.
+    off_the_weekend = rnd.random() < 0.78
+    if moment.weekday() >= 5 and off_the_weekend:
         moment -= timedelta(days=moment.weekday() - 4)
     return moment
 

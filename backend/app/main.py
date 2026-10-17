@@ -16,6 +16,7 @@ import contextlib
 import importlib
 import logging
 import mimetypes
+import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -197,6 +198,15 @@ def create_app(
     def index() -> Any:
         return _index_response()
 
+    @app.get("/grupo-sr/{full_path:path}", include_in_schema=False)
+    def platform_screens(full_path: str) -> Any:
+        """The React screens of the platform's Tarefas module (NG7, N2).
+
+        The gateway sends ``/grupo-sr/_nagare/*`` (the build) and
+        ``/grupo-sr/<produto>/tarefas*`` (the screens) here, prefix kept.
+        """
+        return _screens_response(full_path)
+
     @app.api_route(
         "/{full_path:path}",
         methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"],
@@ -231,6 +241,30 @@ def create_app(
         return _index_response()
 
     return app
+
+
+_SCREEN_ROUTE = re.compile(r"^[a-z0-9-]+/tarefas(/.*)?$")
+
+
+def _screens_response(full_path: str) -> Any:
+    root = settings.screens_dir.resolve()
+    if full_path.startswith("_nagare/"):
+        candidate = (root / full_path[len("_nagare/") :]).resolve()
+        if root in candidate.parents and candidate.is_file():
+            return _file_response(candidate)
+        return JSONResponse(status_code=404, content=error_payload("not_found", "No such file."))
+    if not _SCREEN_ROUTE.match(full_path):
+        return JSONResponse(
+            status_code=404, content=error_payload("not_found", "Not a Nagare screen.")
+        )
+    index_file = root / "index.html"
+    if index_file.is_file():
+        return _file_response(index_file)
+    return PlainTextResponse(
+        f"The Tarefas screens are not built yet: run `npm run build` in web/ ({index_file}).\n",
+        status_code=503,
+        headers=dict(_NO_CACHE),
+    )
 
 
 def _index_response() -> Any:
