@@ -813,3 +813,10 @@ def test_a_providencia_of_another_product_is_refused(client, pampufa) -> None:
     assert elsewhere.status_code == 409, elsewhere.text
     assert elsewhere.json()["error"]["code"] == "providencia_in_other_product"
     assert created.json()["card"]["id"] not in elsewhere.text
+
+
+def test_a_pampufa_token_is_not_traded_for_a_local_one(client, pampufa) -> None:
+    token = pampufa.person({PRODUCT: ["nagare.editor"]})
+    response = client.post(f"{API}/auth/refresh", headers=headers(token))
+    assert response.status_code == 400, response.text
+    assert response.json()["error"]["code"] == "refresh_through_pampufa"

@@ -58,7 +58,7 @@ from ..deps import (
     token_ttl,
     touch_last_login,
 )
-from ..errors import ApiError, Forbidden, Unauthorized
+from ..errors import ApiError, BadRequest, Forbidden, Unauthorized
 from ..models import User, as_dict
 from ..schemas import ApiErrorBody, LoginRequest, TokenResponse, UserOut
 from ..security import encode_token, hash_password, needs_rehash, verify_password
@@ -339,7 +339,16 @@ async def refresh(
     user: CurrentUser = Depends(get_current_user),
     s: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    """Re-mint a token from the *database* row, so a role change lands at once."""
+    """Re-mint a token from the *database* row, so a role change lands at once.
+
+    Only for the local login: a Pampufa token is renewed by the Pampufa (its roles and
+    product come from there), so it is never traded for a local one.
+    """
+    if user.get("via") == "pampufa":
+        raise BadRequest(
+            "A Pampufa token is renewed by the Pampufa, not by the Nagare.",
+            code="refresh_through_pampufa",
+        )
     row = as_dict(await s.get(User, user["id"]))
     if row is None:  # pragma: no cover - get_current_user already loaded it
         raise Unauthorized("The account for this token no longer exists.", code="unknown_subject")
