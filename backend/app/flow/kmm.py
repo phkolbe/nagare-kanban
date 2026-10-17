@@ -523,10 +523,19 @@ def _ml5_specs() -> list[_MetricSpec]:
         _MetricSpec(
             key="capability_comparison",
             label=_("Cross-board capability comparison"),
-            why=_(
-                "Comparing lead-time capability across boards — or before/after a policy "
-                "change via a cloned simulator board — is Anderson's Optimizing-stage "
-                "practice of treating the process itself as an experiment."
+            # Inside the Pampufa the simulator is the Nagare's, not a screen of the module.
+            why=(
+                _(
+                    "Comparing lead-time capability across boards — or before/after a policy "
+                    "change via a board cloned in the Nagare simulator — is Anderson's "
+                    "Optimizing-stage practice of treating the process itself as an experiment."
+                )
+                if on_platform()
+                else _(
+                    "Comparing lead-time capability across boards — or before/after a policy "
+                    "change via a cloned simulator board — is Anderson's Optimizing-stage "
+                    "practice of treating the process itself as an experiment."
+                )
             ),
             action=_("Stand up at least one more operational board so capability can be compared."),
             check=lambda s: (

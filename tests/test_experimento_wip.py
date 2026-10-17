@@ -85,10 +85,14 @@ def test_the_no_gain_verdict_in_portuguese() -> None:
     assert verdict.endswith("mais chegadas por semana.")
 
 
-def _wip_practice_action() -> str:
+def _ml5(key: str) -> Any:
     from backend.app.flow import kmm
 
-    return next(spec.action for spec in kmm._ml5_specs() if spec.key == "wip_experiment_outcomes")
+    return next(spec for spec in kmm._ml5_specs() if spec.key == key)
+
+
+def _wip_practice_action() -> str:
+    return _ml5("wip_experiment_outcomes").action
 
 
 def test_inside_the_pampufa_the_kmm_points_to_the_nagare_simulator() -> None:
@@ -100,3 +104,16 @@ def test_inside_the_pampufa_the_kmm_points_to_the_nagare_simulator() -> None:
         assert _wip_practice_action() == "Run a WIP experiment in the Nagare simulator."
     finally:
         current_via.reset(token)
+
+
+def test_inside_the_pampufa_capability_comparison_names_the_nagare_simulator() -> None:
+    from backend.app.texts import current_via, set_via
+
+    assert "via a cloned simulator board" in _ml5("capability_comparison").why
+    tokens = (set_via("pampufa"), set_locale(PT_BR))
+    try:
+        why = _ml5("capability_comparison").why
+        assert "por meio de um quadro clonado no simulador do Nagare" in why, why
+    finally:
+        current_locale.reset(tokens[1])
+        current_via.reset(tokens[0])

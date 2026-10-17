@@ -806,6 +806,15 @@ PT: dict[str, str] = {
         "política, por meio de um quadro clonado no simulador — é a prática do estágio "
         "Otimizando de Anderson de tratar o próprio processo como um experimento."
     ),
+    (
+        "Comparing lead-time capability across boards — or before/after a policy change via a "
+        "board cloned in the Nagare simulator — is Anderson's Optimizing-stage practice of "
+        "treating the process itself as an experiment."
+    ): (
+        "Comparar a capacidade de lead time entre quadros — ou antes/depois de uma mudança de "
+        "política, por meio de um quadro clonado no simulador do Nagare — é a prática do "
+        "estágio Otimizando de Anderson de tratar o próprio processo como um experimento."
+    ),
     "Stand up at least one more operational board so capability can be compared.": (
         "Monte ao menos mais um quadro operacional para que a capacidade possa ser comparada."
     ),
