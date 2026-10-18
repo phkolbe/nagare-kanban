@@ -1,0 +1,73 @@
+# Imagem Docker do servico (linux/arm64) no GitHub Container Registry, para os
+# ambientes de homologacao e producao (cofre Obsidian grupo-sr,
+# plataforma/arquitetura/implantacao-ambientes.md §9 e plano-implantacao.md, A-IMP-2).
+#
+# Tag `vX.Y.Z` no main -> ghcr.io/phkolbe/nagare:vX.Y.Z (e :sha-<curto>). A MESMA
+# imagem vai para hml e depois e promovida para prd (HOS-J). `workflow_dispatch`
+# monta so a :sha-<curto>, para testar em homologacao sem criar versao.
+#
+# Os servidores sao ARM (Oracle A1): o build roda emulado (QEMU). O secret
+# PAMPUFA_SDK_TOKEN (leitura do pampufa-sdk) entra como secret do BuildKit.
+name: Imagem
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: imagem-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  imagem:
+    name: Build linux/arm64 e push no GHCR
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Confere o secret do SDK
+        env:
+          TOKEN: ${{ secrets.PAMPUFA_SDK_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::Falta o secret PAMPUFA_SDK_TOKEN (Settings > Secrets and variables > Actions)."
+            exit 1
+          fi
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/phkolbe/nagare
+          tags: |
+            type=ref,event=tag
+            type=sha,prefix=sha-
+          labels: |
+            org.opencontainers.image.title=nagare
+            org.opencontainers.image.vendor=Grupo SR
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          secrets: |
+            pampufa_sdk_token=${{ secrets.PAMPUFA_SDK_TOKEN }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
