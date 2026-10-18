@@ -37,7 +37,7 @@ from sqlalchemy import func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import FEATURE_FLAGS, PLANS, flags_for_plan, settings
-from .db import Database, iso, migrate
+from .db import Database, iso, migrate, new_id
 from .models import (
     Blocker,
     Board,
@@ -758,12 +758,18 @@ async def is_empty(s: AsyncSession) -> bool:
     return not await _count(s, User)
 
 
-async def seed_if_empty(s: AsyncSession) -> SeedSummary:
+async def seed_if_empty(s: AsyncSession, demo: bool | None = None) -> SeedSummary:
     """Seed only when ``users`` is empty; always re-sync flags and plans.
+
+    ``demo`` (default ``settings.demo_seed``) false: an empty database gets only the
+    catalogues and the workspace, never the demo accounts — homologation and production
+    create their first account with ``nagare criar-admin``.
 
     The schema must already be migrated (``db.migrate``).
     """
-    if not await is_empty(s):
+    if demo is None:
+        demo = settings.demo_seed
+    if not demo or not await is_empty(s):
         plan_ids, n_plans, n_flags = await _sync_plans_and_flags(s)
         await _ensure_workspace(s, plan_ids, iso(datetime.now(UTC)))
         await s.commit()
@@ -1584,13 +1590,44 @@ async def _seed_cards(
     )
 
 
-async def migrate_and_seed(url: str | None = None) -> SeedSummary:
-    """Migrate the configured database and seed it when empty."""
+async def migrate_and_seed(url: str | None = None, demo: bool | None = None) -> SeedSummary:
+    """Migrate the configured database and seed it when empty (demo only if allowed)."""
     database = Database(url)
     try:
         await migrate(database.url)
         async with database.sessions() as s:
-            return await seed_if_empty(s)
+            return await seed_if_empty(s, demo)
+    finally:
+        await database.dispose()
+
+
+async def create_admin(email: str, name: str, password: str, url: str | None = None) -> str:
+    """Create a ``master`` account (the first one of a real workspace); returns its id.
+
+    Refuses an e-mail already in use. The schema must be migrated (``nagare migrar``).
+    """
+    if len(password) < 12:
+        raise ValueError("password must have at least 12 characters")
+    database = Database(url)
+    try:
+        async with database.sessions() as s:
+            email = email.strip().lower()
+            if await s.scalar(select(func.count()).select_from(User).where(User.email == email)):
+                raise ValueError(f"{email} already exists")
+            user_id = new_id()
+            s.add(
+                User(
+                    id=user_id,
+                    email=email,
+                    name=name,
+                    password_hash=hash_password(password),
+                    role="master",
+                    is_active=True,
+                    created_at=iso(datetime.now(UTC)),
+                )
+            )
+            await s.commit()
+            return user_id
     finally:
         await database.dispose()
 

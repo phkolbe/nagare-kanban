@@ -1,6 +1,8 @@
 """Command line: ``nagare <command>`` (``uv run nagare ...``).
 
-    migrar              upgrade the schema (Alembic) and seed the demo workspace when empty
+    migrar              upgrade the schema (Alembic); seed the demo workspace when empty,
+                        only in dev/teste (NAGARE_AMBIENTE; NAGARE_SEMENTE_DEMO overrides)
+    criar-admin         create a master account (--email, --nome; NAGARE_SENHA_ADMIN or prompt)
     servir [--reload]   serve the API and the frontend (port 8770 by default)
     demo                SQLite in data/demo.db, wired to the Pampufa demo (demo-completo)
 
@@ -25,6 +27,7 @@ DEMO_SEGREDO = "demo-servico-nagare"
 def _migrar() -> None:
     from .seed import migrate_and_seed
 
+    settings.check_production()
     summary = asyncio.run(migrate_and_seed())
     if summary.get("skipped"):
         print(
@@ -40,6 +43,7 @@ def _migrar() -> None:
 def _servir(reload: bool) -> None:
     import uvicorn
 
+    settings.check_production()
     uvicorn.run(
         "backend.app.main:app",
         host=settings.host,
@@ -61,10 +65,35 @@ def _demo() -> None:
     _servir(reload=False)
 
 
+def _criar_admin(email: str, nome: str) -> None:
+    """First account of a real workspace (homologation, production): role ``master``.
+
+    The password comes from ``NAGARE_SENHA_ADMIN`` (scripts) or is typed twice.
+    """
+    import getpass
+    import os
+
+    from .seed import create_admin
+
+    senha = os.environ.get("NAGARE_SENHA_ADMIN") or getpass.getpass("Senha (12+ caracteres): ")
+    if "NAGARE_SENHA_ADMIN" not in os.environ and senha != getpass.getpass("Repita a senha: "):
+        raise SystemExit("As senhas não conferem.")
+    try:
+        user_id = asyncio.run(create_admin(email, nome, senha))
+    except ValueError as exc:
+        raise SystemExit(f"Nagare: {exc}") from exc
+    print(f"Nagare: conta master {email} criada ({user_id}).")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="nagare", description="Nagare Kanban")
     sub = parser.add_subparsers(dest="comando", required=True)
-    sub.add_parser("migrar", help="upgrade the schema and seed the demo workspace when empty")
+    sub.add_parser(
+        "migrar", help="upgrade the schema; seed the demo workspace when empty (dev/teste only)"
+    )
+    admin = sub.add_parser("criar-admin", help="create a master account (homologation, prod)")
+    admin.add_argument("--email", required=True)
+    admin.add_argument("--nome", required=True)
     servir = sub.add_parser("servir", help="serve the API and the frontend")
     servir.add_argument("--reload", action="store_true", help="uvicorn auto-reload")
     sub.add_parser("demo", help="SQLite demo wired to the Pampufa demo (pampufa demo-completo)")
@@ -73,6 +102,8 @@ def main(argv: list[str] | None = None) -> None:
         _migrar()
     elif args.comando == "servir":
         _servir(args.reload)
+    elif args.comando == "criar-admin":
+        _criar_admin(args.email, args.nome)
     elif args.comando == "demo":
         _demo()
 

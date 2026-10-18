@@ -163,9 +163,7 @@ def configure_logging() -> None:
     handler._nagare_console = True  # type: ignore[attr-defined]
     handler.addFilter(_TraceIds())
     handler.setFormatter(
-        logging.Formatter(
-            "%(asctime)s %(levelname)s %(name)s trace_id=%(trace_id)s %(message)s"
-        )
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s trace_id=%(trace_id)s %(message)s")
     )
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
@@ -224,9 +222,7 @@ def install(app: Any) -> None:
                 instrumentor.instrument(tracer_provider=_provider, skip_dep_check=True)
         log.info("OpenTelemetry on — exporting to %s", endpoint)
 
-    FastAPIInstrumentor.instrument_app(
-        app, tracer_provider=_provider, excluded_urls=EXCLUDED_URLS
-    )
+    FastAPIInstrumentor.instrument_app(app, tracer_provider=_provider, excluded_urls=EXCLUDED_URLS)
 
 
 def shutdown() -> None:
