@@ -1,8 +1,8 @@
 /**
  * Metricas de fluxo de um quadro (paridade com a tela antiga, N3): 9 indicadores, CFD,
  * dispersao, vazao, idade do WIP, eficiencia de fluxo, distribuicao, bloqueios, mix de classes,
- * Lei de Little e o KMM. Cada painel diz como ler e o que e saudavel. Os textos que vem da API
- * ja chegam na lingua da pessoa.
+ * Lei de Little, a previsao Monte Carlo (18/10/2026) e o KMM. Cada painel diz como ler e o que
+ * e saudavel. Os textos que vem da API ja chegam na lingua da pessoa.
  */
 
 import { useState, type ReactNode } from 'react'
@@ -23,7 +23,7 @@ import {
   Medidor,
   PontosPorColuna,
   Rosca,
-  corDaRampa,
+  corDoCfd,
   type Percentil,
 } from '../../graficos/Graficos'
 import { ms } from '../../graficos/escalas'
@@ -42,6 +42,7 @@ import {
 } from './consultas'
 import { formatarIndicador } from './formato'
 import { PainelKmm } from './PainelKmm'
+import { PainelPrevisao } from './PainelPrevisao'
 
 const TOM_PERCENTIL: Record<string, Percentil['tom']> = { p50: 'info', p70: 'sucesso', p85: 'alerta', p95: 'perigo' }
 
@@ -210,6 +211,14 @@ function MetricasDoQuadro({ quadroId }: { quadroId: string }) {
       <div className="ng-paineis">
         <PainelDe painel="cfd" consulta={cfd} largo>
           {(d) => {
+            // Familia de cada coluna e a posicao dentro dela, na ordem do fluxo (antes de inverter).
+            const familia = (s: (typeof d.series)[number]) =>
+              s.is_delivery_point || s.column_kind === 'done' ? 'entrega' : s.segment === 'upstream' ? 'upstream' : 'downstream'
+            const cores = new Map<string, string>()
+            for (const f of ['upstream', 'downstream', 'entrega'] as const) {
+              const daFamilia = d.series.filter((s) => familia(s) === f)
+              daFamilia.forEach((s, i) => cores.set(s.key, corDoCfd(f, i, daFamilia.length)))
+            }
             const series = [...d.series].reverse()
             const x = (d.series[0]?.points ?? []).map((p) => ms(String(p.t ?? p.x)))
             return (
@@ -219,11 +228,11 @@ function MetricasDoQuadro({ quadroId }: { quadroId: string }) {
                 x={x}
                 rotuloY={d.y_label ?? undefined}
                 formatarX={(v) => data(new Date(v).toISOString())}
-                series={series.map((s, i) => ({
+                series={series.map((s) => ({
                   chave: s.key,
                   rotulo: s.label ?? s.key,
                   valores: s.points.map((p) => Number(p.y) || 0),
-                  cor: corDaRampa(series.length - 1 - i, series.length),
+                  cor: cores.get(s.key) ?? 'var(--ng-cfd-entrega)',
                 }))}
                 tabela={{
                   colunas: [t('metricas.data'), ...d.series.map((s) => s.label ?? s.key)],
@@ -474,6 +483,8 @@ function MetricasDoQuadro({ quadroId }: { quadroId: string }) {
             )
           }}
         </PainelDe>
+
+        <PainelPrevisao quadroId={quadroId} />
       </div>
 
       <section className="card ng-kmm" aria-label={t('kmm.titulo')}>

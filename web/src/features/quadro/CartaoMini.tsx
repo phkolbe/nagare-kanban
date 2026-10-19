@@ -94,25 +94,45 @@ export function CartaoMini({
       onClick={abrir}
       onKeyDown={tecla}
     >
-      <div className="ng-cartao-topo">
-        <span className="ng-chave">{cartao.key}</span>
-        {lacrado && (
-          <span className="ng-sinal" title={t('cartao.lacrado')}>
+      {lacrado ? (
+        // Envelope lacrado (18/10/2026): uma linha so, sem o conteudo; o projeto e o prazo ajudam a achar.
+        <div className="ng-cartao-topo" title={t('cartao.lacrado')}>
+          <span className="ng-envelope" aria-hidden="true">
             ✉
           </span>
-        )}
-        {cartao.is_blocked && (
-          <span className="ng-sinal bloqueado" title={t('cartao.bloqueado_desde', { quando: data(cartao.blocked_since) })}>
-            ⛔
-          </span>
-        )}
-        {prazo && (
-          <span className={`ng-prazo ${prazo}`} title={t(`prazo.${prazo}`)}>
-            {data(cartao.due_date)}
-          </span>
-        )}
-      </div>
-      <div className="ng-titulo">{lacrado ? t('cartao.lacrado') : cartao.title}</div>
+          <span className="ng-chave">{cartao.key}</span>
+          {cartao.project_key && (
+            <span className="ng-projeto" style={{ borderColor: cartao.project_color ?? undefined }}>
+              {cartao.project_key}
+            </span>
+          )}
+          {cartao.is_blocked && (
+            <span className="ng-sinal bloqueado" title={t('cartao.bloqueado_desde', { quando: data(cartao.blocked_since) })}>
+              ⛔
+            </span>
+          )}
+          {prazo && (
+            <span className={`ng-prazo ${prazo}`} title={t(`prazo.${prazo}`)}>
+              {data(cartao.due_date)}
+            </span>
+          )}
+        </div>
+      ) : (
+        <div className="ng-cartao-topo">
+          <span className="ng-chave">{cartao.key}</span>
+          {cartao.is_blocked && (
+            <span className="ng-sinal bloqueado" title={t('cartao.bloqueado_desde', { quando: data(cartao.blocked_since) })}>
+              ⛔
+            </span>
+          )}
+          {prazo && (
+            <span className={`ng-prazo ${prazo}`} title={t(`prazo.${prazo}`)}>
+              {data(cartao.due_date)}
+            </span>
+          )}
+        </div>
+      )}
+      {!lacrado && <div className="ng-titulo">{cartao.title}</div>}
       {!lacrado && (
         <div className="ng-cartao-pe">
           {cartao.project_key && (

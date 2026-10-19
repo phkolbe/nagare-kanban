@@ -31,7 +31,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..deps import CurrentUser, get_session, require_capability, require_roles
+from ..deps import CurrentUser, get_current_user, get_session, require_capability, require_roles
 from ..errors import NotFound
 from ..integration import (
     card_for_providencia,
@@ -39,6 +39,7 @@ from ..integration import (
     find_ref,
     overview,
     product_people,
+    products_for,
     resolve_at_origin,
     swap_product_project,
 )
@@ -236,6 +237,16 @@ async def consolidated(
     """Read only. The gestor (and the master) see every linked product; anyone else,
     the products where they hold a ``nagare.*`` role (17/10/2026)."""
     return await overview(s, dict(user))
+
+
+@router.get("/products", summary="The products the caller can open, and the role held in each")
+async def products(
+    s: AsyncSession = Depends(get_session),
+    user: CurrentUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    """The product picker of the standalone Nagare (18/10/2026): the local master works
+    in every product; the administrator and the viewer only read the Pampufa ones."""
+    return {"items": await products_for(s, dict(user))}
 
 
 @router.get("/people", response_model=PeopleOut, summary="Who can take a card in this product")

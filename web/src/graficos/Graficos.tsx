@@ -31,10 +31,25 @@ export const TOM: Record<string, string> = {
   perigo: 'var(--red)',
 }
 
-/** Rampa ordinal (das colunas de montante as de jusante), da cor clara a escura. */
-export function corDaRampa(indice: number, total: number): string {
-  const fracao = total <= 1 ? 0.5 : indice / (total - 1)
-  return `color-mix(in srgb, var(--ng-rampa-b) ${Math.round(fracao * 100)}%, var(--ng-rampa-a))`
+/** Passos de cada familia do CFD (`--ng-cfd-up-N`, `--ng-cfd-down-N` no CSS, claro e escuro). */
+const PASSOS_CFD = { upstream: 5, downstream: 6 } as const
+
+/**
+ * Cor de uma faixa do CFD (decisao de 18/10/2026): o montante numa rampa de azuis, a jusante
+ * numa de laranjas, cada uma clara -> escura na ordem do fluxo, e a coluna de entrega num
+ * neutro. Vizinhas sempre se distinguem: muda a familia ou o passo (rampas validadas para o
+ * daltonismo e o contraste nos dois temas). Mais colunas que passos: mistura entre as pontas.
+ */
+export function corDoCfd(familia: 'upstream' | 'downstream' | 'entrega', indice: number, total: number): string {
+  if (familia === 'entrega') return 'var(--ng-cfd-entrega)'
+  const nome = familia === 'upstream' ? 'up' : 'down'
+  const passos = PASSOS_CFD[familia]
+  if (total <= 1) return `var(--ng-cfd-${nome}-${Math.ceil(passos / 2)})`
+  if (total > passos) {
+    const fracao = Math.round((indice / (total - 1)) * 100)
+    return `color-mix(in oklab, var(--ng-cfd-${nome}-${passos}) ${fracao}%, var(--ng-cfd-${nome}-1))`
+  }
+  return `var(--ng-cfd-${nome}-${1 + Math.round((indice * (passos - 1)) / (total - 1))})`
 }
 
 interface Comum {
@@ -110,7 +125,7 @@ export function AreaEmpilhada({
           <svg width={largura} height={altura} role="img" aria-label={comum.titulo}>
             <EixoY marcas={marcas} y={sy} largura={largura} formatar={(v) => String(v)} />
             {camadas.map((c) => (
-              <path key={c.chave} d={c.d} fill={c.cor} stroke="var(--card)" strokeWidth={0.5} />
+              <path key={c.chave} d={c.d} fill={c.cor} stroke="var(--card)" strokeWidth={1.5} strokeLinejoin="round" />
             ))}
             {marcasDeTempo(x[0] ?? 0, x[x.length - 1] ?? 1).map((m) => (
               <text key={m} className="ng-eixo" x={sx(m)} y={altura - 8} textAnchor="middle" aria-hidden="true">

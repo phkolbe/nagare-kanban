@@ -105,18 +105,41 @@ button.ng-pilula {
 }
 
 /* ------------------------------------------------------------------ a grade */
+/* O quadro usa a largura toda e cabe na altura da janela (18/10/2026): a barra de rolagem
+   horizontal fica sempre a vista e faixa, grupos e cabecalhos ficam fixos ao rolar para baixo. */
+.content:has(.ng-grade-rolagem) {
+  max-width: none;
+  padding-bottom: 16px;
+}
+.ng-grade-moldura {
+  position: relative;
+}
 .ng-grade-rolagem {
-  overflow-x: auto;
+  overflow: auto;
+  max-height: var(--ng-altura-grade, none);
   padding-bottom: 12px;
+  overscroll-behavior: contain;
+}
+.ng-grade-rolagem.deslizando {
+  cursor: grabbing;
+  user-select: none;
 }
 .ng-grade {
+  position: relative;
   display: grid;
   gap: 0 10px;
   grid-auto-rows: auto;
   min-width: min-content;
   align-items: stretch;
 }
+.ng-faixa,
+.ng-grupo,
+.ng-cabecalho {
+  position: sticky;
+  z-index: 3;
+}
 .ng-faixa {
+  top: 0;
   padding: 4px 10px;
   border-radius: 8px 8px 0 0;
   font-size: 12px;
@@ -133,12 +156,13 @@ button.ng-pilula {
   background: #f5f0e6;
 }
 .ng-grupo {
+  top: var(--ng-topo-grupo, 0);
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin-top: 6px;
-  padding: 3px 10px;
+  padding: 9px 10px 3px;
+  background: var(--bg);
   border-bottom: 2px solid var(--line);
   font-size: 12px;
   color: var(--muted);
@@ -147,7 +171,7 @@ button.ng-pilula {
   border-bottom-color: transparent;
 }
 .ng-cabecalho {
-  position: relative;
+  top: var(--ng-topo-cabecalho, 0);
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -158,6 +182,16 @@ button.ng-pilula {
   border-radius: 10px 10px 0 0;
   background: var(--card);
   min-height: 56px;
+}
+/* O vao acima do cabecalho fixo tambem cobre os cartoes que passam por baixo. */
+.ng-cabecalho::before {
+  content: '';
+  position: absolute;
+  left: -1px;
+  right: -1px;
+  top: -9px;
+  height: 6px;
+  background: var(--bg);
 }
 .ng-cabecalho.recolhida {
   padding: 8px 4px;
@@ -205,6 +239,135 @@ button.ng-pilula {
 }
 .ng-etapa {
   padding-left: 10px;
+}
+
+/* A linha do ponto de compromisso (18/10/2026): fina, dourada, de cima a baixo, no vao entre a
+   ultima coluna do montante e a primeira a jusante; o rotulo "◆ Compromisso" abre a faixa. */
+.ng-compromisso {
+  position: relative;
+  z-index: 5;
+  justify-self: start;
+  width: 0;
+  margin-left: -6px;
+  border-left: 2px solid color-mix(in srgb, var(--gold) 70%, transparent);
+  pointer-events: none;
+}
+/* O rotulo da linha abre a faixa da jusante, colado a linha. */
+.ng-faixa-compromisso {
+  margin-right: 8px;
+  padding: 0 7px;
+  border: 1px solid color-mix(in srgb, var(--gold) 60%, var(--line));
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--gold-texto);
+  font-size: 10.5px;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+/* Minimapa das colunas e setas das laterais (18/10/2026). */
+.ng-mapa {
+  position: relative;
+  height: 30px;
+  margin: 0 0 8px;
+  border-radius: 8px;
+  background: var(--line-soft);
+  overflow: hidden;
+}
+.ng-mapa.vazio {
+  display: none;
+}
+.ng-mapa-coluna {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 5px;
+  background: var(--card);
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  overflow: hidden;
+}
+.ng-mapa-coluna.upstream {
+  background: color-mix(in srgb, var(--ng-standard) 12%, var(--card));
+}
+.ng-mapa-coluna.downstream {
+  background: color-mix(in srgb, var(--gold) 14%, var(--card));
+}
+.ng-mapa-coluna.recolhida {
+  opacity: 0.6;
+}
+.ng-mapa-coluna:hover,
+.ng-mapa-coluna:focus-visible {
+  color: var(--text);
+  outline: 1px solid var(--muted);
+}
+.ng-mapa-coluna .nome {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ng-mapa-coluna .n {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.ng-mapa-compromisso {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--gold);
+  pointer-events: none;
+}
+.ng-mapa-janela {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border: 2px solid var(--navy);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--navy) 8%, transparent);
+  cursor: grab;
+  touch-action: none;
+}
+.ng-mapa-janela:active {
+  cursor: grabbing;
+}
+.ng-seta-grade {
+  position: absolute;
+  z-index: 6;
+  top: 50%;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 48px;
+  margin-top: -24px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--card) 92%, transparent);
+  box-shadow: 0 2px 8px rgba(15, 40, 64, 0.18);
+  color: var(--navy);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+.ng-seta-grade:hover {
+  background: var(--card);
+}
+.ng-seta-grade.esquerda {
+  left: 6px;
+}
+.ng-seta-grade.direita {
+  right: 6px;
 }
 
 .ng-raia {
@@ -281,9 +444,23 @@ button.ng-pilula {
 .ng-cartao.arrastando {
   opacity: 0.4;
 }
+/* Envelope lacrado (18/10/2026): uma linha, borda tracejada dourada sobre o fundo do tema. */
 .ng-cartao.lacrado {
-  background: repeating-linear-gradient(135deg, #fbf8f1, #fbf8f1 8px, #f6f0e2 8px, #f6f0e2 16px);
+  padding: 5px 10px;
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--gold) 55%, var(--line));
+  border-left-style: solid;
+  background: color-mix(in srgb, var(--gold) 7%, var(--card));
+  box-shadow: none;
   cursor: pointer;
+}
+.ng-cartao.lacrado .ng-chave {
+  color: var(--text);
+}
+.ng-envelope {
+  color: var(--gold-texto);
+  font-size: 13px;
+  line-height: 1;
 }
 .classe-expedite {
   border-left-color: var(--ng-expedite);
@@ -692,8 +869,25 @@ button.ng-pilula {
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: 12px;
 }
+/* Os cartoes de projeto ficam alinhados lado a lado e com a mesma altura na linha: numeros,
+   vazao e "Editar" descem para o pe, mesmo quando a descricao tem tamanhos diferentes. */
+.ng-projetos > .card + .card {
+  margin-top: 0;
+}
 .ng-projeto-cartao {
+  display: flex;
+  flex-direction: column;
   border-top: 4px solid var(--line);
+}
+.ng-projeto-cartao > p.mini {
+  flex: 1;
+}
+.ng-projeto-cartao > .ng-numeros {
+  margin-top: auto;
+}
+.ng-projeto-cartao > .link {
+  align-self: flex-start;
+  margin-top: 8px;
 }
 .ng-projeto-cartao h3 {
   margin: 6px 0;

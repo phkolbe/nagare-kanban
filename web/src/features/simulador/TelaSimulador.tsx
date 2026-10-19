@@ -22,7 +22,7 @@ import { useQuadros } from '../quadro/consultas'
 import { ordenarColunas } from '../quadro/regras'
 import { Comparar } from './Comparar'
 import { ResultadoDoRun } from './ResultadoDoRun'
-import { rebalancear, type Run, type TipoRun } from './tipos'
+import { emDias, rebalancear, type Run, type TipoRun } from './tipos'
 
 const SEMENTE = 20260816
 
@@ -173,10 +173,6 @@ interface Cenario {
   backlog: number
   dataAlvo: string
   pergunta: 'monte_carlo_when' | 'monte_carlo_how_many'
-}
-
-function emDias(dataAlvo: string, hoje: string): number {
-  return Math.max(1, Math.round((Date.parse(`${dataAlvo}T00:00:00Z`) - Date.parse(`${hoje}T00:00:00Z`)) / 86_400_000))
 }
 
 function Bancada({ quadroId }: { quadroId: string }) {

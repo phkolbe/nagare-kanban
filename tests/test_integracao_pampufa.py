@@ -215,13 +215,60 @@ def test_same_email_links_the_local_user(client, auth, pampufa, db: Database) ->
 
 
 def test_local_login_stays_in_nagare_unless_master(client, auth) -> None:
-    editor = auth("editor")
-    assert client.get(f"{API}/boards", headers=editor).status_code == 200
-    denied = client.get(f"{API}/boards", headers={**editor, "X-Produto": PRODUCT})
-    assert denied.status_code == 403
-    assert denied.json()["error"]["code"] == "product_forbidden"
-    master = client.get(f"{API}/boards", headers={**auth("master"), "X-Produto": PRODUCT})
+    for role in ("editor", "simulator"):
+        local = auth(role)
+        assert client.get(f"{API}/boards", headers=local).status_code == 200
+        denied = client.get(f"{API}/boards", headers={**local, "X-Produto": PRODUCT})
+        assert denied.status_code == 403, role
+        assert denied.json()["error"]["code"] == "product_forbidden"
+    master = client.get(f"{API}/auth/me", headers={**auth("master"), "X-Produto": PRODUCT})
     assert master.status_code == 200, master.text
+    assert master.json()["role"] == "master"
+
+
+def test_local_administrator_and_viewer_only_read_a_pampufa_product(client, auth) -> None:
+    """18/10/2026: in a Pampufa product the local administrator and viewer are viewers."""
+    for role in ("administrator", "viewer"):
+        inside = {**auth(role), "X-Produto": PRODUCT}
+        me = client.get(f"{API}/auth/me", headers=inside)
+        assert me.status_code == 200, me.text
+        assert me.json()["role"] == "viewer"
+        assert me.json()["product_id"] == PRODUCT
+        assert client.get(f"{API}/boards", headers=inside).status_code == 200
+        write = client.post(
+            f"{API}/projects", json={"key": "NAOPODE", "name": "Não pode"}, headers=inside
+        )
+        assert write.status_code == 403, write.text
+    home = client.get(f"{API}/auth/me", headers=auth("administrator"))
+    assert home.json()["role"] == "administrator", "in the standalone Nagare nothing changes"
+
+
+def test_the_product_picker_lists_what_each_local_role_opens(client, auth, pampufa) -> None:
+    service = pampufa.service()
+    client.post(f"{API}/integration/providencias", json=providencia(), headers=headers(service))
+    master = client.get(f"{API}/integration/products", headers=auth("master"))
+    assert master.status_code == 200, master.text
+    items = {p["id"]: p for p in master.json()["items"]}
+    assert master.json()["items"][0]["id"] == "nagare"
+    assert items["nagare"]["role"] == "master"
+    assert items[PRODUCT]["role"] == "master"
+    assert items[PRODUCT]["project"]["key"] == "SRADV"
+    assert items[PRODUCT]["board"]["id"]
+    admin = {
+        p["id"]: p["role"]
+        for p in client.get(f"{API}/integration/products", headers=auth("administrator")).json()[
+            "items"
+        ]
+    }
+    assert admin["nagare"] == "administrator" and admin[PRODUCT] == "viewer"
+    editor = [
+        p["id"]
+        for p in client.get(f"{API}/integration/products", headers=auth("editor")).json()["items"]
+    ]
+    assert editor == ["nagare"]
+    leitor = pampufa.person({PRODUCT: ["nagare.leitor"]})
+    own = client.get(f"{API}/integration/products", headers=headers(leitor)).json()["items"]
+    assert [(p["id"], p["role"]) for p in own] == [(PRODUCT, "viewer")]
 
 
 def test_products_do_not_see_each_other(client, auth, pampufa) -> None:

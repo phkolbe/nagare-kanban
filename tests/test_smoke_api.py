@@ -393,3 +393,29 @@ def test_seed_is_idempotent(db: Database) -> None:
     after = int(db.scalar("SELECT COUNT(*) FROM cards") or 0)
     assert summary["skipped"] is True
     assert before == after
+
+
+def test_metrics_forecast_answers_both_questions_without_saving_a_run(
+    client, auth, board_id: str, db: Database
+) -> None:
+    """18/10/2026: the Monte Carlo panel of the metrics, read only, for every reader."""
+    runs = db.scalar("SELECT COUNT(*) FROM simulation_runs")
+    when = client.get(
+        f"/api/v1/boards/{board_id}/metrics/forecast",
+        params={"question": "when", "backlog_size": 20},
+        headers=auth("viewer"),
+    )
+    assert when.status_code == 200, when.text
+    body = when.json()
+    assert body["kind"] == "monte_carlo_when" and body["backlog_size"] == 20
+    assert [level["confidence"] for level in body["levels"]] == sorted(
+        level["confidence"] for level in body["levels"]
+    )
+    how_many = client.get(
+        f"/api/v1/boards/{board_id}/metrics/forecast",
+        params={"question": "how_many", "days": 28},
+        headers=auth("viewer"),
+    )
+    assert how_many.status_code == 200, how_many.text
+    assert how_many.json()["kind"] == "monte_carlo_how_many"
+    assert db.scalar("SELECT COUNT(*) FROM simulation_runs") == runs, "nothing is saved"

@@ -1,13 +1,14 @@
 /**
  * O Nagare fora da plataforma (decisao de 17/10/2026, N3): login local, shell proprio, produto
  * `nagare`, ingles por padrao. As telas sao as mesmas da plataforma, mais a administracao.
+ * Quem pode tambem abre os produtos da Pampufa pelo seletor do trilho (18/10/2026).
  */
 
-import { useEffect } from 'react'
+import { useEffect, type ReactNode } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { Carregando } from '@pampufa/ui'
 
-import { PRODUTO_SOZINHO, ProvedorNagare } from '../app/contexto'
+import { ProvedorNagare } from '../app/contexto'
 import { TelaAdmin, TelaMetricas, TelaSimulador } from '../app/telasSobDemanda'
 import { ProvedorAvisos } from '../componentes/Avisos'
 import { NaoEncontrada } from '../componentes/NaoEncontrada'
@@ -16,6 +17,7 @@ import { TelaProjetos } from '../features/projetos/TelaProjetos'
 import { TelaQuadro } from '../features/quadro/TelaQuadro'
 import { ProvedorIdioma } from '../i18n'
 import { rotaDoLinkAntigo } from './linksAntigos'
+import { ProvedorProdutoSozinho, useProdutoSozinho } from './produto'
 import { ProvedorSessao, useSessao } from './sessao'
 import { ShellSozinho } from './Shell'
 import { TelaEntrar } from './TelaEntrar'
@@ -23,11 +25,23 @@ import { TelaEntrar } from './TelaEntrar'
 export function AppSozinho() {
   return (
     <ProvedorSessao>
-      <ProvedorNagare modo="sozinho" produto={PRODUTO_SOZINHO} nomeProduto="Nagare">
-        <LinksAntigos />
-        <Rotas />
-      </ProvedorNagare>
+      <ProvedorProdutoSozinho>
+        <NagareDoProduto>
+          <LinksAntigos />
+          <Rotas />
+        </NagareDoProduto>
+      </ProvedorProdutoSozinho>
     </ProvedorSessao>
+  )
+}
+
+/** As telas trabalham no produto escolhido no seletor do trilho. */
+function NagareDoProduto({ children }: { children: ReactNode }) {
+  const { produto } = useProdutoSozinho()
+  return (
+    <ProvedorNagare modo="sozinho" produto={produto} nomeProduto="Nagare">
+      {children}
+    </ProvedorNagare>
   )
 }
 

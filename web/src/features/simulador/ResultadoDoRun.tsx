@@ -26,7 +26,7 @@ export function ResultadoDoRun({ run }: { run: Run }) {
   )
 }
 
-function MonteCarlo({ r }: { r: ResultadoMonteCarlo }) {
+export function MonteCarlo({ r }: { r: ResultadoMonteCarlo }) {
   const { t, numero } = useT()
   const semanas = r.unit === 'weeks'
   const faixasDeValor = r.histogram.map((h) => ({

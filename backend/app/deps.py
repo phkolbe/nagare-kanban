@@ -163,7 +163,9 @@ async def get_current_user(request: Request, s: AsyncSession = Depends(get_sessi
         # The role in the token is a hint; the database is authoritative, so a role
         # change takes effect immediately rather than at the next token refresh.
         user["token_role"] = claims.get("role")
-        user["product_id"] = local_product(str(user["role"]), requested)
+        # In a Pampufa product the administrator and the viewer only read (18/10/2026).
+        user["home_role"] = user["role"]
+        user["product_id"], user["role"] = local_product(str(user["role"]), requested)
         user["via"] = "local"
     set_current_product(user["product_id"])
     # The metrics middleware reads it from here (the contextvar does not reach it).

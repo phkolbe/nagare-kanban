@@ -4,6 +4,21 @@
 :root {
   --ng-rampa-a: #b9d3e6;
   --ng-rampa-b: #24548f;
+  /* CFD (18/10/2026): montante em azuis, jusante em laranjas, claro -> escuro na ordem do fluxo,
+     entrega em neutro. Rampas conferidas no validador (passo de luminosidade e contraste com o
+     fundo do cartao), no claro e no escuro. */
+  --ng-cfd-up-1: #86b6ef;
+  --ng-cfd-up-2: #5598e7;
+  --ng-cfd-up-3: #2a78d6;
+  --ng-cfd-up-4: #1c5cab;
+  --ng-cfd-up-5: #104281;
+  --ng-cfd-down-1: #f2a06c;
+  --ng-cfd-down-2: #eb7c45;
+  --ng-cfd-down-3: #d9622a;
+  --ng-cfd-down-4: #b8501f;
+  --ng-cfd-down-5: #943f18;
+  --ng-cfd-down-6: #6f2f12;
+  --ng-cfd-entrega: #b7c0ca;
 }
 
 /* ------------------------------------------------------------------ tema escuro (so no Nagare sozinho) */
@@ -26,17 +41,187 @@ html[data-theme='dark'] {
   --ng-expedite: #f08a80;
   --ng-rampa-a: #2a4563;
   --ng-rampa-b: #8fb6e0;
+  --ng-cfd-up-1: #cde2fb;
+  --ng-cfd-up-2: #9ec5f4;
+  --ng-cfd-up-3: #6da7ec;
+  --ng-cfd-up-4: #3987e5;
+  --ng-cfd-up-5: #256abf;
+  --ng-cfd-down-1: #fbd3b8;
+  --ng-cfd-down-2: #f6ac80;
+  --ng-cfd-down-3: #f08a55;
+  --ng-cfd-down-4: #e06a33;
+  --ng-cfd-down-5: #c25423;
+  --ng-cfd-down-6: #9e4319;
+  --ng-cfd-entrega: #4b5a6b;
   color-scheme: dark;
 }
 html[data-theme='dark'] body {
   background: var(--bg);
   color: var(--text);
 }
+/* O visual da plataforma (@pampufa/ui) so tem o tema claro e fixa varias cores claras (barra de
+   cima, menus, abas, botoes, etiquetas, avisos, campos); aqui cada uma ganha o seu passo escuro
+   (decisao de 18/10/2026). O azul de destaque fica claro no escuro: o texto sobre ele e escuro. */
+html[data-theme='dark'] {
+  --ng-sobre-navy: #0f1722;
+  --ng-suave: #1f2c3d;
+  --ng-suave-forte: #26364a;
+}
+html[data-theme='dark'] .topbar {
+  background: var(--card);
+  border-bottom-color: var(--line);
+}
+html[data-theme='dark'] .popover,
+html[data-theme='dark'] .seletor-lista,
+html[data-theme='dark'] .stat {
+  background: var(--card);
+  border-color: var(--line);
+  color: var(--text);
+}
+html[data-theme='dark'] .seletor-lista button:hover,
+html[data-theme='dark'] .ng-busca-pop button:hover,
+html[data-theme='dark'] .ng-menu-pop > button:hover {
+  background: var(--ng-suave);
+}
+html[data-theme='dark'] tbody tr:hover {
+  background: var(--ng-suave);
+}
+html[data-theme='dark'] .btn,
+html[data-theme='dark'] .abas a.active,
+html[data-theme='dark'] .abas button[aria-selected='true'],
+html[data-theme='dark'] .ng-avatar {
+  color: var(--ng-sobre-navy);
+}
+html[data-theme='dark'] .btn:hover {
+  background: #b3cdea;
+}
+html[data-theme='dark'] .btn.sec,
+html[data-theme='dark'] .abas a,
+html[data-theme='dark'] .abas button {
+  background: var(--ng-suave);
+  color: var(--navy);
+}
+html[data-theme='dark'] .btn.sec:hover,
+html[data-theme='dark'] .abas a:hover,
+html[data-theme='dark'] .abas button:hover {
+  background: var(--ng-suave-forte);
+}
+html[data-theme='dark'] .abas a.active,
+html[data-theme='dark'] .abas button[aria-selected='true'] {
+  background: var(--navy);
+}
+html[data-theme='dark'] .btn.ghost {
+  background: transparent;
+  color: var(--navy);
+  border-color: var(--line);
+}
+html[data-theme='dark'] .btn.ghost:hover {
+  background: var(--ng-suave);
+}
+html[data-theme='dark'] .btn.danger {
+  background: #45201f;
+  color: var(--red);
+}
+html[data-theme='dark'] .link {
+  border-bottom-color: #3d5068;
+}
+html[data-theme='dark'] label {
+  color: var(--muted);
+}
+html[data-theme='dark'] input:focus,
+html[data-theme='dark'] select:focus,
+html[data-theme='dark'] textarea:focus {
+  outline-color: #2f4c6e;
+  border-color: var(--navy);
+}
+html[data-theme='dark'] .pill {
+  background: #183a2c;
+  border-color: #275a43;
+  color: #8fd6b1;
+}
+html[data-theme='dark'] .t-cinza {
+  background: #253244;
+  color: #c3cfdc;
+}
+html[data-theme='dark'] .t-azul {
+  background: #1d3550;
+  color: #a9c9ee;
+}
+html[data-theme='dark'] .t-verde {
+  background: #183a2c;
+  color: #8fd6b1;
+}
+html[data-theme='dark'] .t-amarelo {
+  background: #3d3018;
+  color: #ecc77f;
+}
+html[data-theme='dark'] .t-vermelho {
+  background: #45201f;
+  color: #f3a59d;
+}
+html[data-theme='dark'] .t-ouro {
+  background: #3a2f1e;
+  color: #e3c08c;
+}
+html[data-theme='dark'] .aviso.info {
+  background: #1a2f47;
+  border-color: #2a4a6e;
+  color: #a9c9ee;
+}
+html[data-theme='dark'] .aviso.alerta {
+  background: #352a16;
+  border-color: #5a4521;
+  color: #ecc77f;
+}
+html[data-theme='dark'] .aviso.erro {
+  background: #3b1d1c;
+  border-color: #64302d;
+  color: #f3a59d;
+}
+html[data-theme='dark'] .aviso.ok {
+  background: #163428;
+  border-color: #275a43;
+  color: #8fd6b1;
+}
+html[data-theme='dark'] .modulo-link {
+  background: var(--ng-suave);
+}
+html[data-theme='dark'] .modulo-link:hover,
+html[data-theme='dark'] .modulo-icone {
+  background: var(--card);
+}
+
+/* Nagare: faixas, alvos de arrastar, WIP, prazos e selos que tinham fundo claro fixo. */
 html[data-theme='dark'] .ng-faixa.upstream {
   background: #1b2a3b;
 }
 html[data-theme='dark'] .ng-faixa.downstream {
   background: #2a2619;
+}
+html[data-theme='dark'] .alvo-ok {
+  background: #183a2c;
+}
+html[data-theme='dark'] .alvo-aviso {
+  background: #352a16;
+}
+html[data-theme='dark'] .alvo-invalido {
+  background: #2a1f24;
+}
+html[data-theme='dark'] .ng-prazo.vencido,
+html[data-theme='dark'] .ng-wip.over,
+html[data-theme='dark'] .ng-bloqueio-ativo {
+  background: #45201f;
+}
+html[data-theme='dark'] .ng-prazo.proximo,
+html[data-theme='dark'] .ng-wip.at_limit,
+html[data-theme='dark'] .ng-providencia.resolvida {
+  background: #3d3018;
+}
+html[data-theme='dark'] .ng-providencia {
+  background: #3a2f1e;
+}
+html[data-theme='dark'] .ng-wip.under {
+  background: #1d3550;
 }
 html[data-theme='dark'] input,
 html[data-theme='dark'] select,
@@ -619,4 +804,13 @@ kbd {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* ------------------------------------------------------------------ previsao Monte Carlo nas metricas */
+.ng-previsao-pedido {
+  align-items: flex-end;
+}
+.ng-previsao-pedido .abas {
+  flex: none;
+  margin: 0 0 13px;
 }
