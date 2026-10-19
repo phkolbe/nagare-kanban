@@ -4,21 +4,25 @@
 :root {
   --ng-rampa-a: #b9d3e6;
   --ng-rampa-b: #24548f;
-  /* CFD (18/10/2026): montante em azuis, jusante em laranjas, claro -> escuro na ordem do fluxo,
-     entrega em neutro. Rampas conferidas no validador (passo de luminosidade e contraste com o
-     fundo do cartao), no claro e no escuro. */
-  --ng-cfd-up-1: #86b6ef;
-  --ng-cfd-up-2: #5598e7;
-  --ng-cfd-up-3: #2a78d6;
-  --ng-cfd-up-4: #1c5cab;
-  --ng-cfd-up-5: #104281;
-  --ng-cfd-down-1: #f2a06c;
-  --ng-cfd-down-2: #eb7c45;
-  --ng-cfd-down-3: #d9622a;
-  --ng-cfd-down-4: #b8501f;
-  --ng-cfd-down-5: #943f18;
-  --ng-cfd-down-6: #6f2f12;
-  --ng-cfd-entrega: #b7c0ca;
+  /* CFD (18/10/2026): uma cor por etapa, 8 matizes numa ordem validada para as vizinhas
+     (daltonismo e visao normal) e, da 9a em diante, os mesmos mais claros; entrega em neutro. */
+  --ng-cfd-1: #2a78d6;
+  --ng-cfd-2: #eb6834;
+  --ng-cfd-3: #1baf7a;
+  --ng-cfd-4: #eda100;
+  --ng-cfd-5: #e87ba4;
+  --ng-cfd-6: #008300;
+  --ng-cfd-7: #6250d6;
+  --ng-cfd-8: #e34948;
+  --ng-cfd-9: #86b6ef;
+  --ng-cfd-10: #f59a6e;
+  --ng-cfd-11: #5fd6c0;
+  --ng-cfd-12: #f6c75a;
+  --ng-cfd-13: #f2a8c4;
+  --ng-cfd-14: #4fb04f;
+  --ng-cfd-15: #9a8ef0;
+  --ng-cfd-16: #ef8a89;
+  --ng-cfd-entrega: #4b5563;
 }
 
 /* ------------------------------------------------------------------ tema escuro (so no Nagare sozinho) */
@@ -41,18 +45,23 @@ html[data-theme='dark'] {
   --ng-expedite: #f08a80;
   --ng-rampa-a: #2a4563;
   --ng-rampa-b: #8fb6e0;
-  --ng-cfd-up-1: #cde2fb;
-  --ng-cfd-up-2: #9ec5f4;
-  --ng-cfd-up-3: #6da7ec;
-  --ng-cfd-up-4: #3987e5;
-  --ng-cfd-up-5: #256abf;
-  --ng-cfd-down-1: #fbd3b8;
-  --ng-cfd-down-2: #f6ac80;
-  --ng-cfd-down-3: #f08a55;
-  --ng-cfd-down-4: #e06a33;
-  --ng-cfd-down-5: #c25423;
-  --ng-cfd-down-6: #9e4319;
-  --ng-cfd-entrega: #4b5a6b;
+  --ng-cfd-1: #3987e5;
+  --ng-cfd-2: #d95926;
+  --ng-cfd-3: #199e70;
+  --ng-cfd-4: #c98500;
+  --ng-cfd-5: #d55181;
+  --ng-cfd-6: #008300;
+  --ng-cfd-7: #9085e9;
+  --ng-cfd-8: #e66767;
+  --ng-cfd-9: #86b6ef;
+  --ng-cfd-10: #f08a5d;
+  --ng-cfd-11: #4cc79a;
+  --ng-cfd-12: #e8b13d;
+  --ng-cfd-13: #e889ab;
+  --ng-cfd-14: #3fa83f;
+  --ng-cfd-15: #b3abf3;
+  --ng-cfd-16: #f2847f;
+  --ng-cfd-entrega: #435063;
   color-scheme: dark;
 }
 html[data-theme='dark'] body {
@@ -401,6 +410,7 @@ kbd {
 }
 .ng-dica {
   position: absolute;
+  white-space: pre-line;
   top: 4px;
   right: 4px;
   max-width: 70%;
@@ -813,4 +823,34 @@ kbd {
 .ng-previsao-pedido .abas {
   flex: none;
   margin: 0 0 13px;
+}
+
+/* ------------------------------------------------------------------ dica das siglas (18/10/2026) */
+.ng-dica-sigla {
+  position: fixed;
+  z-index: 100;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.35;
+  pointer-events: none;
+}
+
+/* A linha do ponto de compromisso dentro do CFD (18/10/2026). */
+.ng-cfd-limite {
+  stroke: var(--gold);
+  stroke-width: 2;
+  stroke-dasharray: 5 3;
+}
+.ng-cfd-limite-rotulo {
+  fill: var(--gold-texto);
+  font-size: 11px;
+  font-weight: 600;
+  paint-order: stroke;
+  stroke: var(--card);
+  stroke-width: 3px;
 }

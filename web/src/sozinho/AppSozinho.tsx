@@ -11,6 +11,7 @@ import { Carregando } from '@pampufa/ui'
 import { ProvedorNagare } from '../app/contexto'
 import { TelaAdmin, TelaMetricas, TelaSimulador } from '../app/telasSobDemanda'
 import { ProvedorAvisos } from '../componentes/Avisos'
+import { DicaDeSiglas } from '../componentes/DicaDeSiglas'
 import { NaoEncontrada } from '../componentes/NaoEncontrada'
 import { TelaProjeto } from '../features/projetos/TelaProjeto'
 import { TelaProjetos } from '../features/projetos/TelaProjetos'
@@ -87,6 +88,7 @@ function Rotas() {
             <Route path="*" element={<NaoEncontrada />} />
           </Route>
         </Routes>
+        <DicaDeSiglas />
       </ProvedorAvisos>
     </ProvedorIdioma>
   )

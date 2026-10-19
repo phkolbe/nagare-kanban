@@ -68,11 +68,15 @@ export function useGradeNaTela(alvo: RefObject<HTMLDivElement>, chave: unknown) 
     const medir = () => {
       const topo = el.getBoundingClientRect().top + window.scrollY
       el.style.setProperty('--ng-altura-grade', `${Math.max(360, window.innerHeight - topo - 16)}px`)
+      // Alturas fracionarias arredondadas para baixo: cada linha fixa sobrepoe a de cima em
+      // menos de 1px, sem a fresta por onde os cartoes apareciam ao rolar. O cabecalho fica na
+      // posicao natural (6px abaixo dos grupos); o ::before dele cobre esse vao.
       const faixa = el.querySelector<HTMLElement>('.ng-faixa')
       const grupo = el.querySelector<HTMLElement>('.ng-grupo')
-      const alturaFaixa = faixa?.offsetHeight ?? 0
-      el.style.setProperty('--ng-topo-grupo', `${alturaFaixa}px`)
-      el.style.setProperty('--ng-topo-cabecalho', `${alturaFaixa + (grupo?.offsetHeight ?? 0)}px`)
+      const alturaFaixa = faixa?.getBoundingClientRect().height ?? 0
+      const alturaGrupo = grupo?.getBoundingClientRect().height ?? 0
+      el.style.setProperty('--ng-topo-grupo', `${Math.floor(alturaFaixa)}px`)
+      el.style.setProperty('--ng-topo-cabecalho', `${Math.floor(alturaFaixa + alturaGrupo) + 6}px`)
     }
     medir()
     const observador = new ResizeObserver(medir)

@@ -122,6 +122,7 @@ export function ShellSozinho() {
                 aria-haspopup="menu"
                 aria-expanded={menu}
                 aria-label={t('menu.pessoa')}
+                title={eu?.name}
                 onClick={() => setMenu(!menu)}
               >
                 {iniciaisDe(eu?.name ?? '?')}
