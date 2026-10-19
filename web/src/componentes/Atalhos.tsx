@@ -75,6 +75,8 @@ const LINHAS: [string, Chave][] = [
   ['Esc', 'atalhos.fechar'],
   ['Enter', 'atalhos.abrir_cartao'],
   ['m', 'atalhos.mover_cartao'],
+  ['f', 'atalhos.tela_cheia'],
+  ['v', 'atalhos.ferramentas'],
   ['← ↑ → ↓', 'atalhos.navegar_cartoes'],
 ]
 

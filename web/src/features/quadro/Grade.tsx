@@ -43,6 +43,7 @@ export function Grade({
   podePoliticas,
   recolhidas,
   alternarRecolhida,
+  compactos = false,
   acoes,
 }: {
   visao: VisaoQuadro
@@ -54,6 +55,8 @@ export function Grade({
   podePoliticas: boolean
   recolhidas: Set<string>
   alternarRecolhida: (id: string) => void
+  /** Cartoes compactos (18/10/2026): titulo numa linha e o resto numa linha so. */
+  compactos?: boolean
   acoes: AcoesDaGrade
 }) {
   const { t } = useT()
@@ -220,6 +223,7 @@ export function Grade({
                       sleDias={quadro.sle_days}
                       hoje={hoje}
                       podeArrastar={podeMover}
+                      compacto={compactos}
                       abrir={() => abrir(cartao)}
                       menuMover={() => acoes.menuMover(cartao)}
                     />

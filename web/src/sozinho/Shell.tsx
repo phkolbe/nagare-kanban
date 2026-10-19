@@ -14,6 +14,7 @@ import { PRODUTO_SOZINHO, useNagare } from '../app/contexto'
 import { chaves, nagare } from '../api/nagare'
 import type { Lista, Quadro } from '../api/tipos'
 import { iniciaisDe } from '../features/quadro/CartaoMini'
+import { useFormatoFerramentas } from '../features/quadro/visualizacao'
 import { useT, type Chave } from '../i18n'
 import { AjudaDeAtalhos, useAtalhos } from '../componentes/Atalhos'
 import { SeletorIdioma } from '../componentes/SeletorIdioma'
@@ -47,6 +48,7 @@ export function ShellSozinho() {
   const [tema, setTema] = useState<Tema>(temaGuardado)
   const [ajuda, setAjuda] = useState(false)
   const refMenu = useFecharFora<HTMLDivElement>(menu, () => setMenu(false))
+  const [formatoFerramentas, trocarFormatoFerramentas] = useFormatoFerramentas()
   const espaco = useQuery({
     queryKey: ['nagare', PRODUTO_SOZINHO, 'espaco'],
     queryFn: () => nagare<Espaco>(PRODUTO_SOZINHO, '/workspace'),
@@ -136,6 +138,23 @@ export function ShellSozinho() {
                   <div className="ng-menu-tags">
                     {eu && <Tag cor="azul">{t(`papel.${eu.role}` as Chave)}</Tag>}
                     {espaco.data?.plan && <Tag cor="ouro">{espaco.data.plan.name}</Tag>}
+                  </div>
+                  <div className="ng-menu-preferencia">
+                    <span className="mini">{t('quadro.formato_ferramentas')}</span>
+                    <div className="abas ng-abas-mini" role="radiogroup" aria-label={t('quadro.formato_ferramentas')}>
+                      {(['bar', 'panel'] as const).map((f) => (
+                        <button
+                          key={f}
+                          type="button"
+                          role="radio"
+                          aria-checked={formatoFerramentas === f}
+                          aria-selected={formatoFerramentas === f}
+                          onClick={() => trocarFormatoFerramentas(f)}
+                        >
+                          {t(f === 'bar' ? 'quadro.formato_barra' : 'quadro.formato_painel')}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                   {capacidades.manage_users && (
                     <button type="button" role="menuitem" onClick={() => navegar('/admin/usuarios')}>

@@ -140,6 +140,8 @@ class User(Base):
     #: The language the person chose (``pt-BR`` or ``en``). Empty: the default of the
     #: way in — Portuguese through the Pampufa, English on the local login (N2).
     locale: Mapped[str | None] = mapped_column(String(10))
+    #: screen preferences of the person (18/10/2026): ``{"board_toolbar": "bar" | "panel"}``
+    preferences: Mapped[dict[str, Any] | None] = mapped_column(Json)
 
 
 # ---------------------------------------------------------------------------

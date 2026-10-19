@@ -126,6 +126,7 @@ _PUBLIC_USER_FIELDS = (
     "created_at",
     "last_login_at",
     "locale",
+    "preferences",
 )
 
 

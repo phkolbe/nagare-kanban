@@ -1027,3 +1027,153 @@ button.ng-pilula {
     grid-template-columns: 1fr 1fr;
   }
 }
+
+/* ------------------------------------------------------------------ mais espaco para os cartoes (18/10/2026) */
+/* Uma linha so de titulo: nome do quadro (a descricao na dica), busca, WIP do fluxo, selo de
+   filtro, ferramentas, tela cheia, seletor de quadro e lingua. */
+.content:has(.ng-quadro-topo) {
+  padding-top: 14px;
+}
+.ng-quadro-topo {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+.ng-quadro-titulo {
+  margin: 0 6px 0 0;
+  font-family: var(--font-titulo);
+  font-size: 22px;
+  line-height: 1.2;
+  color: var(--navy);
+  white-space: nowrap;
+}
+.ng-quadro-info {
+  margin-left: 6px;
+  font-family: var(--font-texto);
+  font-size: 13px;
+  color: var(--muted);
+  cursor: help;
+  vertical-align: 2px;
+}
+.ng-selo-filtrado {
+  border-color: color-mix(in srgb, var(--amber) 55%, var(--line));
+  background: color-mix(in srgb, var(--amber) 10%, var(--card));
+}
+.ng-barra-ferramentas {
+  margin-bottom: 10px;
+}
+.ng-ferramentas {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
+}
+.ng-ferramentas-grupo,
+.ng-ferramentas-itens {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.ng-ferramentas .abas {
+  margin: 0;
+}
+.ng-abas-mini button {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+.ng-ferramentas-ancora {
+  position: relative;
+}
+.ng-ferramentas-painel {
+  position: absolute;
+  z-index: 35;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 380px;
+  max-width: calc(100vw - 32px);
+  padding: 12px 14px;
+}
+.ng-ferramentas.painel {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+}
+.ng-ferramentas.painel .ng-ferramentas-grupo {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+.ng-ferramentas-titulo {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* Cartoes compactos: titulo numa linha, o resto na linha de cima. */
+.ng-cartao.compacto {
+  gap: 3px;
+  padding: 5px 8px;
+}
+.ng-cartao.compacto .ng-cartao-topo {
+  flex-wrap: nowrap;
+  white-space: nowrap;
+  min-width: 0;
+}
+.ng-cartao.compacto .ng-chave,
+.ng-cartao.compacto .ng-projeto,
+.ng-cartao.compacto .ng-prazo,
+.ng-cartao.compacto .ng-avatar {
+  flex: none;
+}
+.ng-cartao.compacto .ng-tarefas {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ng-cartao.compacto .ng-titulo {
+  -webkit-line-clamp: 1;
+  font-size: 13px;
+}
+.ng-cartao.compacto .ng-avatar {
+  width: 18px;
+  height: 18px;
+  font-size: 9px;
+}
+
+/* Tela cheia do quadro: some tudo acima do minimapa (menu lateral, barra de cima, titulo,
+   ferramentas e avisos); fica um botao para sair (e o Esc). */
+html.ng-tela-cheia .side,
+html.ng-tela-cheia .topbar,
+html.ng-tela-cheia .ng-quadro-topo,
+html.ng-tela-cheia .ng-barra-ferramentas,
+html.ng-tela-cheia .content > .aviso {
+  display: none !important;
+}
+html.ng-tela-cheia .content {
+  padding: 10px 14px 8px;
+}
+.ng-sair-tela-cheia {
+  position: fixed;
+  z-index: 60;
+  top: 8px;
+  right: 14px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+}
+html.ng-tela-cheia .ng-mapa {
+  margin-right: 170px;
+}
+
+.ng-menu-preferencia {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+}
+.ng-menu-preferencia .abas {
+  margin: 0;
+}

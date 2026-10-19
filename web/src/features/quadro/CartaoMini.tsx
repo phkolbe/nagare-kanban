@@ -48,6 +48,7 @@ export function CartaoMini({
   sleDias,
   hoje,
   podeArrastar,
+  compacto = false,
   abrir,
   menuMover,
 }: {
@@ -55,6 +56,8 @@ export function CartaoMini({
   sleDias: number | null
   hoje: string
   podeArrastar: boolean
+  /** Formato compacto (18/10/2026): titulo numa linha; chave, projeto, tarefas e responsavel numa linha so. */
+  compacto?: boolean
   abrir: () => void
   /** Abre o menu de mover pelo teclado (tecla `m`). */
   menuMover: () => void
@@ -85,7 +88,8 @@ export function CartaoMini({
   return (
     <article
       ref={setNodeRef}
-      className={`ng-cartao classe-${cartao.service_class}${isDragging ? ' arrastando' : ''}${lacrado ? ' lacrado' : ''}`}
+      className={`ng-cartao classe-${cartao.service_class}${isDragging ? ' arrastando' : ''}${lacrado ? ' lacrado' : ''}${compacto ? ' compacto' : ''}`}
+      title={compacto && !lacrado ? cartao.title : undefined}
       {...attributes}
       {...listeners}
       role="button"
@@ -117,6 +121,39 @@ export function CartaoMini({
             </span>
           )}
         </div>
+      ) : compacto ? (
+        <div className="ng-cartao-topo">
+          <span className="ng-chave">{cartao.key}</span>
+          {cartao.project_key && (
+            <span className="ng-projeto" style={{ borderColor: cartao.project_color ?? undefined }}>
+              {cartao.project_key}
+            </span>
+          )}
+          {cartao.is_blocked && (
+            <span className="ng-sinal bloqueado" title={t('cartao.bloqueado_desde', { quando: data(cartao.blocked_since) })}>
+              ⛔
+            </span>
+          )}
+          {cartao.task_total ? (
+            <span className="ng-tarefas" title={t('cartao.tarefas')}>
+              ☑ {cartao.task_done ?? 0}/{cartao.task_total}
+            </span>
+          ) : null}
+          <span className="ng-espaco" />
+          {prazo && (
+            <span className={`ng-prazo ${prazo}`} title={t(`prazo.${prazo}`)}>
+              {data(cartao.due_date)}
+            </span>
+          )}
+          {idade && cartao.age_days != null && (
+            <span className={`ng-idade ${idade}`} title={t('cartao.idade', { dias: numero(cartao.age_days, 0), sle: sleDias ?? 0 })} />
+          )}
+          {cartao.assignee_name && (
+            <span className="ng-avatar" title={cartao.assignee_name}>
+              {iniciaisDe(cartao.assignee_name)}
+            </span>
+          )}
+        </div>
       ) : (
         <div className="ng-cartao-topo">
           <span className="ng-chave">{cartao.key}</span>
@@ -133,7 +170,7 @@ export function CartaoMini({
         </div>
       )}
       {!lacrado && <div className="ng-titulo">{cartao.title}</div>}
-      {!lacrado && (
+      {!lacrado && !compacto && (
         <div className="ng-cartao-pe">
           {cartao.project_key && (
             <span className="ng-projeto" style={{ borderColor: cartao.project_color ?? undefined }}>
