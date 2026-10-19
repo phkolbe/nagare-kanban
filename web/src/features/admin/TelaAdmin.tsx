@@ -8,7 +8,7 @@ import { NavLink, Navigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Aviso, Cabecalho, Carregando, ErroApi, ErroDeApi, Tag, Vazio } from '@pampufa/ui'
 
-import { useNagare } from '../../app/contexto'
+import { segmentoDaUrl, useNagare } from '../../app/contexto'
 import { nagare } from '../../api/nagare'
 import type { Lista } from '../../api/tipos'
 import { useAvisos } from '../../componentes/Avisos'
@@ -71,7 +71,8 @@ interface Espaco {
 type Aba = 'usuarios' | 'papeis' | 'flags' | 'planos'
 
 export function TelaAdmin() {
-  const { aba = 'usuarios' } = useParams()
+  // Na URL o nome vem em ingles (`users`, `roles`, `plans`, 19/10/2026).
+  const aba = segmentoDaUrl(useParams().aba ?? 'users')
   const { t, eu } = useT()
   const { rota } = useNagare()
   const capacidades = eu?.capabilities ?? {}

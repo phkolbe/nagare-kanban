@@ -34,14 +34,14 @@ export function TelaEntrar() {
     setErro(null)
     try {
       await entrar(email.trim(), senha)
-      let volta = '/quadro'
+      let volta = '/board'
       try {
         volta = window.sessionStorage.getItem(CHAVE_VOLTA) ?? volta
         window.sessionStorage.removeItem(CHAVE_VOLTA)
       } catch {
         /* sem armazenamento */
       }
-      navegar(volta.startsWith('/') && !volta.startsWith('//') ? volta : '/quadro', { replace: true })
+      navegar(volta.startsWith('/') && !volta.startsWith('//') ? volta : '/board', { replace: true })
     } catch (e) {
       if (e instanceof ErroApi && e.status === 401) setErro(t('entrar.invalido'))
       else if (e instanceof ErroApi && e.status === 429) setErro(t('entrar.bloqueado'))

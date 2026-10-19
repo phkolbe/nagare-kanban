@@ -116,11 +116,11 @@ class Settings:
     )
     #: Seconds between webhook delivery rounds.
     webhook_interval_s: int = field(default_factory=lambda: _env_int("NAGARE_WEBHOOK_INTERVALO", 5))
-    #: Where people open a card (the link the Pampufa shows). The React screen of N2
-    #: will live under the platform's gateway; until then it is this server.
+    #: Where the standalone Nagare's screens live, ``/nagare`` included (19/10/2026): the
+    #: base of the card links outside the platform.
     public_url: str = field(
         default_factory=lambda: os.environ.get(
-            "NAGARE_URL_PUBLICA", "http://127.0.0.1:8770"
+            "NAGARE_URL_PUBLICA", "http://127.0.0.1:8770/nagare"
         ).rstrip("/")
     )
 

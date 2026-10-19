@@ -158,6 +158,8 @@ def create_app(
     )
 
     app.add_middleware(observability.RequestMetrics)
+    # Outermost: the standalone screens live under /nagare (decision of 19/10/2026).
+    app.add_middleware(StandalonePrefix)
     install_error_handlers(app)
 
     # ---- observability: /metrics for the platform's collector (before the SPA catch-all)
@@ -235,6 +237,70 @@ def create_app(
 
 
 _SCREEN_ROUTE = re.compile(r"^[a-z0-9-]+/tarefas(/.*)?$")
+
+#: Where the standalone Nagare lives, directly on :8770 and behind the gateway (19/10/2026).
+STANDALONE_PREFIX = "/nagare"
+#: Paths that are not screens: never redirected to /nagare.
+_NOT_SCREENS = ("/api", "/docs", "/redoc", "/openapi.json", "/grupo-sr", "/metrics", "/health")
+#: The Portuguese route names used before 19/10/2026, and their English names in the URL.
+_OLD_NAMES = {
+    "quadro": "board",
+    "projetos": "projects",
+    "metricas": "metrics",
+    "simulador": "simulator",
+    "entrar": "sign-in",
+    "usuarios": "users",
+    "papeis": "roles",
+    "planos": "plans",
+}
+
+
+def standalone_location(path: str) -> str:
+    """``/quadro/1`` -> ``/nagare/board/1``; ``/`` -> ``/nagare/``."""
+    parts = [_OLD_NAMES.get(part, part) for part in path.split("/")]
+    return STANDALONE_PREFIX + ("/".join(parts) if path != "/" else "/")
+
+
+class StandalonePrefix:
+    """The standalone Nagare under ``/nagare`` (decision of 19/10/2026).
+
+    * ``/nagare/...`` (straight to :8770) is served as if the prefix were not there: the
+      screens, the API at ``/nagare/api/v1`` and the build all work;
+    * a screen asked for without the prefix and not through a proxy (``:8770/``, an old
+      ``:8770/quadro/1`` link) is redirected to ``/nagare/...``, with the English name;
+    * behind the gateway (``X-Forwarded-For``) nothing changes: Caddy already publishes the
+      Nagare at ``/nagare/`` and strips the prefix before forwarding.
+    """
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        if scope["type"] == "http":
+            path: str = scope["path"]
+            if path == STANDALONE_PREFIX or path.startswith(STANDALONE_PREFIX + "/"):
+                inner = path[len(STANDALONE_PREFIX) :] or "/"
+                scope = {**scope, "path": inner, "raw_path": inner.encode()}
+            elif (
+                scope["method"] in ("GET", "HEAD")
+                and not path.startswith(_NOT_SCREENS)
+                and not any(name == b"x-forwarded-for" for name, _ in scope.get("headers", []))
+            ):
+                query = scope.get("query_string", b"").decode("latin-1")
+                location = standalone_location(path) + (f"?{query}" if query else "")
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 308,
+                        "headers": [
+                            (b"location", location.encode("latin-1")),
+                            (b"content-length", b"0"),
+                        ],
+                    }
+                )
+                await send({"type": "http.response.body", "body": b""})
+                return
+        await self.app(scope, receive, send)
 
 
 def _screens_response(full_path: str) -> Any:

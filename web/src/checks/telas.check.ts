@@ -242,16 +242,18 @@ confere('modo pelo caminho', [modoDoCaminho('/grupo-sr/sr-adv/tarefas'), modoDoC
   'sozinho',
 ])
 confere('base do Nagare sozinho', [baseDoSozinho('/nagare/quadro'), baseDoSozinho('/quadro'), baseDoSozinho('/nagarex')], ['/nagare', '', ''])
-confere('rotas nos dois modos', [montarRota('plataforma', 'sr-adv', 'quadro/1'), montarRota('sozinho', 'nagare', 'quadro/1'), montarRota('sozinho', 'nagare', '')], [
+confere('rotas nos dois modos', [montarRota('plataforma', 'sr-adv', 'quadro/1'), montarRota('sozinho', 'nagare', 'quadro/1'), montarRota('sozinho', 'nagare', ''), montarRota('sozinho', 'nagare', 'admin/usuarios'), montarRota('sozinho', 'nagare', 'metricas/q1')], [
   '/sr-adv/tarefas/quadro/1',
-  '/quadro/1',
+  '/board/1',
   '/',
+  '/admin/users',
+  '/metrics/q1',
 ])
 confere('links da tela antiga', ['#/board/abc', '#/metrics/q1', '#/admin/plans', '#/login', '#/x'].map(rotaDoLinkAntigo), [
-  '/quadro/abc',
-  '/metricas/q1',
-  '/admin/planos',
-  '/entrar',
+  '/board/abc',
+  '/metrics/q1',
+  '/admin/plans',
+  '/sign-in',
   null,
 ])
 confere('tema efetivo', [temaEfetivo('system', true), temaEfetivo('system', false), temaEfetivo('dark', false)], ['dark', 'light', 'dark'])

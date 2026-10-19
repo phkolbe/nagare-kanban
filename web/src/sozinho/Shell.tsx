@@ -10,7 +10,7 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { Icone, MarcaProduto, Tag } from '@pampufa/ui'
 
-import { PRODUTO_SOZINHO, useNagare } from '../app/contexto'
+import { montarRota, PRODUTO_SOZINHO, useNagare } from '../app/contexto'
 import { chaves, nagare } from '../api/nagare'
 import type { Lista, Quadro } from '../api/tipos'
 import { iniciaisDe } from '../features/quadro/CartaoMini'
@@ -93,7 +93,7 @@ export function ShellSozinho() {
                 {conteudo}
               </span>
             ) : (
-              <NavLink key={item.caminho} to={`/${item.caminho}`} title={recolhido ? t(item.rotulo) : undefined}>
+              <NavLink key={item.caminho} to={montarRota('sozinho', PRODUTO_SOZINHO, item.caminho)} title={recolhido ? t(item.rotulo) : undefined}>
                 {conteudo}
               </NavLink>
             )
@@ -169,16 +169,16 @@ export function ShellSozinho() {
                     </div>
                   </div>
                   {capacidades.manage_users && (
-                    <button type="button" role="menuitem" onClick={() => navegar('/admin/usuarios')}>
+                    <button type="button" role="menuitem" onClick={() => navegar(montarRota('sozinho', PRODUTO_SOZINHO, 'admin/usuarios'))}>
                       {t('admin.usuarios')}
                     </button>
                   )}
                   {capacidades.manage_plans_flags && (
                     <>
-                      <button type="button" role="menuitem" onClick={() => navegar('/admin/flags')}>
+                      <button type="button" role="menuitem" onClick={() => navegar(montarRota('sozinho', PRODUTO_SOZINHO, 'admin/flags'))}>
                         {t('admin.flags')}
                       </button>
-                      <button type="button" role="menuitem" onClick={() => navegar('/admin/planos')}>
+                      <button type="button" role="menuitem" onClick={() => navegar(montarRota('sozinho', PRODUTO_SOZINHO, 'admin/planos'))}>
                         {t('admin.planos')}
                       </button>
                     </>
@@ -192,7 +192,7 @@ export function ShellSozinho() {
                     onClick={() => {
                       trocarProduto(PRODUTO_SOZINHO)
                       sair()
-                      navegar('/entrar', { replace: true })
+                      navegar('/sign-in', { replace: true })
                     }}
                   >
                     {t('menu.sair')}
@@ -238,7 +238,7 @@ function BuscaDeQuadros() {
         onKeyDown={(e) => {
           if (e.key === 'Escape') setTexto('')
           if (e.key === 'Enter' && achados[0]) {
-            navegar(`/${achados[0].kind === 'simulator' ? 'simulador' : 'quadro'}/${achados[0].id}`)
+            navegar(montarRota('sozinho', PRODUTO_SOZINHO, `${achados[0].kind === 'simulator' ? 'simulador' : 'quadro'}/${achados[0].id}`))
             setTexto('')
           }
         }}
@@ -250,7 +250,7 @@ function BuscaDeQuadros() {
               <button
                 type="button"
                 onClick={() => {
-                  navegar(`/${q.kind === 'simulator' ? 'simulador' : 'quadro'}/${q.id}`)
+                  navegar(montarRota('sozinho', PRODUTO_SOZINHO, `${q.kind === 'simulator' ? 'simulador' : 'quadro'}/${q.id}`))
                   setTexto('')
                 }}
               >
@@ -293,7 +293,7 @@ function SeletorProduto({ nomeEspaco }: { nomeEspaco: string }) {
     setAberto(false)
     if (id === produto) return
     trocar(id)
-    navegar('/quadro')
+    navegar(montarRota('sozinho', PRODUTO_SOZINHO, 'quadro'))
   }
   const marca = (id: string, tamanho: number) =>
     id === PRODUTO_SOZINHO ? (
