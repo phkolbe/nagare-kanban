@@ -14,7 +14,7 @@ import { PRODUTO_SOZINHO, useNagare } from '../app/contexto'
 import { chaves, nagare } from '../api/nagare'
 import type { Lista, Quadro } from '../api/tipos'
 import { iniciaisDe } from '../features/quadro/CartaoMini'
-import { useFormatoFerramentas } from '../features/quadro/visualizacao'
+import { useFormatoFerramentas, useLigadoNoNavegador } from '../features/quadro/visualizacao'
 import { useT, type Chave } from '../i18n'
 import { AjudaDeAtalhos, useAtalhos } from '../componentes/Atalhos'
 import { SeletorIdioma } from '../componentes/SeletorIdioma'
@@ -49,6 +49,8 @@ export function ShellSozinho() {
   const [ajuda, setAjuda] = useState(false)
   const refMenu = useFecharFora<HTMLDivElement>(menu, () => setMenu(false))
   const [formatoFerramentas, trocarFormatoFerramentas] = useFormatoFerramentas()
+  // Menu lateral recolhido so com os icones (19/10/2026), como o da Pampufa; lembrado no navegador.
+  const [recolhido, setRecolhido] = useLigadoNoNavegador('nagare.menu.recolhido', false)
   const espaco = useQuery({
     queryKey: ['nagare', PRODUTO_SOZINHO, 'espaco'],
     queryFn: () => nagare<Espaco>(PRODUTO_SOZINHO, '/workspace'),
@@ -64,7 +66,7 @@ export function ShellSozinho() {
   }
 
   return (
-    <div className="shell ng-sozinho">
+    <div className={`shell ng-sozinho${recolhido ? ' recolhido' : ''}`}>
       <aside className="side" aria-label={t('menu.principal')}>
         <SeletorProduto nomeEspaco={espaco.data?.name ?? t('menu.kanban')} />
         <nav>
@@ -85,18 +87,28 @@ export function ShellSozinho() {
               <span
                 key={item.caminho}
                 className="ng-item-bloqueado"
-                title={t(bloqueio === 'plano' ? 'menu.bloqueado_plano' : 'menu.bloqueado_papel')}
+                title={`${recolhido ? `${t(item.rotulo)}: ` : ''}${t(bloqueio === 'plano' ? 'menu.bloqueado_plano' : 'menu.bloqueado_papel')}`}
                 aria-disabled="true"
               >
                 {conteudo}
               </span>
             ) : (
-              <NavLink key={item.caminho} to={`/${item.caminho}`}>
+              <NavLink key={item.caminho} to={`/${item.caminho}`} title={recolhido ? t(item.rotulo) : undefined}>
                 {conteudo}
               </NavLink>
             )
           })}
         </nav>
+        <button
+          type="button"
+          className="recolher"
+          aria-expanded={!recolhido}
+          onClick={() => setRecolhido(!recolhido)}
+          title={recolhido ? t('menu.expandir') : t('menu.recolher')}
+        >
+          <Icone nome={recolhido ? 'expandir' : 'recolher'} />
+          <span className="rotulo">{t('menu.recolher')}</span>
+        </button>
         <div className="foot">
           {espaco.data?.plan && <Tag cor="ouro">{espaco.data.plan.name}</Tag>}
         </div>

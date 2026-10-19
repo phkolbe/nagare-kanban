@@ -397,6 +397,8 @@ export const ptN3 = {
   'filtros.filtrado': 'Filtrado · {total} cartões',
   'atalhos.tela_cheia': 'Quadro em tela cheia (Esc volta)',
   'atalhos.ferramentas': 'Mostrar ou esconder as ferramentas do quadro',
+  'menu.recolher': 'Recolher menu',
+  'menu.expandir': 'Expandir o menu',
 } as const
 
 export type ChaveN3 = keyof typeof ptN3
@@ -789,4 +791,6 @@ export const enN3: Record<ChaveN3, string> = {
   'filtros.filtrado': 'Filtered · {total} cards',
   'atalhos.tela_cheia': 'Full-screen board (Esc to leave)',
   'atalhos.ferramentas': 'Show or hide the board tools',
+  'menu.recolher': 'Collapse menu',
+  'menu.expandir': 'Expand menu',
 }

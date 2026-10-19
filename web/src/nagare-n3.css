@@ -854,3 +854,13 @@ kbd {
   stroke: var(--card);
   stroke-width: 3px;
 }
+
+/* Menu lateral recolhido do Nagare sozinho (19/10/2026): o item bloqueado e o selo do plano
+   seguem o resto (so o icone; o plano aparece no menu da pessoa). */
+.shell.recolhido .side nav .ng-item-bloqueado {
+  justify-content: center;
+  padding: 10px 0;
+}
+.shell.recolhido .side .foot .tag {
+  display: none;
+}
