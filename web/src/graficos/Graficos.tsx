@@ -31,10 +31,16 @@ export const TOM: Record<string, string> = {
   perigo: 'var(--red)',
 }
 
-/** Rampa ordinal (das colunas de montante as de jusante), da cor clara a escura. */
-export function corDaRampa(indice: number, total: number): string {
-  const fracao = total <= 1 ? 0.5 : indice / (total - 1)
-  return `color-mix(in srgb, var(--ng-rampa-b) ${Math.round(fracao * 100)}%, var(--ng-rampa-a))`
+/** Cores do CFD (`--ng-cfd-N` no CSS, claro e escuro): 8 matizes numa ordem validada para as
+ * vizinhas (daltonismo e visao normal) e, da 9a em diante, os mesmos num tom mais claro. */
+const CORES_CFD = 16
+
+/**
+ * Cor de uma faixa do CFD (decisao de 18/10/2026): uma cor por etapa, na ordem do fluxo, para
+ * cada faixa contrastar com as vizinhas; a coluna de entrega fica num neutro.
+ */
+export function corDoCfd(indice: number, entrega = false): string {
+  return entrega ? 'var(--ng-cfd-entrega)' : `var(--ng-cfd-${(indice % CORES_CFD) + 1})`
 }
 
 interface Comum {
@@ -77,6 +83,8 @@ export function AreaEmpilhada({
   series,
   formatarX,
   rotuloY,
+  limite,
+  extra,
   altura = 260,
   ...comum
 }: Comum & {
@@ -85,10 +93,19 @@ export function AreaEmpilhada({
   series: { chave: string; rotulo: string; valores: number[]; cor: string }[]
   formatarX: (v: number) => string
   rotuloY?: string
+  /** Linha tracejada no topo desta serie (o ponto de compromisso), com o rotulo dela. */
+  limite?: { chave: string; rotulo: string }
+  /** Mais uma linha na dica de cada data (a Lei de Little no CFD). */
+  extra?: (indice: number) => string | null
 }) {
   const totais = x.map((_, i) => series.reduce((s, serie) => s + (serie.valores[i] ?? 0), 0))
   const { dominio, marcas } = eixoRedondo(0, Math.max(0, ...totais))
-  const itens = x.map((v, i) => `${formatarX(v)}: ${series.map((s) => `${s.rotulo} ${s.valores[i] ?? 0}`).join(', ')}`)
+  const itens = x.map((v, i) => {
+    const linha = `${formatarX(v)}: ${series.map((s) => `${s.rotulo} ${s.valores[i] ?? 0}`).join(', ')}`
+    const mais = extra?.(i)
+    return mais ? `${linha}
+${mais}` : linha
+  })
   return (
     <Figura
       {...comum}
@@ -100,18 +117,29 @@ export function AreaEmpilhada({
         const sx = linear([x[0] ?? 0, x[x.length - 1] ?? 1], [M.esq, largura - M.dir])
         const sy = linear(dominio, [altura - M.base, M.topo])
         let base = x.map((v) => ({ x: sx(v), y: sy(0) }))
+        let bordaDoLimite: { x: number; y: number }[] | null = null
         const camadas = series.map((s) => {
           const acumulado = x.map((v, i) => ({ x: sx(v), y: sy(sy.inversa(base[i]!.y) + (s.valores[i] ?? 0)) }))
           const d = caminhoDeArea(acumulado, base)
           base = acumulado
+          if (limite && s.chave === limite.chave) bordaDoLimite = acumulado
           return { chave: s.chave, d, cor: s.cor }
         })
+        const borda = bordaDoLimite as { x: number; y: number }[] | null
         return (
           <svg width={largura} height={altura} role="img" aria-label={comum.titulo}>
             <EixoY marcas={marcas} y={sy} largura={largura} formatar={(v) => String(v)} />
             {camadas.map((c) => (
-              <path key={c.chave} d={c.d} fill={c.cor} stroke="var(--card)" strokeWidth={0.5} />
+              <path key={c.chave} d={c.d} fill={c.cor} stroke="var(--card)" strokeWidth={1.5} strokeLinejoin="round" />
             ))}
+            {borda && borda.length > 1 && limite && (
+              <g aria-hidden="true">
+                <path d={caminhoDeLinha(borda)} fill="none" className="ng-cfd-limite" />
+                <text className="ng-cfd-limite-rotulo" x={M.esq + 4} y={borda[0]!.y - 4}>
+                  ◆ {limite.rotulo}
+                </text>
+              </g>
+            )}
             {marcasDeTempo(x[0] ?? 0, x[x.length - 1] ?? 1).map((m) => (
               <text key={m} className="ng-eixo" x={sx(m)} y={altura - 8} textAnchor="middle" aria-hidden="true">
                 {formatarX(m)}

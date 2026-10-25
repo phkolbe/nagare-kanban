@@ -3,9 +3,13 @@
  *
  * Sem quadro na URL abre o que recebe as providencias do produto (NG14). `?cartao=<id>` abre o
  * cartao na gaveta (o link que a caixa de providencias e o sino da Pampufa mostram).
+ *
+ * Mais espaco para os cartoes (18/10/2026): uma linha so de titulo (com a busca, o WIP do fluxo
+ * e o selo de filtro), as ferramentas numa barra recolhivel ou num painel flutuante (a escolha
+ * e da pessoa), cartoes compactos e a tela cheia do quadro.
  */
 
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useRef, useMemo, useState, type ReactNode } from 'react'
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Aviso, Cabecalho, Carregando, ErroDeApi, Vazio } from '@pampufa/ui'
 
@@ -18,10 +22,11 @@ import { GavetaCartao } from '../cartao/GavetaCartao'
 import { EditorEstrutura } from '../estrutura/EditorEstrutura'
 import { useAlterarQuadro, useMover, useQuadro, useQuadros, useVinculo, useVisao } from './consultas'
 import { EditorWip } from './EditorWip'
-import { BarraDeFiltros } from './Filtros'
+import { BotaoDeFiltros, BuscaDeCartoes, SeloFiltrado } from './Filtros'
 import { Grade } from './Grade'
 import { NovoCartao } from './NovoCartao'
-import { destinosAFrente, filtrarNaTela, lerFiltros, ordenarColunas, validarDestino } from './regras'
+import { destinosAFrente, FILTROS_VAZIOS, filtrarNaTela, gravarFiltros, lerFiltros, ordenarColunas, validarDestino } from './regras'
+import { useFormatoFerramentas, useLigadoNoNavegador, useTeclasDaVisualizacao, useTelaCheia } from './visualizacao'
 
 export function TelaQuadro() {
   const { quadroId } = useParams()
@@ -88,6 +93,19 @@ function QuadroDoProduto({ quadroId }: { quadroId: string }) {
   const [confirmar, setConfirmar] = useState<{ cartao: Cartao; destino: Coluna } | null>(null)
   const [estrutura, setEstrutura] = useState(false)
   const [avisoMotivo, setAvisoMotivo] = useState<string | null>(null)
+  const [formato, trocarFormato] = useFormatoFerramentas()
+  const [barraAberta, setBarraAberta] = useLigadoNoNavegador('nagare.ferramentas.aberta', false)
+  const [compactos, setCompactos] = useLigadoNoNavegador('nagare.cartoes.compactos', false)
+  const [painelAberto, setPainelAberto] = useState(false)
+  const [telaCheia, setTelaCheia] = useTelaCheia()
+  const ferramentasAbertas = formato === 'bar' ? barraAberta : painelAberto
+  const alternarFerramentas = useCallback(
+    () => (formato === 'bar' ? setBarraAberta(!barraAberta) : setPainelAberto((aberto) => !aberto)),
+    [formato, barraAberta, setBarraAberta],
+  )
+  const alternarTelaCheia = useCallback(() => setTelaCheia(!telaCheia), [telaCheia, setTelaCheia])
+  const sairDaTelaCheia = useCallback(() => setTelaCheia(false), [setTelaCheia])
+  useTeclasDaVisualizacao({ alternarTelaCheia, sairDaTelaCheia, alternarFerramentas })
 
   const alternarRecolhida = useCallback(
     (id: string) =>
@@ -142,35 +160,163 @@ function QuadroDoProduto({ quadroId }: { quadroId: string }) {
     else mover.mutate({ cartao, destino: destinoId })
   }
 
+  const segmentado = segmento !== (segmentosLigados[0] ?? 'unified')
+  const limparTudo = () =>
+    trocarBusca((b) => {
+      const limpa = gravarFiltros(b, FILTROS_VAZIOS)
+      for (const chave of [...b.keys()]) b.delete(chave)
+      limpa.forEach((valor, chave) => b.set(chave, valor))
+      b.delete('segmento')
+    })
+  const recolherTodas = () => {
+    const todas = recolhidas.size === 0
+    const nova = new Set(todas ? v.columns.map((c) => c.id) : [])
+    try {
+      window.localStorage.setItem(chaveRecolhidas(quadroId), JSON.stringify([...nova]))
+    } catch {
+      /* sem armazenamento */
+    }
+    setRecolhidas(nova)
+  }
+  const ferramentas = (
+    <Ferramentas
+      emPainel={formato === 'panel'}
+      ver={
+        <>
+          {segmentosLigados.length > 1 && (
+            <div className="abas" role="tablist" aria-label={t('quadro.segmento')}>
+              {segmentosLigados.map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  role="tab"
+                  aria-selected={segmento === s}
+                  onClick={() => trocarBusca((b) => (s === segmentosLigados[0] ? b.delete('segmento') : b.set('segmento', s)))}
+                >
+                  {t(`segmento.${s}`)}
+                </button>
+              ))}
+            </div>
+          )}
+          {flags.service_classes !== false && (
+            <label className="ng-alternar">
+              <input
+                type="checkbox"
+                checked={raias}
+                onChange={(e) => trocarBusca((b) => (e.target.checked ? b.set('raias', 'classe') : b.delete('raias')))}
+              />
+              {t('quadro.raias')}
+            </label>
+          )}
+          <label className="ng-alternar">
+            <input type="checkbox" checked={compactos} onChange={(e) => setCompactos(e.target.checked)} />
+            {t('quadro.cartoes_compactos')}
+          </label>
+        </>
+      }
+      filtrar={<BotaoDeFiltros filtros={filtros} cartoes={v.cards} />}
+      politicas={
+        <SleDoQuadro sle={q.sle_days} percentil={q.sle_percentile} podeEditar={podePoliticas} gravar={(dias) => alterarQuadro.mutate({ sle_days: dias })} />
+      }
+      estrutura={
+        <>
+          <button type="button" className="btn sm ghost" onClick={recolherTodas}>
+            {recolhidas.size === 0 ? t('quadro.recolher_todas') : t('quadro.expandir_todas')}
+          </button>
+          {Boolean(capacidades.manage_boards) && (
+            <button type="button" className="btn sm sec" onClick={() => setEstrutura(true)}>
+              {t('quadro.editar_estrutura')}
+            </button>
+          )}
+        </>
+      }
+      formato={
+        <div className="abas ng-abas-mini" role="radiogroup" aria-label={t('quadro.formato_ferramentas')}>
+          {(['bar', 'panel'] as const).map((f) => (
+            <button
+              key={f}
+              type="button"
+              role="radio"
+              aria-checked={formato === f}
+              aria-selected={formato === f}
+              onClick={() => {
+                if (f === formato) return
+                setPainelAberto(f === 'panel')
+                if (f === 'bar') setBarraAberta(true)
+                trocarFormato(f)
+              }}
+            >
+              {t(f === 'bar' ? 'quadro.formato_barra' : 'quadro.formato_painel')}
+            </button>
+          ))}
+        </div>
+      }
+    />
+  )
+
   return (
     <>
-      <Cabecalho
-        kicker={t('quadro.kicker')}
-        titulo={q.name}
-        descricao={q.description ?? undefined}
-        acoes={
-          <>
-            <label className="ng-seletor-quadro">
-              <span className="visualmente-oculto">{t('quadro.trocar')}</span>
-              <select
-                value={quadroId}
-                aria-label={t('quadro.trocar')}
-                onChange={(e) => navegar(rota(`quadro/${e.target.value}`))}
-              >
-                {(quadros.data?.items ?? [])
-                  .filter((x) => !x.archived)
-                  .map((x) => (
-                    <option key={x.id} value={x.id}>
-                      {x.name}
-                      {x.read_only ? ` (${t('quadro.so_leitura')})` : ''}
-                    </option>
-                  ))}
-              </select>
-            </label>
-            <SeletorIdioma />
-          </>
-        }
-      />
+      <div className="ng-quadro-topo">
+        <h1 className="ng-quadro-titulo" title={q.description ?? undefined}>
+          {q.name}
+          {q.description && (
+            <span className="ng-quadro-info" aria-hidden="true">
+              ⓘ
+            </span>
+          )}
+        </h1>
+        {q.description && <p className="visualmente-oculto">{q.description}</p>}
+        <BuscaDeCartoes filtros={filtros} />
+        {flags.wip_flow !== false && (
+          <span className="ng-pilula">
+            {t('quadro.wip_fluxo')} <EditorWip alvo={{ tipo: 'fluxo', quadroId }} celula={v.wip.flow} podeEditar={podePoliticas} />
+          </span>
+        )}
+        {!(formato === 'bar' && barraAberta) && (
+          <SeloFiltrado filtros={filtros} total={cartoes.length} segmentado={segmentado} limpar={limparTudo} />
+        )}
+        <span className="ng-espaco" />
+        <PainelFlutuante aberto={formato === 'panel' && painelAberto} fechar={() => setPainelAberto(false)} conteudo={ferramentas}>
+          <button
+            type="button"
+            className={`btn sm ${ferramentasAbertas ? '' : 'sec'}`}
+            aria-expanded={ferramentasAbertas}
+            title={t('quadro.visualizacao_dica')}
+            onClick={alternarFerramentas}
+          >
+            ⚙ {t('quadro.visualizacao')} {ferramentasAbertas ? '▴' : '▾'}
+          </button>
+        </PainelFlutuante>
+        <button
+          type="button"
+          className="btn sm ghost"
+          aria-label={t('quadro.tela_cheia')}
+          title={t('quadro.tela_cheia_dica')}
+          onClick={() => setTelaCheia(true)}
+        >
+          ⛶
+        </button>
+        <label className="ng-seletor-quadro">
+          <span className="visualmente-oculto">{t('quadro.trocar')}</span>
+          <select value={quadroId} aria-label={t('quadro.trocar')} onChange={(e) => navegar(rota(`quadro/${e.target.value}`))}>
+            {(quadros.data?.items ?? [])
+              .filter((x) => !x.archived)
+              .map((x) => (
+                <option key={x.id} value={x.id}>
+                  {x.name}
+                  {x.read_only ? ` (${t('quadro.so_leitura')})` : ''}
+                </option>
+              ))}
+          </select>
+        </label>
+        <SeletorIdioma />
+      </div>
+      {formato === 'bar' && barraAberta && <div className="ng-barra ng-barra-ferramentas">{ferramentas}</div>}
+      {telaCheia && (
+        <button type="button" className="btn sm ng-sair-tela-cheia" onClick={sairDaTelaCheia} title={t('quadro.sair_tela_cheia_dica')}>
+          ✕ {t('quadro.sair_tela_cheia')}
+        </button>
+      )}
       {q.read_only && <Aviso tipo="alerta">{t('quadro.aviso_so_leitura')}</Aviso>}
       {!q.read_only && q.product_board && q.flow_locked && podePoliticas && (
         <Aviso tipo="info">{t('quadro.aviso_travado')}</Aviso>
@@ -183,63 +329,6 @@ function QuadroDoProduto({ quadroId }: { quadroId: string }) {
           </button>
         </Aviso>
       )}
-
-      <div className="ng-barra">
-        {segmentosLigados.length > 1 && (
-          <div className="abas" role="tablist" aria-label={t('quadro.segmento')}>
-            {segmentosLigados.map((s) => (
-              <button
-                key={s}
-                type="button"
-                role="tab"
-                aria-selected={segmento === s}
-                onClick={() => trocarBusca((b) => (s === segmentosLigados[0] ? b.delete('segmento') : b.set('segmento', s)))}
-              >
-                {t(`segmento.${s}`)}
-              </button>
-            ))}
-          </div>
-        )}
-        <BarraDeFiltros filtros={filtros} cartoes={v.cards} total={cartoes.length} />
-        <span className="ng-espaco" />
-        {flags.service_classes !== false && (
-          <label className="ng-alternar">
-            <input
-              type="checkbox"
-              checked={raias}
-              onChange={(e) => trocarBusca((b) => (e.target.checked ? b.set('raias', 'classe') : b.delete('raias')))}
-            />
-            {t('quadro.raias')}
-          </label>
-        )}
-        {flags.wip_flow !== false && (
-          <span className="ng-pilula">
-            {t('quadro.wip_fluxo')} <EditorWip alvo={{ tipo: 'fluxo', quadroId }} celula={v.wip.flow} podeEditar={podePoliticas} />
-          </span>
-        )}
-        <SleDoQuadro sle={q.sle_days} percentil={q.sle_percentile} podeEditar={podePoliticas} gravar={(dias) => alterarQuadro.mutate({ sle_days: dias })} />
-        <button
-          type="button"
-          className="btn sm ghost"
-          onClick={() => {
-            const todas = recolhidas.size === 0
-            const nova = new Set(todas ? v.columns.map((c) => c.id) : [])
-            try {
-              window.localStorage.setItem(chaveRecolhidas(quadroId), JSON.stringify([...nova]))
-            } catch {
-              /* sem armazenamento */
-            }
-            setRecolhidas(nova)
-          }}
-        >
-          {recolhidas.size === 0 ? t('quadro.recolher_todas') : t('quadro.expandir_todas')}
-        </button>
-        {Boolean(capacidades.manage_boards) && (
-          <button type="button" className="btn sm sec" onClick={() => setEstrutura(true)}>
-            {t('quadro.editar_estrutura')}
-          </button>
-        )}
-      </div>
 
       {v.columns.length === 0 ? (
         <section className="card">
@@ -255,6 +344,7 @@ function QuadroDoProduto({ quadroId }: { quadroId: string }) {
           podePoliticas={podePoliticas}
           recolhidas={recolhidas}
           alternarRecolhida={alternarRecolhida}
+          compactos={compactos}
           acoes={{
             abrirCartao,
             menuMover: setMenu,
@@ -414,5 +504,81 @@ function SleDoQuadro({
         {t('comum.salvar')}
       </button>
     </form>
+  )
+}
+
+/**
+ * As ferramentas do quadro, as mesmas nos dois formatos (18/10/2026): em linha na barra
+ * recolhivel, ou em grupos com titulo no painel flutuante.
+ */
+function Ferramentas({
+  emPainel,
+  ver,
+  filtrar,
+  politicas,
+  estrutura,
+  formato,
+}: {
+  emPainel: boolean
+  ver: ReactNode
+  filtrar: ReactNode
+  politicas: ReactNode
+  estrutura: ReactNode
+  formato: ReactNode
+}) {
+  const { t } = useT()
+  const grupos: [string, ReactNode][] = [
+    [t('quadro.ferramentas_ver'), ver],
+    [t('quadro.ferramentas_filtrar'), filtrar],
+    [t('quadro.ferramentas_politicas'), politicas],
+    [t('quadro.ferramentas_estrutura'), estrutura],
+    [t('quadro.formato_ferramentas'), formato],
+  ]
+  return (
+    <div className={emPainel ? 'ng-ferramentas painel' : 'ng-ferramentas'}>
+      {grupos.map(([titulo, conteudo]) => (
+        <div key={titulo} className="ng-ferramentas-grupo" role="group" aria-label={titulo}>
+          {emPainel && <div className="ng-ferramentas-titulo">{titulo}</div>}
+          <div className="ng-ferramentas-itens">{conteudo}</div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/** O painel flutuante das ferramentas: abre sob o botao e fecha ao clicar fora ou com Esc. */
+function PainelFlutuante({
+  aberto,
+  fechar,
+  conteudo,
+  children,
+}: {
+  aberto: boolean
+  fechar: () => void
+  conteudo: ReactNode
+  children: ReactNode
+}) {
+  const { t } = useT()
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!aberto) return
+    const clique = (e: MouseEvent) => ref.current && !ref.current.contains(e.target as Node) && fechar()
+    const tecla = (e: KeyboardEvent) => e.key === 'Escape' && fechar()
+    document.addEventListener('mousedown', clique)
+    document.addEventListener('keydown', tecla)
+    return () => {
+      document.removeEventListener('mousedown', clique)
+      document.removeEventListener('keydown', tecla)
+    }
+  }, [aberto, fechar])
+  return (
+    <div className="ng-ferramentas-ancora" ref={ref}>
+      {children}
+      {aberto && (
+        <div className="popover ng-ferramentas-painel" role="dialog" aria-label={t('quadro.visualizacao')}>
+          {conteudo}
+        </div>
+      )}
+    </div>
   )
 }

@@ -105,18 +105,41 @@ button.ng-pilula {
 }
 
 /* ------------------------------------------------------------------ a grade */
+/* O quadro usa a largura toda e cabe na altura da janela (18/10/2026): a barra de rolagem
+   horizontal fica sempre a vista e faixa, grupos e cabecalhos ficam fixos ao rolar para baixo. */
+.content:has(.ng-grade-rolagem) {
+  max-width: none;
+  padding-bottom: 16px;
+}
+.ng-grade-moldura {
+  position: relative;
+}
 .ng-grade-rolagem {
-  overflow-x: auto;
+  overflow: auto;
+  max-height: var(--ng-altura-grade, none);
   padding-bottom: 12px;
+  overscroll-behavior: contain;
+}
+.ng-grade-rolagem.deslizando {
+  cursor: grabbing;
+  user-select: none;
 }
 .ng-grade {
+  position: relative;
   display: grid;
   gap: 0 10px;
   grid-auto-rows: auto;
   min-width: min-content;
   align-items: stretch;
 }
+.ng-faixa,
+.ng-grupo,
+.ng-cabecalho {
+  position: sticky;
+  z-index: 3;
+}
 .ng-faixa {
+  top: 0;
   padding: 4px 10px;
   border-radius: 8px 8px 0 0;
   font-size: 12px;
@@ -133,12 +156,13 @@ button.ng-pilula {
   background: #f5f0e6;
 }
 .ng-grupo {
+  top: var(--ng-topo-grupo, 0);
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin-top: 6px;
-  padding: 3px 10px;
+  padding: 9px 10px 3px;
+  background: var(--bg);
   border-bottom: 2px solid var(--line);
   font-size: 12px;
   color: var(--muted);
@@ -147,7 +171,7 @@ button.ng-pilula {
   border-bottom-color: transparent;
 }
 .ng-cabecalho {
-  position: relative;
+  top: var(--ng-topo-cabecalho, 0);
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -159,6 +183,41 @@ button.ng-pilula {
   background: var(--card);
   min-height: 56px;
 }
+/* Ao rolar, nada dos cartoes aparece entre as linhas fixas: o ::before cobre o vao de 6px
+   acima do cabecalho e o ::after pinta, com o fundo da pagina, os cantos de fora do
+   arredondado (do cabecalho e da faixa), que de outro modo deixavam ver o que passa por baixo. */
+.ng-cabecalho::before {
+  content: '';
+  position: absolute;
+  left: -1px;
+  right: -1px;
+  top: -10px;
+  height: 7px;
+  background: var(--bg);
+}
+.ng-cabecalho::after,
+.ng-faixa::after {
+  content: '';
+  position: absolute;
+  left: -1px;
+  right: -1px;
+  top: -3px;
+  height: 10px;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 10px 10px, transparent 9.5px, var(--bg) 10px) left top / 10px 10px no-repeat,
+    radial-gradient(circle at 0 10px, transparent 9.5px, var(--bg) 10px) right top / 10px 10px no-repeat;
+}
+.ng-faixa::after {
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 8px;
+  background:
+    radial-gradient(circle at 8px 8px, transparent 7.5px, var(--bg) 8px) left top / 8px 8px no-repeat,
+    radial-gradient(circle at 0 8px, transparent 7.5px, var(--bg) 8px) right top / 8px 8px no-repeat;
+}
+
 .ng-cabecalho.recolhida {
   padding: 8px 4px;
   align-items: center;
@@ -205,6 +264,141 @@ button.ng-pilula {
 }
 .ng-etapa {
   padding-left: 10px;
+}
+
+/* A linha do ponto de compromisso (18/10/2026): fina, dourada, de cima a baixo, no vao entre a
+   ultima coluna do montante e a primeira a jusante; o rotulo "◆ Compromisso" abre a faixa. */
+.ng-compromisso {
+  position: relative;
+  z-index: 5;
+  justify-self: start;
+  width: 0;
+  margin-left: -6px;
+  border-left: 2px solid color-mix(in srgb, var(--gold) 70%, transparent);
+  pointer-events: none;
+}
+/* O rotulo da linha abre a faixa da jusante, colado a linha. */
+.ng-faixa-compromisso {
+  margin-right: 8px;
+  padding: 0 7px;
+  border: 1px solid color-mix(in srgb, var(--gold) 60%, var(--line));
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--gold-texto);
+  font-size: 10.5px;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+/* Minimapa das colunas e setas das laterais (18/10/2026). */
+.ng-mapa {
+  position: relative;
+  height: 30px;
+  margin: 0 0 8px;
+  border-radius: 8px;
+  background: var(--line-soft);
+  overflow: hidden;
+}
+.ng-mapa.vazio {
+  display: none;
+}
+.ng-mapa-coluna {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 5px;
+  background: var(--card);
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  overflow: hidden;
+}
+.ng-mapa-coluna.upstream {
+  background: color-mix(in srgb, var(--ng-standard) 12%, var(--card));
+}
+.ng-mapa-coluna.downstream {
+  background: color-mix(in srgb, var(--gold) 14%, var(--card));
+}
+.ng-mapa-coluna.recolhida {
+  opacity: 0.6;
+}
+.ng-mapa-coluna:hover,
+.ng-mapa-coluna:focus-visible {
+  color: var(--text);
+  outline: 1px solid var(--muted);
+}
+.ng-mapa-coluna .nome {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ng-mapa-coluna .n {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.ng-mapa-compromisso {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--gold);
+  pointer-events: none;
+}
+.ng-mapa-janela {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border: 2px solid var(--navy);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--navy) 8%, transparent);
+  cursor: grab;
+  touch-action: none;
+}
+.ng-mapa-janela:active {
+  cursor: grabbing;
+}
+.ng-seta-grade {
+  position: absolute;
+  z-index: 6;
+  top: 50%;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 48px;
+  margin-top: -24px;
+  padding: 0;
+  /* contraste discreto (18/10/2026): fundo levemente tingido do azul de destaque e borda dele */
+  border: 1px solid color-mix(in srgb, var(--navy) 45%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--navy) 14%, var(--card));
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+  color: var(--navy);
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.92;
+}
+.ng-seta-grade:hover,
+.ng-seta-grade:focus-visible {
+  background: color-mix(in srgb, var(--navy) 24%, var(--card));
+  border-color: var(--navy);
+  opacity: 1;
+}
+.ng-seta-grade.esquerda {
+  left: 6px;
+}
+.ng-seta-grade.direita {
+  right: 6px;
 }
 
 .ng-raia {
@@ -281,9 +475,23 @@ button.ng-pilula {
 .ng-cartao.arrastando {
   opacity: 0.4;
 }
+/* Envelope lacrado (18/10/2026): uma linha, borda tracejada dourada sobre o fundo do tema. */
 .ng-cartao.lacrado {
-  background: repeating-linear-gradient(135deg, #fbf8f1, #fbf8f1 8px, #f6f0e2 8px, #f6f0e2 16px);
+  padding: 5px 10px;
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--gold) 55%, var(--line));
+  border-left-style: solid;
+  background: color-mix(in srgb, var(--gold) 7%, var(--card));
+  box-shadow: none;
   cursor: pointer;
+}
+.ng-cartao.lacrado .ng-chave {
+  color: var(--text);
+}
+.ng-envelope {
+  color: var(--gold-texto);
+  font-size: 13px;
+  line-height: 1;
 }
 .classe-expedite {
   border-left-color: var(--ng-expedite);
@@ -692,8 +900,25 @@ button.ng-pilula {
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: 12px;
 }
+/* Os cartoes de projeto ficam alinhados lado a lado e com a mesma altura na linha: numeros,
+   vazao e "Editar" descem para o pe, mesmo quando a descricao tem tamanhos diferentes. */
+.ng-projetos > .card + .card {
+  margin-top: 0;
+}
 .ng-projeto-cartao {
+  display: flex;
+  flex-direction: column;
   border-top: 4px solid var(--line);
+}
+.ng-projeto-cartao > p.mini {
+  flex: 1;
+}
+.ng-projeto-cartao > .ng-numeros {
+  margin-top: auto;
+}
+.ng-projeto-cartao > .link {
+  align-self: flex-start;
+  margin-top: 8px;
 }
 .ng-projeto-cartao h3 {
   margin: 6px 0;
@@ -801,4 +1026,154 @@ button.ng-pilula {
   .ng-grupo-linha {
     grid-template-columns: 1fr 1fr;
   }
+}
+
+/* ------------------------------------------------------------------ mais espaco para os cartoes (18/10/2026) */
+/* Uma linha so de titulo: nome do quadro (a descricao na dica), busca, WIP do fluxo, selo de
+   filtro, ferramentas, tela cheia, seletor de quadro e lingua. */
+.content:has(.ng-quadro-topo) {
+  padding-top: 14px;
+}
+.ng-quadro-topo {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+.ng-quadro-titulo {
+  margin: 0 6px 0 0;
+  font-family: var(--font-titulo);
+  font-size: 22px;
+  line-height: 1.2;
+  color: var(--navy);
+  white-space: nowrap;
+}
+.ng-quadro-info {
+  margin-left: 6px;
+  font-family: var(--font-texto);
+  font-size: 13px;
+  color: var(--muted);
+  cursor: help;
+  vertical-align: 2px;
+}
+.ng-selo-filtrado {
+  border-color: color-mix(in srgb, var(--amber) 55%, var(--line));
+  background: color-mix(in srgb, var(--amber) 10%, var(--card));
+}
+.ng-barra-ferramentas {
+  margin-bottom: 10px;
+}
+.ng-ferramentas {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
+}
+.ng-ferramentas-grupo,
+.ng-ferramentas-itens {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.ng-ferramentas .abas {
+  margin: 0;
+}
+.ng-abas-mini button {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+.ng-ferramentas-ancora {
+  position: relative;
+}
+.ng-ferramentas-painel {
+  position: absolute;
+  z-index: 35;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 380px;
+  max-width: calc(100vw - 32px);
+  padding: 12px 14px;
+}
+.ng-ferramentas.painel {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+}
+.ng-ferramentas.painel .ng-ferramentas-grupo {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+.ng-ferramentas-titulo {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* Cartoes compactos: titulo numa linha, o resto na linha de cima. */
+.ng-cartao.compacto {
+  gap: 3px;
+  padding: 5px 8px;
+}
+.ng-cartao.compacto .ng-cartao-topo {
+  flex-wrap: nowrap;
+  white-space: nowrap;
+  min-width: 0;
+}
+.ng-cartao.compacto .ng-chave,
+.ng-cartao.compacto .ng-projeto,
+.ng-cartao.compacto .ng-prazo,
+.ng-cartao.compacto .ng-avatar {
+  flex: none;
+}
+.ng-cartao.compacto .ng-tarefas {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ng-cartao.compacto .ng-titulo {
+  -webkit-line-clamp: 1;
+  font-size: 13px;
+}
+.ng-cartao.compacto .ng-avatar {
+  width: 18px;
+  height: 18px;
+  font-size: 9px;
+}
+
+/* Tela cheia do quadro: some tudo acima do minimapa (menu lateral, barra de cima, titulo,
+   ferramentas e avisos); fica um botao para sair (e o Esc). */
+html.ng-tela-cheia .side,
+html.ng-tela-cheia .topbar,
+html.ng-tela-cheia .ng-quadro-topo,
+html.ng-tela-cheia .ng-barra-ferramentas,
+html.ng-tela-cheia .content > .aviso {
+  display: none !important;
+}
+html.ng-tela-cheia .content {
+  padding: 10px 14px 8px;
+}
+.ng-sair-tela-cheia {
+  position: fixed;
+  z-index: 60;
+  top: 8px;
+  right: 14px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+}
+html.ng-tela-cheia .ng-mapa {
+  margin-right: 170px;
+}
+
+.ng-menu-preferencia {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+}
+.ng-menu-preferencia .abas {
+  margin: 0;
 }

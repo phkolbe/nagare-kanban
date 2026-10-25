@@ -300,3 +300,28 @@ def test_replay_runs_inside_run_sync_and_still_speaks_portuguese(
     results = response.json()["results"]
     assert results["rows"][0]["name"] == "Sem limites de WIP"
     assert "chegadas reais deste quadro reproduzidas em" in results["verdict"]
+
+
+def test_board_toolbar_preference_is_the_persons_and_merges(client, auth) -> None:
+    """18/10/2026: the board tools (bar or floating panel) follow the person."""
+    headers = auth("editor")
+    me = client.get("/api/v1/auth/me", headers=headers).json()
+    assert me["preferences"] == {"board_toolbar": "bar"}, "the collapsible bar by default"
+    changed = client.patch(
+        "/api/v1/auth/me", json={"preferences": {"board_toolbar": "panel"}}, headers=headers
+    )
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["preferences"]["board_toolbar"] == "panel"
+    assert changed.json()["locale_chosen"] == me["locale_chosen"], "the language is untouched"
+    language = client.patch("/api/v1/auth/me", json={"locale": "pt-BR"}, headers=headers).json()
+    assert language["preferences"]["board_toolbar"] == "panel", "a language change keeps it"
+    wrong = client.patch(
+        "/api/v1/auth/me", json={"preferences": {"board_toolbar": "sideways"}}, headers=headers
+    )
+    assert wrong.status_code == 422
+    back = client.patch(
+        "/api/v1/auth/me",
+        json={"locale": None, "preferences": {"board_toolbar": None}},
+        headers=headers,
+    ).json()
+    assert back["preferences"] == {"board_toolbar": "bar"} and back["locale_chosen"] is None

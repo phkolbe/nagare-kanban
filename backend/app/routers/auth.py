@@ -80,6 +80,17 @@ _AUTH_RESPONSES: dict[int | str, dict[str, Any]] = {
 # ---------------------------------------------------------------------------
 
 
+class Preferences(BaseModel):
+    """Screen preferences of the person, on every device (18/10/2026)."""
+
+    #: the board tools: a collapsible bar above the board, or a floating panel
+    board_toolbar: Literal["bar", "panel"] = "bar"
+
+
+class PreferencesPatch(BaseModel):
+    board_toolbar: Literal["bar", "panel"] | None = None
+
+
 class MeOut(UserOut):
     """``GET /auth/me`` — the user plus everything the shell needs to render nav."""
 
@@ -97,6 +108,8 @@ class MeOut(UserOut):
     locale: str
     #: what the person chose (``None``: following the default)
     locale_chosen: str | None = None
+    #: screen preferences, with the defaults filled in (18/10/2026)
+    preferences: Preferences
     #: ``pampufa`` (platform sign-in) or ``local``
     via: str
     #: the product this request acts on
@@ -104,10 +117,11 @@ class MeOut(UserOut):
 
 
 class MePatch(BaseModel):
-    """``PATCH /auth/me`` — the person's own preferences."""
+    """``PATCH /auth/me`` — the person's own preferences; only the fields sent change."""
 
     #: ``None`` goes back to the default of the way in
-    locale: Literal["pt-BR", "en"] | None
+    locale: Literal["pt-BR", "en"] | None = None
+    preferences: PreferencesPatch | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -373,7 +387,7 @@ async def me(
 @router.patch(
     "/me",
     response_model=MeOut,
-    summary="Change the signed-in person's preferences (the language of the screens)",
+    summary="Change the signed-in person's preferences (language, board tools)",
 )
 async def update_me(
     payload: MePatch,
@@ -383,9 +397,21 @@ async def update_me(
     """The choice is the person's, on every device (decision of 17/10/2026)."""
     if user["role"] == "system":
         raise Forbidden("A service identity has no preferences.", code="system_has_no_preferences")
-    await s.execute(update(User).where(User.id == user["id"]).values(locale=payload.locale))
-    await s.commit()
-    return await _me(s, {**user, "locale": payload.locale})
+    changes: dict[str, Any] = {}
+    if "locale" in payload.model_fields_set:
+        changes["locale"] = payload.locale
+    if payload.preferences is not None:
+        current = dict(user.get("preferences") or {})
+        for key, value in payload.preferences.model_dump(exclude_unset=True).items():
+            if value is None:
+                current.pop(key, None)
+            else:
+                current[key] = value
+        changes["preferences"] = current
+    if changes:
+        await s.execute(update(User).where(User.id == user["id"]).values(**changes))
+        await s.commit()
+    return await _me(s, {**user, **changes})
 
 
 def default_locale(via: str) -> str:
@@ -408,6 +434,7 @@ async def _me(s: AsyncSession, user: CurrentUser) -> dict[str, Any]:
         "expires_in": token_ttl(),
         "locale": chosen or default_locale(via),
         "locale_chosen": chosen,
+        "preferences": Preferences(**(user.get("preferences") or {})).model_dump(),
         "via": via,
         "product_id": str(user.get("product_id") or ""),
     }

@@ -1,8 +1,8 @@
 /**
  * Metricas de fluxo de um quadro (paridade com a tela antiga, N3): 9 indicadores, CFD,
  * dispersao, vazao, idade do WIP, eficiencia de fluxo, distribuicao, bloqueios, mix de classes,
- * Lei de Little e o KMM. Cada painel diz como ler e o que e saudavel. Os textos que vem da API
- * ja chegam na lingua da pessoa.
+ * Lei de Little, a previsao Monte Carlo (18/10/2026) e o KMM. Cada painel diz como ler e o que
+ * e saudavel. Os textos que vem da API ja chegam na lingua da pessoa.
  */
 
 import { useState, type ReactNode } from 'react'
@@ -23,7 +23,7 @@ import {
   Medidor,
   PontosPorColuna,
   Rosca,
-  corDaRampa,
+  corDoCfd,
   type Percentil,
 } from '../../graficos/Graficos'
 import { ms } from '../../graficos/escalas'
@@ -42,6 +42,7 @@ import {
 } from './consultas'
 import { formatarIndicador } from './formato'
 import { PainelKmm } from './PainelKmm'
+import { PainelPrevisao } from './PainelPrevisao'
 
 const TOM_PERCENTIL: Record<string, Percentil['tom']> = { p50: 'info', p70: 'sucesso', p85: 'alerta', p95: 'perigo' }
 
@@ -89,6 +90,7 @@ function MetricasDoQuadro({ quadroId }: { quadroId: string }) {
     classe: '',
     segmento: segmentos[0] ?? 'unified',
   })
+  const [cfdEntregues, setCfdEntregues] = useState(true)
   const criacao = quadro.data?.created_at ?? null
   const ligado = (p: Painel) => flags[flagDoPainel(p)] !== false && quadro.isSuccess
   const m = <T,>(p: Painel) => useMetrica<T>(quadroId, p, filtros, hoje, criacao, ligado(p))
@@ -210,24 +212,73 @@ function MetricasDoQuadro({ quadroId }: { quadroId: string }) {
       <div className="ng-paineis">
         <PainelDe painel="cfd" consulta={cfd} largo>
           {(d) => {
-            const series = [...d.series].reverse()
+            // Uma cor por etapa na ordem do fluxo; a entrega num neutro (18/10/2026).
+            const familia = (s: (typeof d.series)[number]) =>
+              s.is_delivery_point || s.column_kind === 'done' ? 'entrega' : s.segment === 'upstream' ? 'upstream' : 'downstream'
+            const cores = new Map<string, string>()
+            d.series.filter((s) => familia(s) !== 'entrega').forEach((s, i) => cores.set(s.key, corDoCfd(i)))
+            const entrega = d.series.find((s) => familia(s) === 'entrega')
+            const comprometidas = d.series.filter((s) => familia(s) === 'downstream')
+            // Entregues do periodo (18/10/2026): a faixa da entrega comeca em zero no inicio da
+            // janela, como na leitura padrao do CFD, e cresce na inclinacao da vazao; a chave
+            // "Mostrar entregues" tira a faixa para ver so o trabalho em andamento.
+            const valores = (s: (typeof d.series)[number]) => {
+              const v = s.points.map((p) => Number(p.y) || 0)
+              if (familia(s) !== 'entrega') return v
+              const base = v[0] ?? 0
+              return v.map((n) => Math.max(0, n - base))
+            }
+            const rotulo = (s: (typeof d.series)[number]) =>
+              familia(s) === 'entrega' ? t('metricas.cfd_entregue_periodo', { nome: s.label ?? s.key }) : (s.label ?? s.key)
+            const visiveis = d.series.filter((s) => cfdEntregues || familia(s) !== 'entrega')
+            const series = [...visiveis].reverse()
             const x = (d.series[0]?.points ?? []).map((p) => ms(String(p.t ?? p.x)))
+            // Lei de Little no cursor: vazao das ultimas 4 semanas (entregas acumuladas na data
+            // menos as de 28 dias antes, ou desde o inicio da janela), WIP comprometido (do ponto
+            // de compromisso ate antes da entrega) e lead time = WIP / vazao. Contas lineares,
+            // feitas uma vez por desenho.
+            const acumuladas = entrega?.points.map((p) => Number(p.y) || 0) ?? []
+            const wip = x.map((_, i) => comprometidas.reduce((soma, s) => soma + (Number(s.points[i]?.y) || 0), 0))
+            const QUATRO_SEMANAS = 28 * 86_400_000
+            let inicio = 0
+            const little = x.map((agora, i) => {
+              while (inicio < i && x[inicio]! < agora - QUATRO_SEMANAS) inicio += 1
+              const semanas = (agora - x[inicio]!) / (7 * 86_400_000)
+              if (!entrega || semanas <= 0) return null
+              const vazao = ((acumuladas[i] ?? 0) - (acumuladas[inicio] ?? 0)) / semanas
+              const lead = vazao > 0 ? (wip[i]! / vazao) * 7 : null
+              return t('metricas.cfd_little', {
+                vazao: numero(vazao, 1),
+                wip: numero(wip[i]!, 0),
+                lead: lead === null ? '—' : dias(lead),
+              })
+            })
+            // A linha do compromisso: no topo da primeira etapa comprometida (as series vao de baixo para cima).
+            const limite = comprometidas[0] ? { chave: comprometidas[0].key, rotulo: t('quadro.compromisso') } : undefined
             return (
               <AreaEmpilhada
                 titulo={t('metricas.cfd')}
+                limite={limite}
+                extra={(i) => little[i] ?? null}
                 nota={t('metricas.cfd_nota')}
+                acoes={
+                  <label className="ng-alternar mini">
+                    <input type="checkbox" checked={cfdEntregues} onChange={(e) => setCfdEntregues(e.target.checked)} />
+                    {t('metricas.cfd_mostrar_entregues')}
+                  </label>
+                }
                 x={x}
                 rotuloY={d.y_label ?? undefined}
                 formatarX={(v) => data(new Date(v).toISOString())}
-                series={series.map((s, i) => ({
+                series={series.map((s) => ({
                   chave: s.key,
-                  rotulo: s.label ?? s.key,
-                  valores: s.points.map((p) => Number(p.y) || 0),
-                  cor: corDaRampa(series.length - 1 - i, series.length),
+                  rotulo: rotulo(s),
+                  valores: valores(s),
+                  cor: cores.get(s.key) ?? 'var(--ng-cfd-entrega)',
                 }))}
                 tabela={{
-                  colunas: [t('metricas.data'), ...d.series.map((s) => s.label ?? s.key)],
-                  linhas: x.map((v, i) => [data(new Date(v).toISOString()), ...d.series.map((s) => Number(s.points[i]?.y) || 0)]),
+                  colunas: [t('metricas.data'), ...visiveis.map(rotulo)],
+                  linhas: x.map((v, i) => [data(new Date(v).toISOString()), ...visiveis.map((s) => valores(s)[i] ?? 0)]),
                 }}
               />
             )
@@ -474,6 +525,8 @@ function MetricasDoQuadro({ quadroId }: { quadroId: string }) {
             )
           }}
         </PainelDe>
+
+        <PainelPrevisao quadroId={quadroId} />
       </div>
 
       <section className="card ng-kmm" aria-label={t('kmm.titulo')}>

@@ -17,7 +17,8 @@ Two rules from SPEC §5 shape every route:
   ``metrics_advanced`` covers everything that needs a real analytics tier
   (CFD, scatter, aging, flow efficiency, blockers, demand, Little's Law);
   ``kmm_dashboard`` gates the maturity ladder on its own, since a workspace can
-  buy Business without wanting the KMM view turned on for every board.
+  buy Business without wanting the KMM view turned on for every board;
+  ``monte_carlo`` gates the read-only forecast panel (18/10/2026).
 """
 
 from __future__ import annotations
@@ -25,9 +26,12 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..deps import CurrentUser, get_board_or_404, get_session, require_capability, require_flag
+from ..errors import BadRequest
+from ..flow import forecast
 from ..flow.kmm import compute_kmm
 from ..flow.metrics import (
     MetricsContext,
@@ -62,6 +66,7 @@ from ..flow.metrics import (
 from ..flow.metrics import (
     throughput as throughput_metric,
 )
+from ..models import Card
 from ..schemas import KmmOut, SeriesOut, SummaryOut
 
 router = APIRouter(tags=["metrics"])
@@ -308,3 +313,46 @@ async def get_kmm(
 ) -> dict[str, Any]:
     """Per-level metric availability, current level and concrete next actions."""
     return compute_kmm(await _ctx(s, id, filters))
+
+
+# ---------------------------------------------------------------------------
+# monte_carlo — the read-only forecast panel (18/10/2026)
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/boards/{id}/metrics/forecast",
+    summary="Monte Carlo forecast from the board's own weekly throughput (read only)",
+    dependencies=[Depends(require_flag("monte_carlo"))],
+)
+async def get_forecast(
+    id: str,
+    question: str = Query("when", pattern="^(when|how_many)$"),
+    backlog_size: int = Query(10, ge=1, le=10_000, description="Items to deliver ('when')."),
+    days: int = Query(28, ge=1, le=3_650, description="Days ahead ('how_many')."),
+    sample_weeks: int | None = Query(None, ge=1, le=520, description="Weeks of history to sample."),
+    s: AsyncSession = Depends(get_session),
+    user: CurrentUser = Depends(require_capability("read_boards_metrics")),
+) -> dict[str, Any]:
+    """The simulator's two Monte Carlo questions on this board, without saving a run:
+    the same sample pool (the board's delivered-per-week history), trials and seed, so
+    both screens give the same answer. Every role that reads metrics can ask."""
+    board = await get_board_or_404(s, id)
+    delivered = (
+        await s.scalars(
+            select(Card.delivered_at).where(
+                Card.board_id == board["id"],
+                Card.delivered_at.is_not(None),
+                Card.archived.is_(False),
+            )
+        )
+    ).all()
+    samples = forecast.weekly_throughput_from_deliveries(iter(delivered), weeks=sample_weeks)
+    try:
+        if question == "when":
+            return forecast.monte_carlo_when(samples, backlog_size)
+        return forecast.monte_carlo_how_many(samples, days)
+    except ValueError as exc:
+        raise BadRequest(
+            str(exc), code="forecast_failed", details={"board_id": board["id"]}
+        ) from exc

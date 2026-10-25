@@ -107,3 +107,8 @@ export function rebalancear(mix: Record<ClasseServico, number>, classe: ClasseSe
   })
   return novo
 }
+
+/** Dias de hoje ate a data alvo (no minimo 1), para a pergunta "quantos ate a data?". */
+export function emDias(dataAlvo: string, hoje: string): number {
+  return Math.max(1, Math.round((Date.parse(`${dataAlvo}T00:00:00Z`) - Date.parse(`${hoje}T00:00:00Z`)) / 86_400_000))
+}

@@ -24,6 +24,10 @@ if (BASE_DIR / ".env").is_file() and not os.environ.get("NAGARE_IGNORE_DOTENV"):
     load_dotenv(BASE_DIR / ".env", override=False)
 
 
+#: Development-only JWT secret: a cold clone runs with it, production refuses it.
+_DEV_JWT_SECRET = "nagare-dev-secret-do-not-use-in-production"
+
+
 def _env_bool(key: str, default: bool) -> bool:
     raw = os.environ.get(key)
     if raw is None:
@@ -63,9 +67,7 @@ class Settings:
     # --- auth --------------------------------------------------------------
     # A dev default keeps a cold clone runnable; production must set the env var.
     jwt_secret: str = field(
-        default_factory=lambda: os.environ.get(
-            "NAGARE_JWT_SECRET", "nagare-dev-secret-do-not-use-in-production"
-        )
+        default_factory=lambda: os.environ.get("NAGARE_JWT_SECRET", _DEV_JWT_SECRET)
     )
     jwt_algorithm: str = "HS256"
     jwt_issuer: str = "nagare-kanban"
@@ -114,11 +116,11 @@ class Settings:
     )
     #: Seconds between webhook delivery rounds.
     webhook_interval_s: int = field(default_factory=lambda: _env_int("NAGARE_WEBHOOK_INTERVALO", 5))
-    #: Where people open a card (the link the Pampufa shows). The React screen of N2
-    #: will live under the platform's gateway; until then it is this server.
+    #: Where the standalone Nagare's screens live, ``/nagare`` included (19/10/2026): the
+    #: base of the card links outside the platform.
     public_url: str = field(
         default_factory=lambda: os.environ.get(
-            "NAGARE_URL_PUBLICA", "http://127.0.0.1:8770"
+            "NAGARE_URL_PUBLICA", "http://127.0.0.1:8770/nagare"
         ).rstrip("/")
     )
 
@@ -142,6 +144,32 @@ class Settings:
     demo_password: str = "nagare123"
     demo_login_email: str = "master@nagare.app"
     seed_random_seed: int = 20260816
+    #: Seed the demo workspace (six accounts sharing ``demo_password``) into an empty
+    #: database. On by default only in ``dev`` and ``teste``; homologation and production
+    #: never get it (platform A-IMP-8) and start with ``nagare criar-admin``.
+    demo_seed: bool = field(
+        default_factory=lambda: _env_bool(
+            "NAGARE_SEMENTE_DEMO",
+            os.environ.get("NAGARE_AMBIENTE", "dev") in {"dev", "teste"},
+        )
+    )
+
+    @property
+    def is_dev(self) -> bool:
+        """True in development and tests: the only places dev defaults are acceptable."""
+        return self.environment in {"dev", "teste"}
+
+    def check_production(self) -> None:
+        """Refuse to serve outside dev/teste with a development secret or the demo seed."""
+        if self.is_dev:
+            return
+        if not self.jwt_secret or self.jwt_secret == _DEV_JWT_SECRET:
+            raise SystemExit(
+                "NAGARE_JWT_SECRET is required outside dev/teste "
+                '(python -c "import secrets; print(secrets.token_urlsafe(48))").'
+            )
+        if self.demo_seed:
+            raise SystemExit("NAGARE_SEMENTE_DEMO must be off outside dev/teste.")
 
     @property
     def cors_origins(self) -> list[str]:

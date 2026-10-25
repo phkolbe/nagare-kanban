@@ -41,7 +41,7 @@ from .models import (
 )
 from .pampufa import EVENT_ARCHIVED, EVENT_DELIVERED, EVENT_MOVED, enqueue_webhook
 from .routers.boards import canonical_columns, create_board_from_template, next_card_key
-from .tenancy import project_key_for
+from .tenancy import local_role_in, project_key_for, role_from_pampufa
 
 __all__ = [
     "STAGES",
@@ -54,6 +54,7 @@ __all__ = [
     "overview",
     "person_user",
     "product_people",
+    "products_for",
     "resolve_at_origin",
     "stages_of",
     "swap_product_project",
@@ -67,14 +68,15 @@ TAG_RESOLVED_AT_ORIGIN = "resolvido-na-origem"
 
 def card_url(card: dict[str, Any]) -> str:
     """Where a person opens the card: the product's Tarefas module (N2), or the
-    standalone Nagare's board (N3: the same React screens at its root)."""
+    standalone Nagare's board (N3; ``NAGARE_URL_PUBLICA`` ends in ``/nagare`` since
+    19/10/2026, and the board is ``/board`` there)."""
     product = card.get("product_id")
     if settings.screens_url and product and product != PRODUCT_STANDALONE:
         return (
             f"{settings.screens_url}/{product}/tarefas/quadro/{card['board_id']}"
             f"?cartao={card['id']}"
         )
-    return f"{settings.public_url}/quadro/{card['board_id']}?cartao={card['id']}"
+    return f"{settings.public_url}/board/{card['board_id']}?cartao={card['id']}"
 
 
 # ---------------------------------------------------------------------------
@@ -270,13 +272,47 @@ def stages_of(columns: list[dict[str, Any]]) -> dict[str, str]:
 
 
 def _visible_products(user: dict[str, Any], linked: list[str]) -> list[str]:
-    """Every linked product for the gestor and the master; else the caller's own."""
+    """Every linked product for the gestor and for the local master, administrator and
+    viewer (18/10/2026); else the caller's own."""
     if user.get("via") != "pampufa":
-        return linked if user.get("role") == "master" else []
+        home = str(user.get("home_role") or user.get("role"))
+        return [p for p in linked if local_role_in(home, p) is not None]
     roles: dict[str, list[str]] = user.get("pampufa_roles") or {}
     if "pampufa.gestor" in roles.get("pampufa", []):
         return linked
     return [p for p in linked if any(r.startswith("nagare.") for r in roles.get(p, []))]
+
+
+async def products_for(s: AsyncSession, user: dict[str, Any]) -> list[dict[str, Any]]:
+    """The products the caller can open, with the role held in each (the product picker
+    of the standalone Nagare, 18/10/2026): the standalone one first, then every product
+    with a linked project and board."""
+    links = (await s.scalars(select(ProductLink).order_by(ProductLink.product_id))).all()
+    out: list[dict[str, Any]] = []
+    if user.get("via") == "pampufa":
+        roles = {scope: tuple(r) for scope, r in (user.get("pampufa_roles") or {}).items()}
+        held_in = lambda product: role_from_pampufa(roles, product)  # noqa: E731
+    else:
+        home = str(user.get("home_role") or user.get("role"))
+        held_in = lambda product: local_role_in(home, product)  # noqa: E731
+        out.append({"id": PRODUCT_STANDALONE, "role": home, "project": None, "board": None})
+    for link in links:
+        role = held_in(link.product_id)
+        if role is None:
+            continue
+        project = await s.get(Project, link.project_id)
+        board = await s.get(Board, link.board_id)
+        out.append(
+            {
+                "id": link.product_id,
+                "role": role,
+                "project": {"id": project.id, "key": project.key, "name": project.name}
+                if project
+                else None,
+                "board": {"id": board.id, "name": board.name} if board else None,
+            }
+        )
+    return out
 
 
 async def overview(s: AsyncSession, user: dict[str, Any]) -> dict[str, Any]:

@@ -1,4 +1,5 @@
-/** Filtros do quadro (projeto, classe, responsavel, etiqueta, bloqueado, tipo, texto) na URL. */
+/** Filtros do quadro (projeto, classe, responsavel, etiqueta, bloqueado, tipo, texto) na URL.
+ * A busca fica na linha do titulo; o resto, nas ferramentas do quadro (18/10/2026). */
 
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
@@ -8,24 +9,60 @@ import { useT } from '../../i18n'
 import { usePessoas, useProjetos } from './consultas'
 import { contarFiltros, FILTROS_VAZIOS, gravarFiltros, type Filtros } from './regras'
 
-export function BarraDeFiltros({ filtros, cartoes, total }: { filtros: Filtros; cartoes: Cartao[]; total: number }) {
-  const { t, eu } = useT()
+/** A busca de cartoes (sempre a vista na linha do titulo, 18/10/2026); filtra no servidor. */
+export function BuscaDeCartoes({ filtros }: { filtros: Filtros }) {
+  const { t } = useT()
   const [busca, setBusca] = useSearchParams()
-  const [aberto, setAberto] = useState(false)
   const [texto, setTexto] = useState(filtros.texto)
-  const projetos = useProjetos()
-  const pessoas = usePessoas()
-  const ativos = contarFiltros(filtros)
-  const etiquetas = [...new Set(cartoes.flatMap((c) => c.tags))].sort()
-
-  const aplicar = (parcial: Partial<Filtros>) => setBusca(gravarFiltros(busca, { ...filtros, ...parcial }), { replace: true })
-
+  // "Limpar" em outro lugar zera a busca: o campo acompanha.
+  useEffect(() => setTexto(filtros.texto), [filtros.texto])
   // O texto filtra no servidor: espera a pessoa parar de digitar.
   useEffect(() => {
     if (texto === filtros.texto) return
-    const espera = window.setTimeout(() => aplicar({ texto }), 350)
+    const espera = window.setTimeout(() => setBusca(gravarFiltros(busca, { ...filtros, texto }), { replace: true }), 350)
     return () => window.clearTimeout(espera)
   })
+  return (
+    <input
+      type="search"
+      data-busca
+      className="ng-busca"
+      placeholder={t('filtros.buscar')}
+      aria-label={t('filtros.buscar')}
+      value={texto}
+      onChange={(e) => setTexto(e.target.value)}
+    />
+  )
+}
+
+/**
+ * Selo de filtro ligado (18/10/2026): com as ferramentas fechadas, diz que ha filtro, segmento
+ * ou busca e quantos cartoes aparecem, e limpa tudo de uma vez.
+ */
+export function SeloFiltrado({ filtros, total, segmentado, limpar }: { filtros: Filtros; total: number; segmentado: boolean; limpar: () => void }) {
+  const { t } = useT()
+  if (contarFiltros(filtros) === 0 && !segmentado) return null
+  return (
+    <span className="ng-pilula ng-selo-filtrado">
+      {t('filtros.filtrado', { total })}
+      <button type="button" className="link" onClick={limpar}>
+        {t('filtros.limpar')}
+      </button>
+    </span>
+  )
+}
+
+/** O botao dos filtros (projeto, responsavel, etiqueta, tipo, classe, bloqueado), com o painel. */
+export function BotaoDeFiltros({ filtros, cartoes }: { filtros: Filtros; cartoes: Cartao[] }) {
+  const { t, eu } = useT()
+  const [busca, setBusca] = useSearchParams()
+  const [aberto, setAberto] = useState(false)
+  const projetos = useProjetos()
+  const pessoas = usePessoas()
+  const ativos = contarFiltros({ ...filtros, texto: '' })
+  const etiquetas = [...new Set(cartoes.flatMap((c) => c.tags))].sort()
+
+  const aplicar = (parcial: Partial<Filtros>) => setBusca(gravarFiltros(busca, { ...filtros, ...parcial }), { replace: true })
 
   const alternarClasse = (classe: ClasseServico) =>
     aplicar({
@@ -34,32 +71,14 @@ export function BarraDeFiltros({ filtros, cartoes, total }: { filtros: Filtros; 
 
   return (
     <div className="ng-filtros">
-      <input
-        type="search"
-        className="ng-busca"
-        placeholder={t('filtros.buscar')}
-        aria-label={t('filtros.buscar')}
-        value={texto}
-        onChange={(e) => setTexto(e.target.value)}
-      />
       <button type="button" className="btn sm ghost" aria-expanded={aberto} onClick={() => setAberto(!aberto)}>
         {t('filtros.titulo')}
         {ativos > 0 && <span className="contador">{ativos}</span>}
       </button>
       {ativos > 0 && (
-        <>
-          <span className="mini">{t('filtros.resultado', { total })}</span>
-          <button
-            type="button"
-            className="link"
-            onClick={() => {
-              setTexto('')
-              setBusca(gravarFiltros(busca, FILTROS_VAZIOS), { replace: true })
-            }}
-          >
-            {t('filtros.limpar')}
-          </button>
-        </>
+        <button type="button" className="link" onClick={() => setBusca(gravarFiltros(busca, { ...FILTROS_VAZIOS, texto: filtros.texto }), { replace: true })}>
+          {t('filtros.limpar')}
+        </button>
       )}
       {aberto && (
         <div className="popover ng-filtros-pop" role="dialog" aria-label={t('filtros.titulo')}>

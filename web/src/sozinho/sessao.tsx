@@ -6,6 +6,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 
+import { BASE_SOZINHO } from '../app/contexto'
 import { guardarToken, quandoPerderSessaoLocal, requisitarLocal, tokenLocal } from '../api/sessaoLocal'
 import type { Eu } from '../api/tipos'
 
@@ -29,8 +30,10 @@ export function ProvedorSessao({ children }: { children: ReactNode }) {
     guardarToken(null)
     queryClient.clear()
     try {
-      const aqui = `${window.location.pathname}${window.location.search}`
-      if (!aqui.endsWith('/entrar')) window.sessionStorage.setItem(CHAVE_VOLTA, aqui)
+      // O caminho para o roteador, sem a base `/nagare` (ele a poe de volta).
+      const caminho = window.location.pathname.slice(BASE_SOZINHO.length) || '/'
+      const aqui = `${caminho}${window.location.search}`
+      if (!caminho.endsWith('/sign-in')) window.sessionStorage.setItem(CHAVE_VOLTA, aqui)
     } catch {
       /* sem armazenamento */
     }

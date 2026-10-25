@@ -13,8 +13,10 @@ improved. The reasoning is written down in **[docs/KANBAN.md](docs/KANBAN.md)**.
 
 It runs two ways from the same code:
 
-- **Standalone**, at its own root (<http://127.0.0.1:8770>), with its local login, the
-  simulator and the administration of users, flags and plans.
+- **Standalone**, under `/nagare` (<http://127.0.0.1:8770/nagare/>, with English feature
+  names: `/nagare/board`, `/nagare/projects`, `/nagare/metrics`, `/nagare/simulator`,
+  `/nagare/admin/users`), with its local login, the simulator and the administration of
+  users, flags and plans. The root and the old Portuguese paths (`/quadro/...`) redirect.
 - **Inside the Pampufa platform**, as the **Tarefas** module of every product, with the
   platform's single sign-on, data isolated per product, and the platform's
   *providências* arriving as cards that answer back when they are delivered.
@@ -44,7 +46,7 @@ npm --prefix web ci && npm --prefix web run build
 uv run python run.py
 ```
 
-Then open **<http://127.0.0.1:8770>**.
+Then open **<http://127.0.0.1:8770/nagare/>**.
 
 The database is `NAGARE_DATABASE_URL`. In the Pampufa development setup it is the
 PostgreSQL of the platform's compose
@@ -120,7 +122,7 @@ wins over `.env`):
 | `NAGARE_PAMPUFA_CLIENTE_ID` / `NAGARE_PAMPUFA_CLIENTE_SEGREDO` | `nagare` / empty | The Nagare's service credential at the Pampufa |
 | `NAGARE_WEBHOOK_INTERVALO` | `5` | Seconds between webhook delivery rounds |
 | `NAGARE_URL_TELAS` | empty | The platform's screens (`.../grupo-sr`): a product's card links to its Tarefas module |
-| `NAGARE_URL_PUBLICA` | `http://127.0.0.1:8770` | The standalone Nagare, for the other card links |
+| `NAGARE_URL_PUBLICA` | `http://127.0.0.1:8770/nagare` | The standalone Nagare, `/nagare` included, for the other card links |
 
 ---
 

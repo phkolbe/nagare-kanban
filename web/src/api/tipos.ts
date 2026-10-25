@@ -54,7 +54,12 @@ export interface Eu {
   locale_chosen: Idioma | null
   via: 'pampufa' | 'local'
   product_id: string
+  /** Preferencias da tela, da pessoa (18/10/2026). */
+  preferences?: { board_toolbar: FormatoFerramentas }
 }
+
+/** As ferramentas do quadro: barra recolhivel acima dele ou painel flutuante. */
+export type FormatoFerramentas = 'bar' | 'panel'
 
 export interface Grupo {
   id: string

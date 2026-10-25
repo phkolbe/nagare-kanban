@@ -6,6 +6,7 @@ import { ProvedorNagare } from './app/contexto'
 import { TelaMetricas } from './app/telasSobDemanda'
 import { AjudaDeAtalhos, useAtalhos } from './componentes/Atalhos'
 import { ProvedorAvisos } from './componentes/Avisos'
+import { DicaDeSiglas } from './componentes/DicaDeSiglas'
 import { NaoEncontrada } from './componentes/NaoEncontrada'
 import { TelaConsolidado } from './features/consolidado/TelaConsolidado'
 import { TelaProjeto } from './features/projetos/TelaProjeto'
@@ -51,6 +52,7 @@ function ComIdioma() {
       <ProvedorIdioma>
         <ProvedorAvisos>
           <ComAtalhos />
+          <DicaDeSiglas />
         </ProvedorAvisos>
       </ProvedorIdioma>
     </ProvedorNagare>

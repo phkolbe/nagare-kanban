@@ -7,7 +7,8 @@ app generates (`app.openapi()`) and checked against every router in
 to capture the examples.
 
 - **Base path.** Every endpoint below is mounted under `/api/v1` (e.g.
-  `POST /api/v1/auth/login`). Standalone: `http://127.0.0.1:8770/api/v1`. Inside the
+  `POST /api/v1/auth/login`). Standalone: `http://127.0.0.1:8770/api/v1` (also
+  `http://127.0.0.1:8770/nagare/api/v1`, where the standalone screens call it). Inside the
   Pampufa the screens reach the same API through the platform's gateway at
   `/nagare/api/v1`.
 - **Discovery.** Swagger UI at `/docs`, ReDoc at `/redoc`, the raw OpenAPI document at
@@ -837,7 +838,7 @@ backoff (5s, doubling, at most 10 minutes) until it is confirmed; `attempts` and
 - a platform product's card, with `NAGARE_URL_TELAS` set:
   `{NAGARE_URL_TELAS}/{product}/tarefas/quadro/{board_id}?cartao={card_id}` (the Tarefas
   module);
-- otherwise: `{NAGARE_URL_PUBLICA}/quadro/{board_id}?cartao={card_id}` (the standalone
+- otherwise: `{NAGARE_URL_PUBLICA}/board/{board_id}?cartao={card_id}` (the standalone
   Nagare's board).
 
 ### 14.4 A new flow is a new project (NG14)
@@ -862,7 +863,7 @@ its history and metrics stay. Each link and unlink is kept in `history`
 | `NAGARE_PAMPUFA_CLIENTE_ID` / `NAGARE_PAMPUFA_CLIENTE_SEGREDO` | `nagare` / empty | The Nagare's service credential at the Pampufa (webhook, people) |
 | `NAGARE_WEBHOOK_INTERVALO` | `5` | Seconds between webhook rounds |
 | `NAGARE_URL_TELAS` | empty | The platform's screens (`.../grupo-sr`), for `card_url` |
-| `NAGARE_URL_PUBLICA` | `http://127.0.0.1:8770` | The standalone Nagare, for `card_url` |
+| `NAGARE_URL_PUBLICA` | `http://127.0.0.1:8770/nagare` | The standalone Nagare, `/nagare` included, for `card_url` |
 
 `.env.example` has the development values.
 

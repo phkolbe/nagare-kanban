@@ -1,21 +1,24 @@
 /**
  * O Nagare fora da plataforma (decisao de 17/10/2026, N3): login local, shell proprio, produto
  * `nagare`, ingles por padrao. As telas sao as mesmas da plataforma, mais a administracao.
+ * Quem pode tambem abre os produtos da Pampufa pelo seletor do trilho (18/10/2026).
  */
 
-import { useEffect } from 'react'
+import { useEffect, type ReactNode } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { Carregando } from '@pampufa/ui'
 
-import { PRODUTO_SOZINHO, ProvedorNagare } from '../app/contexto'
+import { caminhoEmIngles, ProvedorNagare } from '../app/contexto'
 import { TelaAdmin, TelaMetricas, TelaSimulador } from '../app/telasSobDemanda'
 import { ProvedorAvisos } from '../componentes/Avisos'
+import { DicaDeSiglas } from '../componentes/DicaDeSiglas'
 import { NaoEncontrada } from '../componentes/NaoEncontrada'
 import { TelaProjeto } from '../features/projetos/TelaProjeto'
 import { TelaProjetos } from '../features/projetos/TelaProjetos'
 import { TelaQuadro } from '../features/quadro/TelaQuadro'
 import { ProvedorIdioma } from '../i18n'
 import { rotaDoLinkAntigo } from './linksAntigos'
+import { ProvedorProdutoSozinho, useProdutoSozinho } from './produto'
 import { ProvedorSessao, useSessao } from './sessao'
 import { ShellSozinho } from './Shell'
 import { TelaEntrar } from './TelaEntrar'
@@ -23,11 +26,23 @@ import { TelaEntrar } from './TelaEntrar'
 export function AppSozinho() {
   return (
     <ProvedorSessao>
-      <ProvedorNagare modo="sozinho" produto={PRODUTO_SOZINHO} nomeProduto="Nagare">
-        <LinksAntigos />
-        <Rotas />
-      </ProvedorNagare>
+      <ProvedorProdutoSozinho>
+        <NagareDoProduto>
+          <LinksAntigos />
+          <Rotas />
+        </NagareDoProduto>
+      </ProvedorProdutoSozinho>
     </ProvedorSessao>
+  )
+}
+
+/** As telas trabalham no produto escolhido no seletor do trilho. */
+function NagareDoProduto({ children }: { children: ReactNode }) {
+  const { produto } = useProdutoSozinho()
+  return (
+    <ProvedorNagare modo="sozinho" produto={produto} nomeProduto="Nagare">
+      {children}
+    </ProvedorNagare>
   )
 }
 
@@ -48,8 +63,8 @@ function Rotas() {
   if (estado.situacao === 'anonimo') {
     return (
       <Routes>
-        <Route path="/entrar" element={<TelaEntrar />} />
-        <Route path="*" element={<Navigate to="/entrar" replace state={{ de: local.pathname }} />} />
+        <Route path="/sign-in" element={<TelaEntrar />} />
+        <Route path="*" element={<Navigate to="/sign-in" replace state={{ de: local.pathname }} />} />
       </Routes>
     )
   }
@@ -57,23 +72,34 @@ function Rotas() {
     <ProvedorIdioma>
       <ProvedorAvisos>
         <Routes>
-          <Route path="/entrar" element={<Navigate to="/quadro" replace />} />
+          <Route path="/sign-in" element={<Navigate to="/board" replace />} />
           <Route element={<ShellSozinho />}>
-            <Route index element={<Navigate to="quadro" replace />} />
-            <Route path="quadro" element={<TelaQuadro />} />
-            <Route path="quadro/:quadroId" element={<TelaQuadro />} />
-            <Route path="projetos" element={<TelaProjetos />} />
-            <Route path="projetos/:projetoId" element={<TelaProjeto />} />
-            <Route path="metricas" element={<TelaMetricas />} />
-            <Route path="metricas/:quadroId" element={<TelaMetricas />} />
-            <Route path="simulador" element={<TelaSimulador />} />
-            <Route path="simulador/:quadroId" element={<TelaSimulador />} />
-            <Route path="admin" element={<Navigate to="usuarios" replace />} />
+            <Route index element={<Navigate to="board" replace />} />
+            <Route path="board" element={<TelaQuadro />} />
+            <Route path="board/:quadroId" element={<TelaQuadro />} />
+            <Route path="projects" element={<TelaProjetos />} />
+            <Route path="projects/:projetoId" element={<TelaProjeto />} />
+            <Route path="metrics" element={<TelaMetricas />} />
+            <Route path="metrics/:quadroId" element={<TelaMetricas />} />
+            <Route path="simulator" element={<TelaSimulador />} />
+            <Route path="simulator/:quadroId" element={<TelaSimulador />} />
+            <Route path="admin" element={<Navigate to="users" replace />} />
             <Route path="admin/:aba" element={<TelaAdmin />} />
+            {/* Os nomes em portugues de antes de 19/10/2026 levam ao nome novo. */}
+            {['quadro', 'projetos', 'metricas', 'simulador', 'entrar'].map((antigo) => (
+              <Route key={antigo} path={`${antigo}/*`} element={<RotaAntiga />} />
+            ))}
             <Route path="*" element={<NaoEncontrada />} />
           </Route>
         </Routes>
+        <DicaDeSiglas />
       </ProvedorAvisos>
     </ProvedorIdioma>
   )
+}
+
+/** Um endereco com o nome antigo (`/nagare/quadro/1`) vai para o novo (`/nagare/board/1`). */
+function RotaAntiga() {
+  const local = useLocation()
+  return <Navigate to={`${caminhoEmIngles(local.pathname)}${local.search}${local.hash}`} replace />
 }

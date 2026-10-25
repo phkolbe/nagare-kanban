@@ -4,8 +4,10 @@ The Nagare serves several products at once (decision NG4): ``nagare`` for the
 standalone use and one product per Pampufa product (``pampufa``, ``sr-adv``,
 ``sr-gj``, ``batoom``). The product travels in the ``X-Produto`` header:
 
-* local login (HS256 token): no header means ``nagare``; only the ``master`` may
-  work in another product (support, flow swaps);
+* local login (HS256 token): no header means ``nagare``; in another product the
+  ``master`` works with its own role (support, flow swaps), the ``administrator``
+  and the ``viewer`` only read (as ``viewer``, decision of 18/10/2026) and every
+  other role is refused;
 * Pampufa login (EdDSA token): the header is mandatory, and the role comes from the
   token's roles **in that product** (NG6):
 
@@ -37,6 +39,7 @@ __all__ = [
     "PRODUCT_HEADER",
     "current_product",
     "in_product",
+    "local_role_in",
     "product_for_new_rows",
     "project_key_for",
     "read_product_header",
@@ -86,16 +89,32 @@ def read_product_header(headers: Any) -> str | None:
     return value
 
 
-def local_product(role: str, requested: str | None) -> str:
-    """The product a local-login user works in."""
+#: Local role -> the role it holds in a Pampufa product (decision of 18/10/2026).
+LOCAL_ROLES_IN_PRODUCTS: dict[str, str] = {
+    "master": "master",
+    "administrator": "viewer",
+    "viewer": "viewer",
+}
+
+
+def local_role_in(role: str, product: str) -> str | None:
+    """The role a local-login user holds in ``product`` (``None``: no access)."""
+    if product == PRODUCT_STANDALONE:
+        return role
+    return LOCAL_ROLES_IN_PRODUCTS.get(role)
+
+
+def local_product(role: str, requested: str | None) -> tuple[str, str]:
+    """The product a local-login user works in, and the role they hold there."""
     product = requested or PRODUCT_STANDALONE
-    if product != PRODUCT_STANDALONE and role != "master":
+    held = local_role_in(role, product)
+    if held is None:
         raise Forbidden(
-            "Only the master account can work in a Pampufa product with the local login.",
+            "Your local role cannot work in a Pampufa product.",
             code="product_forbidden",
             details={"product": product},
         )
-    return product
+    return product, held
 
 
 def role_from_pampufa(roles: dict[str, tuple[str, ...]], product: str) -> str | None:

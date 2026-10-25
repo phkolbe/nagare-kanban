@@ -1,6 +1,8 @@
 /**
  * A grade do quadro: faixa de segmento, grupos, cabecalho das colunas e os cartoes, com raias
- * por classe de servico (flag `service_classes`). Arrastar mostra onde o cartao pode cair.
+ * por classe de servico (flag `service_classes`). Arrastar mostra onde o cartao pode cair. Uma
+ * linha fina marca o ponto de compromisso (entre o montante e a jusante) e a navegacao por
+ * minimapa, setas e arrasto do fundo fica em `Navegacao.tsx` (18/10/2026).
  */
 
 import { useMemo, useRef, useState } from 'react'
@@ -22,6 +24,7 @@ import { CLASSES, type Cartao, type ClasseServico, type Coluna, type Quadro, typ
 import { useT } from '../../i18n'
 import { CartaoMini } from './CartaoMini'
 import { EditorWip, SeloWip } from './EditorWip'
+import { MiniMapa, SetasDaGrade, useGradeNaTela, usePanoramica } from './Navegacao'
 import { faixasDeGrupo, ordenarColunas, validarDestino, type Destino } from './regras'
 
 export interface AcoesDaGrade {
@@ -40,6 +43,7 @@ export function Grade({
   podePoliticas,
   recolhidas,
   alternarRecolhida,
+  compactos = false,
   acoes,
 }: {
   visao: VisaoQuadro
@@ -51,6 +55,8 @@ export function Grade({
   podePoliticas: boolean
   recolhidas: Set<string>
   alternarRecolhida: (id: string) => void
+  /** Cartoes compactos (18/10/2026): titulo numa linha e o resto numa linha so. */
+  compactos?: boolean
   acoes: AcoesDaGrade
 }) {
   const { t } = useT()
@@ -59,6 +65,8 @@ export function Grade({
   const [arrastado, setArrastado] = useState<Cartao | null>(null)
   const [sobre, setSobre] = useState<string | null>(null)
   const acabouDeArrastar = useRef(false)
+  const rolagem = useRef<HTMLDivElement>(null)
+  const panoramica = usePanoramica(rolagem)
   const sensores = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
   const hoje = hojeISO()
 
@@ -83,6 +91,11 @@ export function Grade({
 
   const largura = (c: Coluna) => (recolhidas.has(c.id) ? '44px' : 'minmax(248px, 1fr)')
   const modelo = colunas.map(largura).join(' ')
+  // A linha do compromisso: na primeira coluna a jusante que vem logo depois do montante.
+  const compromisso = colunas.findIndex((c, i) => i > 0 && c.segment === 'downstream' && colunas[i - 1]!.segment === 'upstream')
+  const ultimaLinha = raias ? 3 + classesDasRaias.length * 2 : 4
+  const contagem = useMemo(() => new Map([...porColuna].map(([id, lista]) => [id, lista.length])), [porColuna])
+  useGradeNaTela(rolagem, `${unificado}-${raias}-${visao.groups.length}`)
 
   const inicio = (e: DragStartEvent) => setArrastado((e.active.data.current?.cartao as Cartao) ?? null)
   const passar = (e: DragOverEvent) => setSobre((e.over?.data.current?.colunaId as string) ?? null)
@@ -111,8 +124,13 @@ export function Grade({
         setSobre(null)
       }}
     >
-      <div className="ng-grade-rolagem">
+      <MiniMapa alvo={rolagem} colunas={colunas} contagem={contagem} recolhidas={recolhidas} />
+      <div className="ng-grade-moldura">
+      <div className="ng-grade-rolagem" ref={rolagem} {...panoramica}>
         <div className="ng-grade" style={{ gridTemplateColumns: modelo }}>
+          {compromisso > 0 && (
+            <div className="ng-compromisso" style={{ gridColumn: compromisso + 1, gridRow: `1 / ${ultimaLinha + 1}` }} aria-hidden="true" />
+          )}
           {unificado &&
             segmentos.map((segmento) => {
               const doSegmento = colunas.filter((c) => c.segment === segmento)
@@ -123,6 +141,11 @@ export function Grade({
                   className={`ng-faixa ${segmento}`}
                   style={{ gridColumn: `${primeira} / span ${doSegmento.length}`, gridRow: 1 }}
                 >
+                  {segmento === 'downstream' && compromisso > 0 && (
+                    <span className="ng-faixa-compromisso" title={t('quadro.ponto_compromisso')}>
+                      ◆ {t('quadro.compromisso')}
+                    </span>
+                  )}
                   {t(`segmento.${segmento}`)}
                 </div>
               )
@@ -200,6 +223,7 @@ export function Grade({
                       sleDias={quadro.sle_days}
                       hoje={hoje}
                       podeArrastar={podeMover}
+                      compacto={compactos}
                       abrir={() => abrir(cartao)}
                       menuMover={() => acoes.menuMover(cartao)}
                     />
@@ -209,6 +233,8 @@ export function Grade({
             ]
           })}
         </div>
+      </div>
+      <SetasDaGrade alvo={rolagem} chave={`${colunas.length}-${recolhidas.size}`} />
       </div>
       <DragOverlay dropAnimation={null}>
         {arrastado ? (
@@ -243,6 +269,7 @@ function CabecalhoColuna({
   const { t } = useT()
   return (
     <div
+      data-coluna={indice}
       className={`ng-cabecalho${recolhida ? ' recolhida' : ''}${destino ? ` alvo-${destino.estado}` : ''}`}
       style={{ gridColumn: indice + 1, gridRow: 3, borderTopColor: coluna.color ?? undefined }}
       title={coluna.description ?? undefined}

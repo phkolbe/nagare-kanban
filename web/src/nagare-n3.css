@@ -4,6 +4,25 @@
 :root {
   --ng-rampa-a: #b9d3e6;
   --ng-rampa-b: #24548f;
+  /* CFD (18/10/2026): uma cor por etapa, 8 matizes numa ordem validada para as vizinhas
+     (daltonismo e visao normal) e, da 9a em diante, os mesmos mais claros; entrega em neutro. */
+  --ng-cfd-1: #2a78d6;
+  --ng-cfd-2: #eb6834;
+  --ng-cfd-3: #1baf7a;
+  --ng-cfd-4: #eda100;
+  --ng-cfd-5: #e87ba4;
+  --ng-cfd-6: #008300;
+  --ng-cfd-7: #6250d6;
+  --ng-cfd-8: #e34948;
+  --ng-cfd-9: #86b6ef;
+  --ng-cfd-10: #f59a6e;
+  --ng-cfd-11: #5fd6c0;
+  --ng-cfd-12: #f6c75a;
+  --ng-cfd-13: #f2a8c4;
+  --ng-cfd-14: #4fb04f;
+  --ng-cfd-15: #9a8ef0;
+  --ng-cfd-16: #ef8a89;
+  --ng-cfd-entrega: #4b5563;
 }
 
 /* ------------------------------------------------------------------ tema escuro (so no Nagare sozinho) */
@@ -26,17 +45,192 @@ html[data-theme='dark'] {
   --ng-expedite: #f08a80;
   --ng-rampa-a: #2a4563;
   --ng-rampa-b: #8fb6e0;
+  --ng-cfd-1: #3987e5;
+  --ng-cfd-2: #d95926;
+  --ng-cfd-3: #199e70;
+  --ng-cfd-4: #c98500;
+  --ng-cfd-5: #d55181;
+  --ng-cfd-6: #008300;
+  --ng-cfd-7: #9085e9;
+  --ng-cfd-8: #e66767;
+  --ng-cfd-9: #86b6ef;
+  --ng-cfd-10: #f08a5d;
+  --ng-cfd-11: #4cc79a;
+  --ng-cfd-12: #e8b13d;
+  --ng-cfd-13: #e889ab;
+  --ng-cfd-14: #3fa83f;
+  --ng-cfd-15: #b3abf3;
+  --ng-cfd-16: #f2847f;
+  --ng-cfd-entrega: #435063;
   color-scheme: dark;
 }
 html[data-theme='dark'] body {
   background: var(--bg);
   color: var(--text);
 }
+/* O visual da plataforma (@pampufa/ui) so tem o tema claro e fixa varias cores claras (barra de
+   cima, menus, abas, botoes, etiquetas, avisos, campos); aqui cada uma ganha o seu passo escuro
+   (decisao de 18/10/2026). O azul de destaque fica claro no escuro: o texto sobre ele e escuro. */
+html[data-theme='dark'] {
+  --ng-sobre-navy: #0f1722;
+  --ng-suave: #1f2c3d;
+  --ng-suave-forte: #26364a;
+}
+html[data-theme='dark'] .topbar {
+  background: var(--card);
+  border-bottom-color: var(--line);
+}
+html[data-theme='dark'] .popover,
+html[data-theme='dark'] .seletor-lista,
+html[data-theme='dark'] .stat {
+  background: var(--card);
+  border-color: var(--line);
+  color: var(--text);
+}
+html[data-theme='dark'] .seletor-lista button:hover,
+html[data-theme='dark'] .ng-busca-pop button:hover,
+html[data-theme='dark'] .ng-menu-pop > button:hover {
+  background: var(--ng-suave);
+}
+html[data-theme='dark'] tbody tr:hover {
+  background: var(--ng-suave);
+}
+html[data-theme='dark'] .btn,
+html[data-theme='dark'] .abas a.active,
+html[data-theme='dark'] .abas button[aria-selected='true'],
+html[data-theme='dark'] .ng-avatar {
+  color: var(--ng-sobre-navy);
+}
+html[data-theme='dark'] .btn:hover {
+  background: #b3cdea;
+}
+html[data-theme='dark'] .btn.sec,
+html[data-theme='dark'] .abas a,
+html[data-theme='dark'] .abas button {
+  background: var(--ng-suave);
+  color: var(--navy);
+}
+html[data-theme='dark'] .btn.sec:hover,
+html[data-theme='dark'] .abas a:hover,
+html[data-theme='dark'] .abas button:hover {
+  background: var(--ng-suave-forte);
+}
+html[data-theme='dark'] .abas a.active,
+html[data-theme='dark'] .abas button[aria-selected='true'] {
+  background: var(--navy);
+}
+html[data-theme='dark'] .btn.ghost {
+  background: transparent;
+  color: var(--navy);
+  border-color: var(--line);
+}
+html[data-theme='dark'] .btn.ghost:hover {
+  background: var(--ng-suave);
+}
+html[data-theme='dark'] .btn.danger {
+  background: #45201f;
+  color: var(--red);
+}
+html[data-theme='dark'] .link {
+  border-bottom-color: #3d5068;
+}
+html[data-theme='dark'] label {
+  color: var(--muted);
+}
+html[data-theme='dark'] input:focus,
+html[data-theme='dark'] select:focus,
+html[data-theme='dark'] textarea:focus {
+  outline-color: #2f4c6e;
+  border-color: var(--navy);
+}
+html[data-theme='dark'] .pill {
+  background: #183a2c;
+  border-color: #275a43;
+  color: #8fd6b1;
+}
+html[data-theme='dark'] .t-cinza {
+  background: #253244;
+  color: #c3cfdc;
+}
+html[data-theme='dark'] .t-azul {
+  background: #1d3550;
+  color: #a9c9ee;
+}
+html[data-theme='dark'] .t-verde {
+  background: #183a2c;
+  color: #8fd6b1;
+}
+html[data-theme='dark'] .t-amarelo {
+  background: #3d3018;
+  color: #ecc77f;
+}
+html[data-theme='dark'] .t-vermelho {
+  background: #45201f;
+  color: #f3a59d;
+}
+html[data-theme='dark'] .t-ouro {
+  background: #3a2f1e;
+  color: #e3c08c;
+}
+html[data-theme='dark'] .aviso.info {
+  background: #1a2f47;
+  border-color: #2a4a6e;
+  color: #a9c9ee;
+}
+html[data-theme='dark'] .aviso.alerta {
+  background: #352a16;
+  border-color: #5a4521;
+  color: #ecc77f;
+}
+html[data-theme='dark'] .aviso.erro {
+  background: #3b1d1c;
+  border-color: #64302d;
+  color: #f3a59d;
+}
+html[data-theme='dark'] .aviso.ok {
+  background: #163428;
+  border-color: #275a43;
+  color: #8fd6b1;
+}
+html[data-theme='dark'] .modulo-link {
+  background: var(--ng-suave);
+}
+html[data-theme='dark'] .modulo-link:hover,
+html[data-theme='dark'] .modulo-icone {
+  background: var(--card);
+}
+
+/* Nagare: faixas, alvos de arrastar, WIP, prazos e selos que tinham fundo claro fixo. */
 html[data-theme='dark'] .ng-faixa.upstream {
   background: #1b2a3b;
 }
 html[data-theme='dark'] .ng-faixa.downstream {
   background: #2a2619;
+}
+html[data-theme='dark'] .alvo-ok {
+  background: #183a2c;
+}
+html[data-theme='dark'] .alvo-aviso {
+  background: #352a16;
+}
+html[data-theme='dark'] .alvo-invalido {
+  background: #2a1f24;
+}
+html[data-theme='dark'] .ng-prazo.vencido,
+html[data-theme='dark'] .ng-wip.over,
+html[data-theme='dark'] .ng-bloqueio-ativo {
+  background: #45201f;
+}
+html[data-theme='dark'] .ng-prazo.proximo,
+html[data-theme='dark'] .ng-wip.at_limit,
+html[data-theme='dark'] .ng-providencia.resolvida {
+  background: #3d3018;
+}
+html[data-theme='dark'] .ng-providencia {
+  background: #3a2f1e;
+}
+html[data-theme='dark'] .ng-wip.under {
+  background: #1d3550;
 }
 html[data-theme='dark'] input,
 html[data-theme='dark'] select,
@@ -216,6 +410,7 @@ kbd {
 }
 .ng-dica {
   position: absolute;
+  white-space: pre-line;
   top: 4px;
   right: 4px;
   max-width: 70%;
@@ -619,4 +814,53 @@ kbd {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* ------------------------------------------------------------------ previsao Monte Carlo nas metricas */
+.ng-previsao-pedido {
+  align-items: flex-end;
+}
+.ng-previsao-pedido .abas {
+  flex: none;
+  margin: 0 0 13px;
+}
+
+/* ------------------------------------------------------------------ dica das siglas (18/10/2026) */
+.ng-dica-sigla {
+  position: fixed;
+  z-index: 100;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.35;
+  pointer-events: none;
+}
+
+/* A linha do ponto de compromisso dentro do CFD (18/10/2026). */
+.ng-cfd-limite {
+  stroke: var(--gold);
+  stroke-width: 2;
+  stroke-dasharray: 5 3;
+}
+.ng-cfd-limite-rotulo {
+  fill: var(--gold-texto);
+  font-size: 11px;
+  font-weight: 600;
+  paint-order: stroke;
+  stroke: var(--card);
+  stroke-width: 3px;
+}
+
+/* Menu lateral recolhido do Nagare sozinho (19/10/2026): o item bloqueado e o selo do plano
+   seguem o resto (so o icone; o plano aparece no menu da pessoa). */
+.shell.recolhido .side nav .ng-item-bloqueado {
+  justify-content: center;
+  padding: 10px 0;
+}
+.shell.recolhido .side .foot .tag {
+  display: none;
 }
