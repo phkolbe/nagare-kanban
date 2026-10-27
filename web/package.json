@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
-    "@pampufa/ui": "git+https://github.com/phkolbe/pampufa-sdk.git#v0.18.1",
+    "@pampufa/ui": "git+https://github.com/phkolbe/pampufa-sdk.git#v0.19.2",
     "@tanstack/react-query": "^5.62.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
