@@ -117,7 +117,14 @@ def db(database_url: str) -> Iterator[Database]:
 def _user_rows(database_url: str) -> dict[str, dict[str, Any]]:
     database = connect(database_url)
     try:
-        return {row["role"]: row for row in database.q("SELECT * FROM users")}
+        # One account per role: the per-role demo accounts (the Grupo SR "everything"
+        # master@/admin@ share a role with them and are left out).
+        por_papel = set(ROLE_EMAILS.values())
+        return {
+            row["role"]: row
+            for row in database.q("SELECT * FROM users")
+            if row["email"] in por_papel
+        }
     finally:
         database.close()
 

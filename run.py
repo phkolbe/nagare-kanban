@@ -132,6 +132,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"    nagare.editor@grupo-sr.com.br     editor          {settings.demo_password}")
     print(f"    nagare.leitor@grupo-sr.com.br     viewer          {settings.demo_password}")
     print(f"    nagare.simulador@grupo-sr.com.br  simulator       {settings.demo_password}")
+    print(f"    master@grupo-sr.com.br            master          {settings.demo_password}")
+    print(f"    admin@grupo-sr.com.br             administrator   {settings.demo_password}")
     print("    (system@nagare.app is an API-only identity and cannot sign in)")
     print()
     print("  Press Ctrl+C to stop.")
