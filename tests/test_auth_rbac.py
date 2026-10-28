@@ -31,14 +31,14 @@ from backend.app.security import encode_token
 from sqlhelper import Database
 
 API = "/api/v1"
-PASSWORD = "nagare123"
+PASSWORD = "teste12345"
 
 ROLE_EMAILS: dict[str, str] = {
-    "master": "master@nagare.app",
-    "administrator": "admin@nagare.app",
-    "editor": "editor@nagare.app",
-    "viewer": "viewer@nagare.app",
-    "simulator": "simulator@nagare.app",
+    "master": "nagare.master@grupo-sr.com.br",
+    "administrator": "nagare.admin@grupo-sr.com.br",
+    "editor": "nagare.editor@grupo-sr.com.br",
+    "viewer": "nagare.leitor@grupo-sr.com.br",
+    "simulator": "nagare.simulador@grupo-sr.com.br",
     "system": "system@nagare.app",
 }
 
@@ -212,10 +212,11 @@ def test_login_succeeds_for_every_interactive_role(client, role: str) -> None:
 
 def test_login_is_case_and_whitespace_insensitive_on_email(client) -> None:
     response = client.post(
-        f"{API}/auth/login", json={"email": "  MASTER@Nagare.App  ", "password": PASSWORD}
+        f"{API}/auth/login",
+        json={"email": "  NAGARE.Master@Grupo-SR.com.br  ", "password": PASSWORD},
     )
     assert response.status_code == 200, response.text
-    assert response.json()["user"]["email"] == "master@nagare.app"
+    assert response.json()["user"]["email"] == "nagare.master@grupo-sr.com.br"
 
 
 def test_login_stamps_last_login_at(client, db: Database) -> None:

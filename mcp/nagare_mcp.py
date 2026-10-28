@@ -29,8 +29,8 @@ Setup
 
        claude mcp add nagare \
            --env NAGARE_URL=http://127.0.0.1:8770 \
-           --env NAGARE_EMAIL=master@nagare.app \
-           --env NAGARE_PASSWORD=nagare123 \
+           --env NAGARE_EMAIL=nagare.master@grupo-sr.com.br \
+           --env NAGARE_PASSWORD=teste12345 \
            -- python C:/MyWorkspace/claude-code/meu-kanban/mcp/nagare_mcp.py
 
 3. Or check a ``.mcp.json`` into the repository so the whole team gets it::

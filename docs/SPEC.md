@@ -576,7 +576,7 @@ Non-negotiables:
 ## 11. Seed data (CORE) — must make screenshots look real
 
 - Workspace "Nagare", plan `business`, all flags on.
-- 6 users covering every role. Login: `master@nagare.app` / `nagare123` (all users share
+- 6 users covering every role. Login: `nagare.master@grupo-sr.com.br` / `teste12345` (all users share
   this password for the demo).
 - Projects: `NGR` Nagare Platform, `PAY` Payments Revamp, `MOB` Mobile App,
   `INF` Infra Reliability.

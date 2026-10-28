@@ -3,7 +3,7 @@
 This describes the API **as implemented**: it was written from the OpenAPI document the
 app generates (`app.openapi()`) and checked against every router in
 `backend/app/routers/` plus `deps.py`, `tenancy.py`, `pampufa.py`, `integration.py` and
-`errors.py`. The live server (`python run.py`, `master@nagare.app` / `nagare123`) was used
+`errors.py`. The live server (`python run.py`, `nagare.master@grupo-sr.com.br` / `teste12345`) was used
 to capture the examples.
 
 - **Base path.** Every endpoint below is mounted under `/api/v1` (e.g.
@@ -61,7 +61,7 @@ A hand-rolled **HS256 JWT** (`backend/app/security.py`, stdlib only), minted by
 
 ```
 POST /api/v1/auth/login
-{"email": "master@nagare.app", "password": "nagare123"}
+{"email": "nagare.master@grupo-sr.com.br", "password": "teste12345"}
 ```
 
 ```json
@@ -72,7 +72,7 @@ POST /api/v1/auth/login
   "expires_in": 43200,
   "user": {
     "id": "59888dd1-780e-44d1-958c-12e1de458f5a",
-    "email": "master@nagare.app", "name": "Yuki Tanaka", "role": "master",
+    "email": "nagare.master@grupo-sr.com.br", "name": "Yuki Tanaka", "role": "master",
     "is_active": true, "created_at": "2025-07-12T08:00:00Z",
     "last_login_at": "2026-08-16T13:04:46Z"
   }
@@ -343,7 +343,7 @@ every product (NG15: the Grupo SR runs on enterprise with everything on).
 
 ```json
 {
-  "id": "59888dd1-...", "email": "master@nagare.app", "name": "Yuki Tanaka",
+  "id": "59888dd1-...", "email": "nagare.master@grupo-sr.com.br", "name": "Yuki Tanaka",
   "role": "master", "is_active": true, "created_at": "...", "last_login_at": "...",
   "role_label": "Master",
   "role_description": "Owns the workspace: billing plan, feature flags, users and every board.",
@@ -711,8 +711,8 @@ python run.py                          # http://127.0.0.1:8770
 
 claude mcp add nagare \
     --env NAGARE_URL=http://127.0.0.1:8770 \
-    --env NAGARE_EMAIL=master@nagare.app \
-    --env NAGARE_PASSWORD=nagare123 \
+    --env NAGARE_EMAIL=nagare.master@grupo-sr.com.br \
+    --env NAGARE_PASSWORD=teste12345 \
     -- python C:/MyWorkspace/claude-code/meu-kanban/mcp/nagare_mcp.py
 ```
 

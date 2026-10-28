@@ -44,11 +44,11 @@ from backend.app.security import encode_token  # noqa: E402
 from sqlhelper import Database, connect  # noqa: E402
 
 ROLE_EMAILS: dict[str, str] = {
-    "master": "master@nagare.app",
-    "administrator": "admin@nagare.app",
-    "editor": "editor@nagare.app",
-    "viewer": "viewer@nagare.app",
-    "simulator": "simulator@nagare.app",
+    "master": "nagare.master@grupo-sr.com.br",
+    "administrator": "nagare.admin@grupo-sr.com.br",
+    "editor": "nagare.editor@grupo-sr.com.br",
+    "viewer": "nagare.leitor@grupo-sr.com.br",
+    "simulator": "nagare.simulador@grupo-sr.com.br",
     "system": "system@nagare.app",
 }
 
