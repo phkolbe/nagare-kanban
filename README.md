@@ -53,7 +53,7 @@ PostgreSQL of the platform's compose
 (`postgresql+asyncpg://nagare:nagare@127.0.0.1:5432/nagare` — use `127.0.0.1`, not
 `localhost`, on Windows); without it, a SQLite file in `data/` keeps a cold clone runnable.
 The first run applies the Alembic migrations (`ng_0001`–`ng_0003`) and seeds a complete
-demo workspace: 6 users, 4 projects, 2 boards, 260+ cards with twelve months of
+demo workspace: 8 users, 4 projects, 2 boards, 260+ cards with twelve months of
 back-dated movement history, blockers, sealed envelopes and cards in flight — enough
 that every chart in the product is populated. Seeding is **deterministic**
 (`random.Random(20260816)`) and **idempotent** (skipped when the `users` table is
@@ -96,6 +96,8 @@ All demo accounts share the password **`teste12345`**.
 | `nagare.editor@grupo-sr.com.br` | editor | Create, edit and move cards |
 | `nagare.leitor@grupo-sr.com.br` | viewer | Read boards and metrics |
 | `nagare.simulador@grupo-sr.com.br` | simulator | Read operational boards, full control of simulator boards |
+| `master@grupo-sr.com.br` | master | The Grupo SR "everything" account (also administers every product on the Pampufa) |
+| `admin@grupo-sr.com.br` | administrator | The Grupo SR "everything" administrator (also on the Pampufa) |
 | `system@nagare.app` | system | API/MCP identity — **cannot sign in to the UI** |
 
 Inside the Pampufa nobody signs in here: people arrive with the platform's token and

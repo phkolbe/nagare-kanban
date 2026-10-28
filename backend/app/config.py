@@ -144,7 +144,7 @@ class Settings:
     demo_password: str = "teste12345"
     demo_login_email: str = "nagare.master@grupo-sr.com.br"
     seed_random_seed: int = 20260816
-    #: Seed the demo workspace (six accounts sharing ``demo_password``) into an empty
+    #: Seed the demo workspace (eight accounts sharing ``demo_password``) into an empty
     #: database. On by default only in ``dev`` and ``teste``; homologation and production
     #: never get it (platform A-IMP-8) and start with ``nagare criar-admin``.
     demo_seed: bool = field(

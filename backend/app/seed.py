@@ -71,6 +71,10 @@ USERS: list[dict[str, str]] = [
     {"email": "nagare.leitor@grupo-sr.com.br", "name": "Alice Whitfield", "role": "viewer"},
     {"email": "nagare.simulador@grupo-sr.com.br", "name": "Sofia Almeida", "role": "simulator"},
     {"email": "system@nagare.app", "name": "Nagare Integration", "role": "system"},
+    # The Grupo SR "everything" accounts (27/10/2026): same e-mail as on the Pampufa, where
+    # they administer every product; linked on the first sign-in through the platform.
+    {"email": "master@grupo-sr.com.br", "name": "Master (tudo)", "role": "master"},
+    {"email": "admin@grupo-sr.com.br", "name": "Administrador (tudo)", "role": "administrator"},
 ]
 
 PROJECTS: list[dict[str, Any]] = [

@@ -585,7 +585,8 @@ def test_the_workspace_can_never_lose_its_last_master(
     workspace, is asserted below.
     """
     seeded_id = users["master"]["id"]
-    assert db.scalar("SELECT COUNT(*) FROM users WHERE role='master' AND is_active=TRUE") == 1
+    # The seed has two masters: nagare.master@ and the Grupo SR master@grupo-sr.com.br.
+    assert db.scalar("SELECT COUNT(*) FROM users WHERE role='master' AND is_active=TRUE") == 2
 
     # A non-master with manage_users may not touch a master account at all.
     for payload in ({"role": "editor"}, {"is_active": False}):
@@ -624,7 +625,7 @@ def test_the_workspace_can_never_lose_its_last_master(
     assert second.status_code == 201, second.text
     second_id = second.json()["id"]
     try:
-        assert db.scalar("SELECT COUNT(*) FROM users WHERE role='master' AND is_active=TRUE") == 2
+        assert db.scalar("SELECT COUNT(*) FROM users WHERE role='master' AND is_active=TRUE") == 3
         demoted = client.patch(f"{API}/users/{second_id}", json={"role": "editor"}, headers=master)
         assert demoted.status_code == 200, demoted.text
         assert demoted.json()["role"] == "editor"
