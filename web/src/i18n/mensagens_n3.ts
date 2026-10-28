@@ -19,7 +19,7 @@ export const ptN3 = {
   'entrar.vazio': 'Informe o e-mail e a senha para entrar.',
   'entrar.invalido': 'E-mail e senha não conferem.',
   'entrar.bloqueado': 'Tentativas demais. Espere um pouco e tente de novo.',
-  'entrar.demo': 'Demonstração: entre como master@nagare.app com a senha nagare123 (vale para todas as contas da demonstração).',
+  'entrar.demo': 'Demonstração: entre como nagare.master@grupo-sr.com.br com a senha teste12345 (vale para todas as contas da demonstração).',
 
   'menu.principal': 'Menu principal',
   'menu.kanban': 'Kanban',
@@ -417,7 +417,7 @@ export const enN3: Record<ChaveN3, string> = {
   'entrar.vazio': 'Enter your email and password to sign in.',
   'entrar.invalido': 'That email and password combination was not recognised.',
   'entrar.bloqueado': 'Too many attempts. Wait a little and try again.',
-  'entrar.demo': 'Demo workspace: sign in as master@nagare.app with the password nagare123 (shared by every seeded account).',
+  'entrar.demo': 'Demo workspace: sign in as nagare.master@grupo-sr.com.br with the password teste12345 (shared by every seeded account).',
 
   'menu.principal': 'Main menu',
   'menu.kanban': 'Kanban',

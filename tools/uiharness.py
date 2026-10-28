@@ -16,7 +16,7 @@ BASE = "http://127.0.0.1:8770"
 API = f"{BASE}/api/v1"
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
-MASTER = {"email": "master@nagare.app", "password": "nagare123"}
+MASTER = {"email": "nagare.master@grupo-sr.com.br", "password": "teste12345"}
 TOKEN_KEY = "nagare.token"
 THEME_KEY = "nagare.theme"
 

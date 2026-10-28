@@ -65,11 +65,11 @@ __all__ = ["SeedSummary", "is_empty", "seed", "seed_if_empty"]
 # ---------------------------------------------------------------------------
 
 USERS: list[dict[str, str]] = [
-    {"email": "master@nagare.app", "name": "Yuki Tanaka", "role": "master"},
-    {"email": "admin@nagare.app", "name": "Marina Duarte", "role": "administrator"},
-    {"email": "editor@nagare.app", "name": "Caio Ribeiro", "role": "editor"},
-    {"email": "viewer@nagare.app", "name": "Alice Whitfield", "role": "viewer"},
-    {"email": "simulator@nagare.app", "name": "Sofia Almeida", "role": "simulator"},
+    {"email": "nagare.master@grupo-sr.com.br", "name": "Yuki Tanaka", "role": "master"},
+    {"email": "nagare.admin@grupo-sr.com.br", "name": "Marina Duarte", "role": "administrator"},
+    {"email": "nagare.editor@grupo-sr.com.br", "name": "Caio Ribeiro", "role": "editor"},
+    {"email": "nagare.leitor@grupo-sr.com.br", "name": "Alice Whitfield", "role": "viewer"},
+    {"email": "nagare.simulador@grupo-sr.com.br", "name": "Sofia Almeida", "role": "simulator"},
     {"email": "system@nagare.app", "name": "Nagare Integration", "role": "system"},
 ]
 
@@ -79,7 +79,7 @@ PROJECTS: list[dict[str, Any]] = [
         "name": "Nagare Platform",
         "color": "#3b7ea1",
         "status": "active",
-        "owner": "master@nagare.app",
+        "owner": "nagare.master@grupo-sr.com.br",
         "weight": 0.34,
         "description": "The flow-management product itself: board, metrics and policies.",
     },
@@ -88,7 +88,7 @@ PROJECTS: list[dict[str, Any]] = [
         "name": "Payments Revamp",
         "color": "#a1683b",
         "status": "active",
-        "owner": "admin@nagare.app",
+        "owner": "nagare.admin@grupo-sr.com.br",
         "weight": 0.26,
         "description": "Rebuild of the charge, refund and settlement pipeline.",
     },
@@ -97,7 +97,7 @@ PROJECTS: list[dict[str, Any]] = [
         "name": "Mobile App",
         "color": "#6b4fa1",
         "status": "active",
-        "owner": "editor@nagare.app",
+        "owner": "nagare.editor@grupo-sr.com.br",
         "weight": 0.22,
         "description": "iOS and Android clients for field teams.",
     },
@@ -106,7 +106,7 @@ PROJECTS: list[dict[str, Any]] = [
         "name": "Infra Reliability",
         "color": "#3f8f6f",
         "status": "discovery",
-        "owner": "admin@nagare.app",
+        "owner": "nagare.admin@grupo-sr.com.br",
         "weight": 0.18,
         "description": "Availability, backup, observability and cost of the platform.",
     },
@@ -1104,9 +1104,9 @@ async def _seed_cards(
     builder = _Builder()
 
     workers = [
-        users["master@nagare.app"]["id"],
-        users["admin@nagare.app"]["id"],
-        users["editor@nagare.app"]["id"],
+        users["nagare.master@grupo-sr.com.br"]["id"],
+        users["nagare.admin@grupo-sr.com.br"]["id"],
+        users["nagare.editor@grupo-sr.com.br"]["id"],
     ]
     movers = [*workers, users["system@nagare.app"]["id"]]
 

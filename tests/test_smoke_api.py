@@ -72,15 +72,15 @@ def test_unknown_page_falls_back_to_the_spa(client) -> None:
 @pytest.mark.parametrize(
     "role,email",
     [
-        ("master", "master@nagare.app"),
-        ("administrator", "admin@nagare.app"),
-        ("editor", "editor@nagare.app"),
-        ("viewer", "viewer@nagare.app"),
-        ("simulator", "simulator@nagare.app"),
+        ("master", "nagare.master@grupo-sr.com.br"),
+        ("administrator", "nagare.admin@grupo-sr.com.br"),
+        ("editor", "nagare.editor@grupo-sr.com.br"),
+        ("viewer", "nagare.leitor@grupo-sr.com.br"),
+        ("simulator", "nagare.simulador@grupo-sr.com.br"),
     ],
 )
 def test_login_succeeds_for_every_interactive_role(client, role: str, email: str) -> None:
-    response = client.post("/api/v1/auth/login", json={"email": email, "password": "nagare123"})
+    response = client.post("/api/v1/auth/login", json={"email": email, "password": "teste12345"})
     _skip_if_missing(response, "POST /auth/login")
     assert response.status_code == 200, response.text
     body = response.json()
@@ -92,7 +92,7 @@ def test_login_succeeds_for_every_interactive_role(client, role: str, email: str
 
 def test_system_identity_cannot_sign_in(client) -> None:
     response = client.post(
-        "/api/v1/auth/login", json={"email": "system@nagare.app", "password": "nagare123"}
+        "/api/v1/auth/login", json={"email": "system@nagare.app", "password": "teste12345"}
     )
     _skip_if_missing(response, "POST /auth/login")
     assert response.status_code in (401, 403), response.text
@@ -101,7 +101,8 @@ def test_system_identity_cannot_sign_in(client) -> None:
 
 def test_wrong_password_is_rejected(client) -> None:
     response = client.post(
-        "/api/v1/auth/login", json={"email": "master@nagare.app", "password": "wrong-password"}
+        "/api/v1/auth/login",
+        json={"email": "nagare.master@grupo-sr.com.br", "password": "wrong-password"},
     )
     _skip_if_missing(response, "POST /auth/login")
     assert response.status_code == 401
@@ -119,7 +120,7 @@ def test_bearer_token_identifies_the_caller(client, auth) -> None:
     response = client.get("/api/v1/auth/me", headers=auth("editor"))
     _skip_if_missing(response, "GET /auth/me")
     assert response.status_code == 200, response.text
-    assert response.json()["email"] == "editor@nagare.app"
+    assert response.json()["email"] == "nagare.editor@grupo-sr.com.br"
 
 
 # ---------------------------------------------------------------------------

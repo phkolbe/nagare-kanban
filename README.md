@@ -87,15 +87,15 @@ through the gateway (`http://127.0.0.1:8080/nagare`).
 
 ### Sign in
 
-All demo accounts share the password **`nagare123`**.
+All demo accounts share the password **`teste12345`**.
 
 | Email | Role | What it can do |
 |---|---|---|
-| `master@nagare.app` | master | Everything, including plans and feature flags |
-| `admin@nagare.app` | administrator | Users, boards, columns, policies, cards |
-| `editor@nagare.app` | editor | Create, edit and move cards |
-| `viewer@nagare.app` | viewer | Read boards and metrics |
-| `simulator@nagare.app` | simulator | Read operational boards, full control of simulator boards |
+| `nagare.master@grupo-sr.com.br` | master | Everything, including plans and feature flags |
+| `nagare.admin@grupo-sr.com.br` | administrator | Users, boards, columns, policies, cards |
+| `nagare.editor@grupo-sr.com.br` | editor | Create, edit and move cards |
+| `nagare.leitor@grupo-sr.com.br` | viewer | Read boards and metrics |
+| `nagare.simulador@grupo-sr.com.br` | simulator | Read operational boards, full control of simulator boards |
 | `system@nagare.app` | system | API/MCP identity — **cannot sign in to the UI** |
 
 Inside the Pampufa nobody signs in here: people arrive with the platform's token and
@@ -337,8 +337,8 @@ applies identically to the agent. Twelve tools: `list_boards`, `get_board`,
 ```bash
 claude mcp add nagare \
     --env NAGARE_URL=http://127.0.0.1:8770 \
-    --env NAGARE_EMAIL=master@nagare.app \
-    --env NAGARE_PASSWORD=nagare123 \
+    --env NAGARE_EMAIL=nagare.master@grupo-sr.com.br \
+    --env NAGARE_PASSWORD=teste12345 \
     -- python C:/MyWorkspace/claude-code/meu-kanban/mcp/nagare_mcp.py
 
 python mcp/nagare_mcp.py --selftest      # live round trip; needs the app running

@@ -23,7 +23,7 @@ export function TelaEntrar() {
   const { entrar } = useSessao()
   const navegar = useNavigate()
   const { t } = traducao(idiomaGuardado())
-  const [email, setEmail] = useState('master@nagare.app')
+  const [email, setEmail] = useState('nagare.master@grupo-sr.com.br')
   const [senha, setSenha] = useState('')
   const [erro, setErro] = useState<string | null>(null)
   const [enviando, setEnviando] = useState(false)
