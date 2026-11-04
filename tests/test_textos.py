@@ -163,7 +163,8 @@ def test_portuguese_numbers_dates_and_plurals(pt_br: None) -> None:
 def test_effective_locale_follows_the_choice_then_the_login() -> None:
     assert texts.effective_locale(None, "local") == "en"
     assert texts.effective_locale(None, "pampufa") == "pt-BR"
-    assert texts.effective_locale("en", "pampufa") == "en"
+    # Inside the Pampufa it is always Portuguese (SR GJ 4.7): the choice is for the standalone.
+    assert texts.effective_locale("en", "pampufa") == "pt-BR"
     assert texts.effective_locale("pt-BR", "local") == "pt-BR"
     assert texts.effective_locale("fr", "local") == "en"
 

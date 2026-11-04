@@ -5,7 +5,7 @@
  * CHAMADAS com dados no formato real da API do Nagare.
  */
 
-import { baseDoSozinho, modoDoCaminho, montarRota } from '../app/contexto'
+import { baseDoSozinho, exemploDeChave, modoDoCaminho, montarRota } from '../app/contexto'
 import { ehSoDoNagare } from '../componentes/Atalhos'
 import type { Cartao, Coluna, SituacaoWip } from '../api/tipos'
 import { travaDoUsuario } from '../features/admin/travas'
@@ -241,6 +241,7 @@ confere('modo pelo caminho', [modoDoCaminho('/grupo-sr/sr-adv/tarefas'), modoDoC
   'sozinho',
   'sozinho',
 ])
+confere('chave de exemplo pela sigla do produto (SR GJ 4.6)', ['sr-gj', 'sr-adv', 'batoom', 'nagare'].map(exemploDeChave), ['SRGJ', 'SRADV', 'BATOOM', 'PROJ'])
 confere('base do Nagare sozinho', [baseDoSozinho('/nagare/quadro'), baseDoSozinho('/quadro'), baseDoSozinho('/nagarex')], ['/nagare', '', ''])
 confere('rotas nos dois modos', [montarRota('plataforma', 'sr-adv', 'quadro/1'), montarRota('sozinho', 'nagare', 'quadro/1'), montarRota('sozinho', 'nagare', ''), montarRota('sozinho', 'nagare', 'admin/usuarios'), montarRota('sozinho', 'nagare', 'metricas/q1')], [
   '/sr-adv/tarefas/quadro/1',

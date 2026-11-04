@@ -85,9 +85,17 @@ def card_url(card: dict[str, Any]) -> str:
 
 
 async def ensure_product_link(
-    s: AsyncSession, product_id: str, *, product_name: str | None, actor_id: str | None
+    s: AsyncSession,
+    product_id: str,
+    *,
+    product_name: str | None,
+    actor_id: str | None,
+    reason: str = "Primeira providência do produto",
 ) -> dict[str, Any]:
-    """The product's link, provisioning project and board on first use."""
+    """The product's link, provisioning project and board on first use: the first
+    providência, or someone creating the board in Tarefas (SR GJ 4.3). Since 04/11/2026
+    a new one is named "Tarefas", because it holds the team's tasks too; the ones that
+    already exist keep their name."""
     link = as_dict(await s.get(ProductLink, product_id))
     if link is not None:
         return link
@@ -98,10 +106,10 @@ async def ensure_product_link(
     project = Project(
         id=new_id(),
         product_id=product_id,
-        name=f"Providências · {label}",
+        name=f"Tarefas · {label}",
         key=key,
         color=None,
-        description=f"Providências do produto {label} na plataforma Pampufa.",
+        description=f"Tarefas e providências do produto {label}.",
         status="active",
         owner_id=None,
         started_at=now,
@@ -112,7 +120,7 @@ async def ensure_product_link(
     s.add(project)
     await s.flush()
     board_id = await create_board_from_template(
-        s, product_id=product_id, name=f"Providências · {label}", template=TEMPLATE
+        s, product_id=product_id, name=f"Tarefas · {label}", template=TEMPLATE
     )
     s.add(
         ProductLink(
@@ -130,7 +138,7 @@ async def ensure_product_link(
             project_id=project.id,
             board_id=board_id,
             action="linked",
-            reason="Primeira providência do produto",
+            reason=reason,
             moved_cards=0,
             at=now,
             by=actor_id,

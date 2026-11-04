@@ -39,8 +39,9 @@ export function ProvedorIdioma({ children }: { children: ReactNode }) {
   const { produto, modo } = useNagare()
   const queryClient = useQueryClient()
   const eu = useEuNagare()
-  // Ate saber quem e: o padrao do modo (portugues na Pampufa, ingles no Nagare sozinho).
-  const idioma: Idioma = eu.data?.locale ?? (modo === 'sozinho' ? 'en' : 'pt-BR')
+  // Na Pampufa sempre portugues, como o resto da plataforma (SR GJ 4.7, 04/11/2026); a escolha
+  // da pessoa vale so no Nagare sozinho (ate saber quem e, ingles).
+  const idioma: Idioma = modo === 'plataforma' ? 'pt-BR' : (eu.data?.locale ?? 'en')
   const escolha = useMutation({
     mutationFn: (novo: Idioma | null) => nagare<Eu>(produto, '/auth/me', { metodo: 'PATCH', corpo: { locale: novo } }),
     onSuccess: (atualizado) => {

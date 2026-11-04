@@ -13,6 +13,15 @@ import { createContext, useContext, type ReactNode } from 'react'
 
 export type Modo = 'plataforma' | 'sozinho'
 
+/**
+ * Exemplo de chave de projeto do produto (SR GJ 4.6): a sigla dele, como a do projeto que
+ * recebe as providencias (`sr-gj` -> `SRGJ`, ate 8 letras); no Nagare sozinho, `PROJ`.
+ */
+export function exemploDeChave(produto: string): string {
+  if (produto === PRODUTO_SOZINHO) return 'PROJ'
+  return produto.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8) || 'PROJ'
+}
+
 /** O produto do Nagare fora da plataforma. */
 export const PRODUTO_SOZINHO = 'nagare'
 

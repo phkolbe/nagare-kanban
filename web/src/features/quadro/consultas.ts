@@ -53,6 +53,21 @@ export function useVinculo() {
   })
 }
 
+/** SR GJ 4.3: cria agora o quadro do produto (o mesmo que recebe as providencias). */
+export function useCriarQuadroDoProduto() {
+  const { produto, nomeProduto } = useNagare()
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () =>
+      nagare<Vinculo>(produto, '/integration/product/board', { metodo: 'POST', corpo: { produto_nome: nomeProduto } }),
+    onSuccess: (vinculo) => {
+      queryClient.setQueryData(chaves.vinculo(produto), vinculo)
+      void queryClient.invalidateQueries({ queryKey: chaves.quadros(produto) })
+      void queryClient.invalidateQueries({ queryKey: chaves.projetos(produto) })
+    },
+  })
+}
+
 export function useProjetos() {
   const produto = useNagare().produto
   return useQuery({

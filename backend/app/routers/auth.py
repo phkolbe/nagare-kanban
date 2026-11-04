@@ -432,7 +432,7 @@ async def _me(s: AsyncSession, user: CurrentUser) -> dict[str, Any]:
         "granted": [name for name, held in capabilities.items() if held],
         "flags": await effective_flags(s),
         "expires_in": token_ttl(),
-        "locale": chosen or default_locale(via),
+        "locale": texts.effective_locale(chosen, via),
         "locale_chosen": chosen,
         "preferences": Preferences(**(user.get("preferences") or {})).model_dump(),
         "via": via,

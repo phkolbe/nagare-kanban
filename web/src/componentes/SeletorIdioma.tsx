@@ -1,10 +1,16 @@
-/** Lingua das telas do Nagare: a escolha e da pessoa e vale em qualquer aparelho (17/10/2026). */
+/**
+ * Lingua das telas do Nagare: a escolha e da pessoa e vale em qualquer aparelho (17/10/2026).
+ * So no Nagare sozinho: na Pampufa tudo e em portugues e o seletor nao aparece (SR GJ 4.7).
+ */
 
 import type { Idioma } from '../api/tipos'
+import { useNagare } from '../app/contexto'
 import { useT } from '../i18n'
 
 export function SeletorIdioma() {
   const { t, eu, escolher } = useT()
+  const { modo } = useNagare()
+  if (modo === 'plataforma') return null
   const valor = eu?.locale_chosen ?? ''
   return (
     <label className="ng-idioma">

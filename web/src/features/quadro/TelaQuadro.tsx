@@ -17,10 +17,10 @@ import { useNagare } from '../../app/contexto'
 import type { Cartao, ClasseServico, Coluna, SegmentoVisao } from '../../api/tipos'
 import { Janela } from '../../componentes/Sobreposicao'
 import { SeletorIdioma } from '../../componentes/SeletorIdioma'
-import { useT } from '../../i18n'
+import { mensagemDeErro, useT } from '../../i18n'
 import { GavetaCartao } from '../cartao/GavetaCartao'
 import { EditorEstrutura } from '../estrutura/EditorEstrutura'
-import { useAlterarQuadro, useMover, useQuadro, useQuadros, useVinculo, useVisao } from './consultas'
+import { useAlterarQuadro, useCriarQuadroDoProduto, useMover, useQuadro, useQuadros, useVinculo, useVisao } from './consultas'
 import { EditorWip } from './EditorWip'
 import { BotaoDeFiltros, BuscaDeCartoes, SeloFiltrado } from './Filtros'
 import { Grade } from './Grade'
@@ -32,7 +32,8 @@ export function TelaQuadro() {
   const { quadroId } = useParams()
   const quadros = useQuadros()
   const vinculo = useVinculo()
-  const { t } = useT()
+  const criar = useCriarQuadroDoProduto()
+  const { t, eu } = useT()
   const [busca] = useSearchParams()
 
   if (quadroId) return <QuadroDoProduto key={quadroId} quadroId={quadroId} />
@@ -45,7 +46,19 @@ export function TelaQuadro() {
       <>
         <Cabecalho kicker={t('quadro.kicker')} titulo={t('quadro.titulo')} acoes={<SeletorIdioma />} />
         <section className="card">
-          <Vazio titulo={t('quadro.sem_quadro')}>{t('quadro.sem_quadro_dica')}</Vazio>
+          {criar.isError && <Aviso tipo="erro">{mensagemDeErro(criar.error, t)}</Aviso>}
+          {eu?.capabilities.manage_cards ? (
+            <Vazio titulo={t('quadro.sem_quadro')}>
+              {t('quadro.sem_quadro_dica')}
+              <div className="acoes" style={{ justifyContent: 'center' }}>
+                <button className="btn" type="button" disabled={criar.isPending} onClick={() => criar.mutate()}>
+                  {criar.isPending ? t('comum.carregando') : t('quadro.criar')}
+                </button>
+              </div>
+            </Vazio>
+          ) : (
+            <Vazio titulo={t('quadro.sem_quadro')}>{t('quadro.sem_quadro_leitor')}</Vazio>
+          )}
         </section>
       </>
     )

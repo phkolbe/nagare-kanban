@@ -36,6 +36,7 @@ from ..errors import NotFound
 from ..integration import (
     card_for_providencia,
     card_url,
+    ensure_product_link,
     find_ref,
     overview,
     product_people,
@@ -287,6 +288,37 @@ async def get_product_link(
     s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("read_boards_metrics")),
 ) -> dict[str, Any]:
+    return await _link_out(s, user["product_id"])
+
+
+class BoardIn(BaseModel):
+    produto_nome: str | None = Field(default=None, max_length=120)
+
+
+@router.post(
+    "/product/board",
+    status_code=status.HTTP_201_CREATED,
+    summary="Create the product's board now, without waiting for a providência (idempotent)",
+)
+async def create_product_board(
+    payload: BoardIn,
+    response: Response,
+    s: AsyncSession = Depends(get_session),
+    user: CurrentUser = Depends(require_capability("manage_cards")),
+) -> dict[str, Any]:
+    """SR GJ 4.3: the team writes tasks before any providência. It is the same board the
+    providências land on; when it already exists, nothing is created and the answer is 200."""
+    existed = await s.get(ProductLink, user["product_id"]) is not None
+    await ensure_product_link(
+        s,
+        user["product_id"],
+        product_name=payload.produto_nome,
+        actor_id=user["id"],
+        reason="Quadro criado em Tarefas",
+    )
+    await s.commit()
+    if existed:
+        response.status_code = status.HTTP_200_OK
     return await _link_out(s, user["product_id"])
 
 

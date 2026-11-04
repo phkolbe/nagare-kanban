@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Aviso } from '@pampufa/ui'
 
-import { useNagare } from '../../app/contexto'
+import { exemploDeChave, useNagare } from '../../app/contexto'
 import { chaves, nagare } from '../../api/nagare'
 import { SITUACOES_PROJETO, type Projeto, type SituacaoProjeto } from '../../api/tipos'
 import { Janela } from '../../componentes/Sobreposicao'
@@ -88,7 +88,7 @@ export function FormProjeto({
               required
               onChange={(e) => setChave(e.target.value.toUpperCase())}
             />
-            {!projeto && <small className="mini">{t('projeto.chave_dica')}</small>}
+            {!projeto && <small className="mini">{t('projeto.chave_dica', { exemplo: exemploDeChave(produto) })}</small>}
           </label>
           <label className="campo">
             <span>{t('projeto.situacao')}</span>

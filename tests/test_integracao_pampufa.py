@@ -667,8 +667,9 @@ def test_the_standalone_nagare_lists_its_own_users(client, auth) -> None:
 
 
 def test_language_defaults_by_the_way_in_and_follows_the_choice(client, auth, pampufa) -> None:
-    """Portuguese through the Pampufa, English on the local login; the person's choice
-    wins and is kept on the user (every device)."""
+    """Portuguese through the Pampufa, English on the local login. The person's choice is
+    kept on the user (every device) and only applies to the standalone Nagare: inside the
+    Pampufa everything is Portuguese (SR GJ 4.7, 04/11/2026)."""
     person = pampufa.person({PRODUCT: ["nagare.leitor"]})
     me = client.get(f"{API}/auth/me", headers=headers(person)).json()
     assert (me["locale"], me["locale_chosen"], me["via"], me["product_id"]) == (
@@ -681,7 +682,14 @@ def test_language_defaults_by_the_way_in_and_follows_the_choice(client, auth, pa
 
     chosen = client.patch(f"{API}/auth/me", json={"locale": "en"}, headers=headers(person))
     assert chosen.status_code == 200, chosen.text
-    assert client.get(f"{API}/auth/me", headers=headers(person)).json()["locale"] == "en"
+    me = client.get(f"{API}/auth/me", headers=headers(person)).json()
+    assert (me["locale"], me["locale_chosen"]) == ("pt-BR", "en")
+    master = auth("master")
+    assert (
+        client.patch(f"{API}/auth/me", json={"locale": "pt-BR"}, headers=master).status_code == 200
+    )
+    assert client.get(f"{API}/auth/me", headers=master).json()["locale"] == "pt-BR"
+    client.patch(f"{API}/auth/me", json={"locale": None}, headers=master)
     back = client.patch(f"{API}/auth/me", json={"locale": None}, headers=headers(person)).json()
     assert (back["locale"], back["locale_chosen"]) == ("pt-BR", None)
     refused = client.patch(f"{API}/auth/me", json={"locale": "fr"}, headers=headers(person))
@@ -875,3 +883,51 @@ def test_an_unknown_api_route_is_problem_json_too(client) -> None:
     assert response.status_code == 404
     assert body["error"]["code"] == "not_found"
     assert (body["status"], body["codigo"]) == (404, "not_found") and body["title"]
+
+
+def test_the_team_creates_the_product_board_without_a_providencia(
+    client, pampufa, database_url: str
+) -> None:
+    """SR GJ 4.3: "Criar o quadro" in Tarefas makes the same board the providências use."""
+    product = "sr-gj-quadro"
+    try:
+        leitor = pampufa.person({product: ["nagare.leitor"]})
+        refused = client.post(
+            f"{API}/integration/product/board", json={}, headers=headers(leitor, product)
+        )
+        assert refused.status_code == 403
+
+        editor = pampufa.person({product: ["nagare.editor"]})
+        body = {"produto_nome": "SR Gestão Jurídica"}
+        created = client.post(
+            f"{API}/integration/product/board", json=body, headers=headers(editor, product)
+        )
+        assert created.status_code == 201, created.text
+        link = created.json()["link"]
+        assert link["board"]["name"] == "Tarefas · SR Gestão Jurídica"
+        assert link["project"]["key"] == "SRGJQUADRO"
+        assert created.json()["history"][-1]["reason"] == "Quadro criado em Tarefas"
+
+        again = client.post(
+            f"{API}/integration/product/board", json=body, headers=headers(editor, product)
+        )
+        assert again.status_code == 200
+        assert again.json()["link"]["board_id"] == link["board_id"]
+
+        # The team writes a task on it straight away.
+        board = client.get(
+            f"{API}/boards/{link['board_id']}", headers=headers(editor, product)
+        ).json()
+        first = board["columns"][0]
+        card = client.post(
+            f"{API}/cards",
+            json={
+                "board_id": link["board_id"],
+                "column_id": first["id"],
+                "title": "Minuta do parecer",
+            },
+            headers=headers(editor, product),
+        )
+        assert card.status_code == 201, card.text
+    finally:
+        _remove_products(database_url, (product,))

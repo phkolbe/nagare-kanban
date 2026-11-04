@@ -66,7 +66,12 @@ def default_locale(via: str | None) -> str:
 
 
 def effective_locale(chosen: str | None, via: str | None) -> str:
-    """The user's own choice when it is a supported one, else the default for ``via``."""
+    """The user's own choice when it is a supported one, else the default for ``via``.
+
+    Through the Pampufa it is always Portuguese, like the rest of the platform (SR GJ 4.7,
+    04/11/2026): the choice is kept and only applies to the standalone Nagare."""
+    if via == "pampufa":
+        return PT_BR
     return chosen if chosen in SUPPORTED_LOCALES else default_locale(via)
 
 
