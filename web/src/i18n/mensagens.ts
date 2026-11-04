@@ -303,7 +303,7 @@ const ptBase = {
 
   // ------------------------------------------------------------------ projetos
   'projetos.titulo': 'Projetos',
-  'projetos.descricao': 'Os projetos do produto no Nagare e qual deles recebe as providências.',
+  'projetos.descricao': 'Os projetos do produto e qual deles recebe as providências.',
   'projetos.novo': 'Novo projeto',
   'projetos.editar': 'Editar {chave}',
   'projetos.nenhum': 'Nenhum projeto nesta situação.',
@@ -395,11 +395,11 @@ const ptBase = {
 
   // ------------------------------------------------------------------ erros (pelo codigo da API)
   'erro.generico': 'Não deu certo. Tente de novo.',
-  'erro.rede': 'Não foi possível falar com o Nagare. Tente de novo em instantes.',
-  'erro.servidor': 'O Nagare teve um problema. O erro foi registrado.',
+  'erro.rede': 'Não foi possível carregar as tarefas. Tente de novo em instantes.',
+  'erro.servidor': 'As tarefas tiveram um problema. O erro foi registrado.',
   'erro.forbidden': 'Você não tem permissão para isso neste produto.',
   'erro.insufficient_role': 'Seu papel neste produto não permite isso.',
-  'erro.product_forbidden': 'Você não tem papel no Nagare neste produto.',
+  'erro.product_forbidden': 'Você não tem papel em Tarefas neste produto.',
   'erro.feature_disabled': 'Recurso desligado no plano.',
   'erro.plan_upgrade_required': 'Recurso fora do plano.',
   'erro.flow_locked':
@@ -725,7 +725,7 @@ const enBase: Record<keyof typeof ptBase, string> = {
   'estrutura.esvaziar_e_excluir': 'Move and delete',
 
   'projetos.titulo': 'Projects',
-  'projetos.descricao': 'The product’s projects in the Nagare and which one receives the providências.',
+  'projetos.descricao': 'The product’s projects and which one receives the providências.',
   'projetos.novo': 'New project',
   'projetos.editar': 'Edit {chave}',
   'projetos.nenhum': 'No projects in this status.',
@@ -814,11 +814,11 @@ const enBase: Record<keyof typeof ptBase, string> = {
   'consolidado.mais': 'and {n} more…',
 
   'erro.generico': 'That did not work. Try again.',
-  'erro.rede': 'Could not reach the Nagare. Try again in a moment.',
-  'erro.servidor': 'The Nagare hit a problem. The error was logged.',
+  'erro.rede': 'Could not load the tasks. Try again in a moment.',
+  'erro.servidor': 'Tasks hit a problem. The error was logged.',
   'erro.forbidden': 'You are not allowed to do that in this product.',
   'erro.insufficient_role': 'Your role in this product does not allow that.',
-  'erro.product_forbidden': 'You have no Nagare role in this product.',
+  'erro.product_forbidden': 'You have no Tasks role in this product.',
   'erro.feature_disabled': 'Feature turned off in the plan.',
   'erro.plan_upgrade_required': 'Feature not in the plan.',
   'erro.flow_locked':
