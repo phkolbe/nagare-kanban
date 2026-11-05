@@ -21,7 +21,7 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.engine import Dialect
 from sqlalchemy.types import TypeDecorator, TypeEngine
 
-__all__ = ["NIL_ID", "Id", "Instant", "Json", "from_iso", "to_iso"]
+__all__ = ["NIL_ID", "Day", "Id", "Instant", "Json", "day_of", "from_iso", "to_iso"]
 
 #: Bound in place of a value that is not a UUID; no row ever has this id.
 NIL_ID = uuid.UUID(int=0)
@@ -52,6 +52,26 @@ def from_iso(value: Any) -> datetime | None:
     except ValueError as exc:
         raise ValueError(f"Not an ISO-8601 instant: {value!r}") from exc
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def day_of(value: Any) -> str | None:
+    """The calendar day a value names, ``2026-11-30``: a date, or the date part of an ISO
+    timestamp in its own offset (``2026-11-30T23:00:00-03:00`` is still the 30th)."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(text).date().isoformat()
+    except ValueError as exc:
+        raise ValueError(f"Not an ISO-8601 date: {value!r}") from exc
 
 
 class Id(TypeDecorator[str]):
@@ -111,6 +131,24 @@ class Instant(TypeDecorator[str]):
         if isinstance(value, datetime):
             return to_iso(value)
         return to_iso(from_iso(value))  # type: ignore[arg-type]
+
+
+class Day(Instant):
+    """A whole day (a card's due date, a project's start and target), 04/11/2026.
+
+    Stored exactly like ``Instant`` (midnight UTC that starts the day), so no data moves;
+    Python and the API see ``2026-11-30``. When the day ends is the reader's business: the
+    metrics use the workspace time zone (``flow.metrics.end_of_day``).
+    """
+
+    cache_ok = True
+
+    def process_bind_param(self, value: Any, dialect: Dialect) -> Any:
+        return super().process_bind_param(day_of(value), dialect)
+
+    def process_result_value(self, value: Any, dialect: Dialect) -> str | None:
+        moment = super().process_result_value(value, dialect)
+        return None if moment is None else moment[:10]
 
 
 #: JSON documents: ``jsonb`` on PostgreSQL, JSON text elsewhere; ``list``/``dict`` in Python.

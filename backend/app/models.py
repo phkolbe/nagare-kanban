@@ -37,7 +37,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-from .sqltypes import Id, Instant, Json
+from .sqltypes import Day, Id, Instant, Json
 
 __all__ = [
     "PRODUCT_STANDALONE",
@@ -256,8 +256,8 @@ class Project(Base):
     description: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
     owner_id: Mapped[str | None] = _fk("users.id", "SET NULL")
-    started_at: Mapped[str | None] = mapped_column(Instant)
-    target_date: Mapped[str | None] = mapped_column(Instant)
+    started_at: Mapped[str | None] = mapped_column(Day)
+    target_date: Mapped[str | None] = mapped_column(Day)
     created_at: Mapped[str] = mapped_column(Instant, nullable=False)
     archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
@@ -305,7 +305,7 @@ class Card(Base):
     size: Mapped[str | None] = mapped_column(String(4))
     value_area: Mapped[str] = mapped_column(String(20), nullable=False, default="feature")
     demand_type: Mapped[str] = mapped_column(String(20), nullable=False, default="value")
-    due_date: Mapped[str | None] = mapped_column(Instant)
+    due_date: Mapped[str | None] = mapped_column(Day)
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     envelope_state: Mapped[str] = mapped_column(String(10), nullable=False, default="opened")
     is_blocked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

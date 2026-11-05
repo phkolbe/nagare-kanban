@@ -78,7 +78,7 @@ from ..schemas import (
     TaskOut,
     TaskUpdate,
 )
-from ..sqltypes import from_iso, to_iso
+from ..sqltypes import day_of
 from ..tenancy import in_product, same_product
 
 router = APIRouter(tags=["cards"])
@@ -1137,7 +1137,7 @@ _EDITABLE: tuple[str, ...] = (
 )
 
 _JSON_FIELDS = {"tags", "custom_fields"}
-_INSTANT_FIELDS = {"due_date"}
+_DAY_FIELDS = {"due_date"}
 
 
 def _display(field: str, value: Any) -> str | None:
@@ -1152,10 +1152,9 @@ def _display(field: str, value: Any) -> str | None:
 
 
 def _normalised(field: str, value: Any) -> Any:
-    """The value as the database will hand it back (instants in canonical ISO form)."""
-    if field in _INSTANT_FIELDS and value is not None:
-        moment = from_iso(value)
-        return to_iso(moment) if moment is not None else None
+    """The value as the database will hand it back (the due date as a day)."""
+    if field in _DAY_FIELDS and value is not None:
+        return day_of(value)
     return value
 
 

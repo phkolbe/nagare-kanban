@@ -32,14 +32,15 @@ import math
 from bisect import bisect_right
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from ..db import parse_iso
-from ..models import Blocker, Board, Card, Project, SimulationRun
+from ..models import Blocker, Board, Card, Project, SimulationRun, Workspace
 from ..texts import N_, _, num
 from .intervals import (
     ACTIVITY,
@@ -270,6 +271,26 @@ def _parse_bound(value: str | datetime | None, *, end_of_day: bool) -> datetime 
     return parsed
 
 
+def workspace_zone(db: Session) -> ZoneInfo:
+    """The workspace time zone (``UTC`` when unset or unknown)."""
+    name = db.scalar(select(Workspace.timezone)) or "UTC"
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        return ZoneInfo("UTC")
+
+
+def end_of_day(day: str | datetime | None, zone: ZoneInfo) -> datetime | None:
+    """When a due day is over: the midnight that ends it in the workspace time zone. A card
+    delivered on its due day is on time (04/11/2026; it used to be the midnight UTC that
+    starts the day, so the due day itself counted as late)."""
+    moment = parse_iso(day)
+    if moment is None:
+        return None
+    following = moment.date() + timedelta(days=1)
+    return datetime.combine(following, time(0, 0), tzinfo=zone).astimezone(UTC)
+
+
 def _iso(moment: datetime | None) -> str | None:
     if moment is None:
         return None
@@ -332,6 +353,7 @@ class CardRecord:
     start_at: datetime | None
     committed_at: datetime | None
     delivered_at: datetime | None
+    #: When the due day ends (``end_of_day``): delivered at or before it is on time.
     due_date: datetime | None
 
     @property
@@ -443,6 +465,7 @@ class MetricsContext:
         self.flow_column_ids: list[str] = [c["id"] for c in self.flow_columns]
 
         # -- per-card snapshot ----------------------------------------------
+        self.zone = workspace_zone(db)
         self.records: list[CardRecord] = [self._record(flow) for flow in flows]
         self.records_by_id: dict[str, CardRecord] = {r.id: r for r in self.records}
         self._blockers: list[dict[str, Any]] = self._load_blockers(db)
@@ -512,7 +535,7 @@ class MetricsContext:
             start_at=parse_iso(lead.start_at),
             committed_at=parse_iso(card.get("committed_at")),
             delivered_at=parse_iso(card.get("delivered_at")),
-            due_date=parse_iso(card.get("due_date")),
+            due_date=end_of_day(card.get("due_date"), self.zone),
         )
 
     # -- loaded data ---------------------------------------------------------

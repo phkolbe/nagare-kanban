@@ -678,8 +678,9 @@ def test_demand_breakdown_matches_reference(ctx: MetricsContext) -> None:
         "on_time": 1,
         "late": 1,
         "pct": pytest.approx(50.0, abs=0.01),
-        "mean_lateness_days": pytest.approx(2.0, abs=0.01),
-        "worst_lateness_days": pytest.approx(2.0, abs=0.01),
+        # E is due on 01-03 and delivered at 01-05 00:00: one day after its due day ends.
+        "mean_lateness_days": pytest.approx(1.0, abs=0.01),
+        "worst_lateness_days": pytest.approx(1.0, abs=0.01),
     }
 
     mix = {row["key"]: row["count"] for row in meta["service_class_mix"]}
@@ -898,3 +899,15 @@ def test_unknown_board_returns_404(client, auth) -> None:
     response = client.get("/api/v1/boards/does-not-exist/metrics/summary", headers=auth("viewer"))
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "board_not_found"
+
+
+def test_due_day_is_on_time_until_it_ends_in_the_workspace_zone() -> None:
+    """04/11/2026: delivered on the due day itself is on time, until midnight in the
+    workspace time zone (Sao Paulo here), not midnight UTC that starts the day."""
+    from zoneinfo import ZoneInfo
+
+    from backend.app.flow.metrics import end_of_day
+
+    fim = end_of_day("2026-11-30", ZoneInfo("America/Sao_Paulo"))
+    assert fim is not None and fim.isoformat() == "2026-12-01T03:00:00+00:00"
+    assert end_of_day(None, ZoneInfo("UTC")) is None
