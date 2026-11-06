@@ -1007,6 +1007,21 @@ def test_projeto_do_sr_gj_ligado_com_horas_e_metricas(client, pampufa, database_
         ).json()
         assert cobranca["total_minutes"] == 120
         assert cobranca["items"][0]["card_title"] == "Relatório de produtividade"
+        # GJ-6: o Financeiro le as horas por projeto ligado, pelo id do SR GJ.
+        por_projeto = client.get(
+            f"{API}/integration/time/by-external",
+            params={"source": "sradv", "from": "2026-11-01"},
+            headers=headers(servico, product),
+        ).json()
+        assert por_projeto["items"] == [{"external_id": "p1", "minutes": 120}]
+        assert (
+            client.get(
+                f"{API}/integration/time/by-external",
+                params={"source": "sradv"},
+                headers=headers(editor, product),
+            ).status_code
+            == 403
+        )
 
         leitura = client.get(
             f"{API}/metrics/people",

@@ -460,6 +460,44 @@ async def time_for_billing(
 
 
 @router.get(
+    "/time/by-external",
+    summary="Hours per linked project of a source, for the Financeiro reports (GJ-6)",
+)
+async def time_by_external(
+    source: str = Query(..., min_length=1, max_length=40),
+    frm: str | None = Query(default=None, alias="from"),
+    to: str | None = Query(default=None),
+    s: AsyncSession = Depends(get_session),
+    user: CurrentUser = Depends(system_only),
+) -> dict[str, Any]:
+    """Minutes logged on each project kept by `source` (``sradv``: the Projeto of the SR GJ),
+    keyed by the source's id. Optional period (``from``/``to``, YYYY-MM-DD)."""
+    from sqlalchemy import func
+
+    from ..models import TimeEntry
+    from ..tenancy import in_product
+
+    filters = [
+        Project.external_source == source,
+        Project.external_id.is_not(None),
+        *in_product(TimeEntry),
+    ]
+    if frm:
+        filters.append(TimeEntry.worked_on >= frm)
+    if to:
+        filters.append(TimeEntry.worked_on <= to)
+    rows = (
+        await s.execute(
+            select(Project.external_id, func.coalesce(func.sum(TimeEntry.minutes), 0))
+            .join(Project, Project.id == TimeEntry.project_id)
+            .where(*filters)
+            .group_by(Project.external_id)
+        )
+    ).all()
+    return {"items": [{"external_id": e, "minutes": int(m)} for e, m in rows]}
+
+
+@router.get(
     "/overview/metrics",
     summary="Each product in a period: work in progress, delivered, on time and hours (D45)",
 )
