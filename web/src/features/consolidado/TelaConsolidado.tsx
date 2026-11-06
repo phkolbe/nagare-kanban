@@ -9,9 +9,11 @@ import { useQuery } from '@tanstack/react-query'
 import { Cabecalho, Carregando, ErroDeApi, MarcaProduto, Vazio, useEu, useProduto } from '@pampufa/ui'
 
 import { chaves, nagare } from '../../api/nagare'
-import type { Consolidado } from '../../api/tipos'
+import type { Consolidado, ConsolidadoMetricas } from '../../api/tipos'
 import { SeletorIdioma } from '../../componentes/SeletorIdioma'
 import { useT } from '../../i18n'
+import { horasEmTexto } from '../cartao/horas'
+import { periodoPadrao, textoNoPrazo } from '../metricas/PainelPessoas'
 
 export function TelaConsolidado() {
   const { t, data } = useT()
@@ -27,6 +29,7 @@ export function TelaConsolidado() {
   return (
     <>
       <Cabecalho kicker={t('consolidado.kicker')} titulo={t('consolidado.titulo')} descricao={t('consolidado.descricao')} acoes={<SeletorIdioma />} />
+      <NumerosPorProduto nome={nome} />
       {consolidado.isPending ? (
         <Carregando texto={t('comum.carregando')} />
       ) : consolidado.isError ? (
@@ -95,5 +98,46 @@ export function TelaConsolidado() {
         </div>
       )}
     </>
+  )
+}
+
+/** D45: o consolidado do gestor em numeros, um produto por linha (o periodo e o mes corrente). */
+function NumerosPorProduto({ nome }: { nome: (id: string) => string }) {
+  const { t } = useT()
+  const produto = useProduto().id
+  const { de, ate } = periodoPadrao()
+  const numeros = useQuery({
+    queryKey: ['nagare', 'pampufa', 'consolidado-numeros', de, ate],
+    queryFn: () => nagare<ConsolidadoMetricas>(produto, `/integration/overview/metrics?from=${de}&to=${ate}`),
+  })
+  if (!numeros.data || numeros.data.products.length === 0) return null
+  return (
+    <section className="card">
+      <h2 className="ng-subtitulo">{t('consolidado.numeros', { de: de.slice(8, 10) + '/' + de.slice(5, 7), ate: ate.slice(8, 10) + '/' + ate.slice(5, 7) })}</h2>
+      <div className="tabela-rolagem">
+        <table>
+          <thead>
+            <tr>
+              <th>{t('pessoas.produto')}</th>
+              <th className="num">{t('pessoas.em_andamento')}</th>
+              <th className="num">{t('pessoas.entregues')}</th>
+              <th className="num">{t('pessoas.no_prazo')}</th>
+              <th className="num">{t('pessoas.horas')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {numeros.data.products.map((p) => (
+              <tr key={p.product_id}>
+                <td>{nome(p.product_id)}</td>
+                <td className="num">{p.wip}</td>
+                <td className="num">{p.delivered}</td>
+                <td className="num">{textoNoPrazo(p)}</td>
+                <td className="num">{horasEmTexto(p.minutes)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
   )
 }

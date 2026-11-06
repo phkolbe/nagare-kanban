@@ -257,6 +257,10 @@ export interface Projeto {
   opened_count: number | null
   delivered_count: number | null
   in_flight_count: number | null
+  /** GJ-1: o cliente e, no projeto do SR GJ, onde abri-lo (nome, situacao e datas sao de la). */
+  client_name?: string | null
+  external_url?: string | null
+  managed_elsewhere?: boolean
 }
 
 export interface ProjetoDetalhe extends Projeto {
@@ -279,6 +283,8 @@ export interface Pessoas {
 
 export interface Vinculo {
   product_id: string
+  /** GJ-1: os projetos sao cadastrados em outro modulo; "Novo projeto" abre aqui. */
+  projects_new_url?: string | null
   link: {
     project_id: string
     board_id: string
@@ -346,4 +352,41 @@ export interface Regras {
   regras: Regra[]
   pessoas: { id: string; nome: string; email: string }[]
   pode_alterar: boolean
+}
+
+/** GJ-4: horas lancadas no cartao. */
+export interface HoraLancada {
+  id: string
+  card_id: string
+  card_key: string | null
+  card_title: string | null
+  project_id: string | null
+  user_id: string | null
+  user_name: string
+  worked_on: string
+  minutes: number
+  description: string | null
+}
+
+/** D45: a leitura de um periodo por pessoa, projeto e cliente. */
+export interface LinhaDaLeitura {
+  delivered: number
+  on_time: number
+  late: number
+  wip: number
+  arrivals: number
+  minutes: number
+}
+
+export interface LeituraPessoas {
+  from: string
+  to: string
+  people: (LinhaDaLeitura & { user_id: string | null; name: string })[]
+  projects: (LinhaDaLeitura & { project_id: string | null; name: string; key: string | null; client_name: string | null })[]
+  clients: (LinhaDaLeitura & { client_name: string; projects: number })[]
+  total_minutes: number
+}
+
+export interface ConsolidadoMetricas {
+  products: { product_id: string; delivered: number; on_time: number; late: number; wip: number; minutes: number; from: string; to: string }[]
 }

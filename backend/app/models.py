@@ -260,6 +260,14 @@ class Project(Base):
     target_date: Mapped[str | None] = mapped_column(Day)
     created_at: Mapped[str] = mapped_column(Instant, nullable=False)
     archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    #: GJ-1 (06/11/2026): the project registered elsewhere (the SR GJ's Projeto) and linked
+    #: here. ``external_source`` names the service (``sradv``), ``external_id`` its id,
+    #: ``external_url`` where a person opens it; name, key, status, client and dates are
+    #: kept by that service (a person here can still change the colour and description).
+    client_name: Mapped[str | None] = mapped_column(String(200))
+    external_source: Mapped[str | None] = mapped_column(String(40))
+    external_id: Mapped[str | None] = mapped_column(String(64))
+    external_url: Mapped[str | None] = mapped_column(String(300))
 
 
 # ---------------------------------------------------------------------------
@@ -491,7 +499,36 @@ class ProductSettings(Base):
     timezone: Mapped[str | None] = mapped_column(String(60))
     #: ``{flag key: bool}``: this product's switch for the flag.
     flags: Mapped[dict[str, Any]] = mapped_column(Json, nullable=False, default=dict)
+    #: GJ-1: projects are registered elsewhere; "Novo projeto" opens this URL instead.
+    projects_new_url: Mapped[str | None] = mapped_column(String(300))
     updated_at: Mapped[str] = mapped_column(Instant, nullable=False)
+
+
+class TimeEntry(Base):
+    """Hours worked on a card (GJ-4, 06/11/2026): who, when, how long and what.
+
+    The card's project travels with it (``project_id`` copied at entry time): moving the
+    card to another project later does not move hours already billed.
+    """
+
+    __tablename__ = "time_entries"
+    __table_args__ = (
+        Index("idx_time_card", "card_id"),
+        Index("idx_time_project_day", "project_id", "worked_on"),
+        Index("idx_time_product_day", "product_id", "worked_on"),
+        CheckConstraint("minutes > 0 AND minutes <= 1440", name="minutes"),
+    )
+
+    id: Mapped[str] = _id()
+    product_id: Mapped[str] = _product()
+    card_id: Mapped[str] = _fk("cards.id", "CASCADE", nullable=False)
+    project_id: Mapped[str | None] = _fk("projects.id", "SET NULL")
+    user_id: Mapped[str | None] = _fk("users.id", "SET NULL")
+    user_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    worked_on: Mapped[str] = mapped_column(Day, nullable=False)
+    minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(Instant, nullable=False)
 
 
 # ---------------------------------------------------------------------------

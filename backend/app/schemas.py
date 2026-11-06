@@ -786,6 +786,10 @@ class ProjectOut(Schema):
     target_date: str | None = None
     created_at: str | None = None
     archived: bool = False
+    #: GJ-1: the client, and where to open a project kept by another service (None: kept here).
+    client_name: str | None = None
+    external_url: str | None = None
+    managed_elsewhere: bool = False
     card_count: int | None = None
     sealed_count: int | None = None
     opened_count: int | None = None

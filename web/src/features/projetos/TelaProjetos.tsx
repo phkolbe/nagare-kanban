@@ -42,7 +42,11 @@ export function TelaProjetos() {
         acoes={
           <>
             {podeGerir && eu?.flags.multi_project !== false && (
-              <button type="button" className="btn sm" onClick={() => setEditando('novo')}>
+              <button type="button" className="btn sm" onClick={() => {
+                // GJ-1: os projetos deste produto sao cadastrados no modulo do escritorio.
+                if (vinculo.data?.projects_new_url) window.location.assign(vinculo.data.projects_new_url)
+                else setEditando('novo')
+              }}>
                 {t('projetos.novo')}
               </button>
             )}
@@ -125,6 +129,7 @@ export function TelaProjetos() {
               <h3>
                 <Link to={p.id}>{p.name}</Link>
               </h3>
+              {p.client_name && <p className="mini"><b>{p.client_name}</b></p>}
               {p.description && <p className="mini">{p.description}</p>}
               <dl className="ng-numeros">
                 <div>
@@ -141,10 +146,14 @@ export function TelaProjetos() {
                 </div>
               </dl>
               {quadroDasMetricas && <VazaoDoProjeto projetoId={p.id} quadroId={quadroDasMetricas} />}
-              {podeGerir && (
-                <button type="button" className="link" onClick={() => setEditando(p)}>
-                  {t('comum.editar')}
-                </button>
+              {p.managed_elsewhere && p.external_url ? (
+                <a className="link" href={p.external_url}>{t('projeto.abrir_externo')}</a>
+              ) : (
+                podeGerir && (
+                  <button type="button" className="link" onClick={() => setEditando(p)}>
+                    {t('comum.editar')}
+                  </button>
+                )
               )}
             </article>
           ))}

@@ -5,6 +5,8 @@
  * CHAMADAS com dados no formato real da API do Nagare.
  */
 
+import { horasEmTexto, minutosDeTexto } from '../features/cartao/horas'
+import { periodoPadrao, textoNoPrazo } from '../features/metricas/PainelPessoas'
 import { baseDoSozinho, exemploDeChave, modoDoCaminho, montarRota } from '../app/contexto'
 import { ehSoDoNagare } from '../componentes/Atalhos'
 import type { Cartao, Coluna, SituacaoWip } from '../api/tipos'
@@ -319,6 +321,12 @@ confere(
   ],
   ['admin.trava_voce', 'admin.trava_master', 'admin.trava_ultimo_master', null],
 )
+
+// Horas (GJ-4) e a leitura por pessoa (D45)
+confere('horas em texto', [horasEmTexto(90), horasEmTexto(60), horasEmTexto(45)], ['1h30', '1h', '45min'])
+confere('minutos do que se digita', ['1:30', '1h30', '1,5', '45min', '2', 'abc', '25:00'].map(minutosDeTexto), [90, 90, 90, 45, 120, null, null])
+confere('no prazo', [textoNoPrazo({ on_time: 2, late: 1 }), textoNoPrazo({ on_time: 0, late: 0 })], ['2 de 3 (67%)', '—'])
+confere('periodo padrao: do dia 1 a hoje', periodoPadrao(new Date(2026, 10, 6)), { de: '2026-11-01', ate: '2026-11-06' })
 
 if (falhas > 0) throw new Error(`${falhas} de ${total} verificacoes falharam.`)
 console.log(`${total} verificacoes das telas do Nagare passaram.`)

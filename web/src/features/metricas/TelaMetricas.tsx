@@ -29,6 +29,7 @@ import {
 import { ms } from '../../graficos/escalas'
 import { useT, type Chave } from '../../i18n'
 import { useProjetos, useQuadro, useQuadros, useVinculo } from '../quadro/consultas'
+import { PainelPessoas } from './PainelPessoas'
 import {
   flagDoPainel,
   PERIODOS,
@@ -528,6 +529,8 @@ function MetricasDoQuadro({ quadroId }: { quadroId: string }) {
 
         <PainelPrevisao quadroId={quadroId} />
       </div>
+
+      <PainelPessoas />
 
       <section className="card ng-kmm" aria-label={t('kmm.titulo')}>
         <h2 className="ng-subtitulo">{t('kmm.titulo')}</h2>

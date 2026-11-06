@@ -18,10 +18,11 @@ import { AbaBloqueios } from './AbaBloqueios'
 import { useAcaoNoCartao, useCartao } from './acoes'
 import { AbaComentarios } from './AbaComentarios'
 import { AbaDetalhes } from './AbaDetalhes'
+import { AbaHoras } from './AbaHoras'
 import { AbaHistorico } from './AbaHistorico'
 import { AbaTarefas } from './AbaTarefas'
 
-type Aba = 'detalhes' | 'tarefas' | 'historico' | 'bloqueios' | 'comentarios'
+type Aba = 'detalhes' | 'tarefas' | 'horas' | 'historico' | 'bloqueios' | 'comentarios'
 
 export function GavetaCartao({
   cartaoId,
@@ -67,6 +68,7 @@ export function GavetaCartao({
   const abas: Aba[] = [
     'detalhes',
     'tarefas',
+    'horas',
     ...(eu?.flags.card_history !== false ? (['historico'] as const) : []),
     'bloqueios',
     'comentarios',
@@ -131,6 +133,7 @@ export function GavetaCartao({
       <div className="ng-gaveta-aba" role="tabpanel">
         {aba === 'detalhes' && <AbaDetalhes cartao={c} quadro={quadro} editavel={editavel && !lacrado} />}
         {aba === 'tarefas' && <AbaTarefas cartao={c} editavel={editavel} />}
+        {aba === 'horas' && <AbaHoras cartao={c} editavel={editavel} />}
         {aba === 'historico' && <AbaHistorico cartao={c} colunas={colunas} />}
         {aba === 'bloqueios' && <AbaBloqueios cartao={c} editavel={editavel} />}
         {aba === 'comentarios' && <AbaComentarios cartao={c} podeComentar={Boolean(eu?.capabilities.manage_cards)} />}

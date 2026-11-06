@@ -106,6 +106,8 @@ def _remove_products(url: str, products: tuple[str, ...]) -> None:
     db = connect(url)
     try:
         for product in products:
+            db.ex("DELETE FROM time_entries WHERE product_id = ?", product)
+            db.ex("DELETE FROM product_settings WHERE product_id = ?", product)
             db.ex("DELETE FROM product_links WHERE product_id = ?", product)
             db.ex("DELETE FROM product_link_history WHERE product_id = ?", product)
             db.ex("DELETE FROM webhook_outbox WHERE product_id = ?", product)
@@ -929,5 +931,90 @@ def test_the_team_creates_the_product_board_without_a_providencia(
             headers=headers(editor, product),
         )
         assert card.status_code == 201, card.text
+    finally:
+        _remove_products(database_url, (product,))
+
+
+def test_projeto_do_sr_gj_ligado_com_horas_e_metricas(client, pampufa, database_url: str) -> None:
+    """GJ-1, GJ-4 e D45: o SR GJ cria o projeto ligado; a equipe lanca horas no cartao; a
+    cobranca le as horas do mes; a leitura por pessoa, projeto e cliente soma tudo."""
+    product = "sr-gj-horas"
+    try:
+        servico = pampufa.token("servico:sr-adv", {product: ["system"]})
+        corpo = {
+            "name": "Motiva",
+            "key": "mtv",
+            "status": "active",
+            "client_name": "De Castro Advogados",
+            "url": "/grupo-sr/sr-gj/projetos/p1",
+            "novo_url": "/grupo-sr/sr-gj/projetos?novo=1",
+        }
+        r = client.put(
+            f"{API}/integration/projects/sradv/p1", json=corpo, headers=headers(servico, product)
+        )
+        assert r.status_code == 200, r.text
+        projeto = r.json()["project_id"]
+        again = client.put(
+            f"{API}/integration/projects/sradv/p1",
+            json={**corpo, "status": "on_hold"},
+            headers=headers(servico, product),
+        )
+        assert again.json()["project_id"] == projeto  # mesmo projeto, atualizado
+
+        admin = pampufa.person({product: ["nagare.admin"]})
+        editor = pampufa.person({product: ["nagare.editor"]})
+        lido = client.get(f"{API}/projects/{projeto}", headers=headers(admin, product)).json()
+        assert (lido["client_name"], lido["managed_elsewhere"], lido["status"]) == (
+            "De Castro Advogados",
+            True,
+            "on_hold",
+        )
+        r = client.patch(
+            f"{API}/projects/{projeto}", json={"name": "Outro"}, headers=headers(admin, product)
+        )
+        assert r.status_code == 409 and r.json()["codigo"] == "project_managed_elsewhere"
+
+        quadro = client.post(
+            f"{API}/integration/product/board", json={}, headers=headers(editor, product)
+        ).json()["link"]
+        coluna = client.get(
+            f"{API}/boards/{quadro['board_id']}", headers=headers(editor, product)
+        ).json()["columns"][0]
+        cartao = client.post(
+            f"{API}/cards",
+            json={
+                "board_id": quadro["board_id"],
+                "column_id": coluna["id"],
+                "title": "Relatório de produtividade",
+                "project_id": projeto,
+            },
+            headers=headers(editor, product),
+        ).json()
+        for minutos in (90, 30):
+            r = client.post(
+                f"{API}/cards/{cartao['id']}/time",
+                json={"worked_on": "2026-11-03", "minutes": minutos, "description": "levantamento"},
+                headers=headers(editor, product),
+            )
+            assert r.status_code == 201, r.text
+        horas = client.get(f"{API}/cards/{cartao['id']}/time", headers=headers(editor, product))
+        assert horas.json()["total_minutes"] == 120
+
+        cobranca = client.get(
+            f"{API}/integration/time",
+            params={"from": "2026-11-01", "to": "2026-11-30", "project_id": projeto},
+            headers=headers(servico, product),
+        ).json()
+        assert cobranca["total_minutes"] == 120
+        assert cobranca["items"][0]["card_title"] == "Relatório de produtividade"
+
+        leitura = client.get(
+            f"{API}/metrics/people",
+            params={"from": "2026-11-01", "to": "2026-11-30"},
+            headers=headers(editor, product),
+        ).json()
+        assert leitura["total_minutes"] == 120
+        assert leitura["clients"][0]["client_name"] == "De Castro Advogados"
+        assert leitura["projects"][0]["minutes"] == 120
     finally:
         _remove_products(database_url, (product,))

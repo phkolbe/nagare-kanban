@@ -26,14 +26,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..db import new_id, utcnow
 from ..deps import CurrentUser, get_current_user, get_session, require_capability, require_roles
 from ..errors import NotFound
 from ..integration import (
+    _visible_products,
     card_for_providencia,
     card_url,
     ensure_product_link,
@@ -197,8 +199,17 @@ async def _link_out(s: AsyncSession, product_id: str) -> dict[str, Any]:
             .order_by(ProductLinkHistory.at, ProductLinkHistory.id)
         )
     ]
+    from ..models import ProductSettings
+
+    own = as_dict(await s.get(ProductSettings, product_id)) or {}
+    novo_url = own.get("projects_new_url")
     if link is None:
-        return {"product_id": product_id, "link": None, "history": history}
+        return {
+            "product_id": product_id,
+            "link": None,
+            "history": history,
+            "projects_new_url": novo_url,
+        }
     project = as_dict(await s.get(Project, link["project_id"])) or {}
     board = as_dict(await s.get(Board, link["board_id"])) or {}
     return {
@@ -213,6 +224,7 @@ async def _link_out(s: AsyncSession, product_id: str) -> dict[str, Any]:
             "board": {"id": board.get("id"), "name": board.get("name"), "slug": board.get("slug")},
         },
         "history": history,
+        "projects_new_url": novo_url,
     }
 
 
@@ -339,3 +351,155 @@ async def put_product_link(
     )
     await s.commit()
     return {**await _link_out(s, user["product_id"]), "moved_cards": result["moved_cards"]}
+
+
+# ---------------------------------------------------------------------------
+# GJ-1: projects kept by another service (the SR GJ's Projeto)
+# ---------------------------------------------------------------------------
+
+
+class ExternalProjectIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    key: str = Field(min_length=2, max_length=8, pattern=r"^[A-Za-z0-9]+$")
+    color: str | None = Field(default=None, max_length=40)
+    status: str = Field(default="active", pattern=r"^(discovery|active|on_hold|done|cancelled)$")
+    client_name: str | None = Field(default=None, max_length=200)
+    description: str | None = None
+    started_at: str | None = None
+    target_date: str | None = None
+    #: Where a person opens the project (the Projeto in the SR GJ).
+    url: str | None = Field(default=None, max_length=300)
+    #: Where "Novo projeto" goes in this product.
+    novo_url: str | None = Field(default=None, max_length=300)
+
+
+@router.put(
+    "/projects/{source}/{external_id}",
+    summary="Create or update the project kept by another service (GJ-1)",
+)
+async def upsert_external_project(
+    source: str,
+    external_id: str,
+    payload: ExternalProjectIn,
+    s: AsyncSession = Depends(get_session),
+    user: CurrentUser = Depends(system_only),
+) -> dict[str, Any]:
+    from ..models import ProductSettings
+    from ..tenancy import product_for_new_rows
+
+    product_id = product_for_new_rows()
+    project = await s.scalar(
+        select(Project).where(
+            Project.product_id == product_id,
+            Project.external_source == source,
+            Project.external_id == external_id,
+        )
+    )
+    key = payload.key.upper()
+    taken = await s.scalar(
+        select(Project.id).where(Project.product_id == product_id, Project.key == key)
+    )
+    if taken and (project is None or taken != project.id):
+        from ..errors import Conflict
+
+        raise Conflict(
+            "project_key_taken", f"The project key “{key}” is already in use.", {"key": key}
+        )
+    values = {
+        "name": payload.name,
+        "color": payload.color,
+        "status": payload.status,
+        "client_name": payload.client_name,
+        "description": payload.description,
+        "started_at": payload.started_at,
+        "target_date": payload.target_date,
+        "external_url": payload.url,
+    }
+    if project is None:
+        project = Project(
+            id=new_id(),
+            product_id=product_id,
+            key=key,
+            created_at=utcnow(),
+            archived=False,
+            external_source=source,
+            external_id=external_id,
+            **values,
+        )
+        s.add(project)
+    else:
+        for campo, valor in values.items():
+            setattr(project, campo, valor)
+        project.archived = payload.status == "cancelled"
+    if payload.novo_url:
+        own = await s.get(ProductSettings, product_id)
+        if own is None:
+            own = ProductSettings(product_id=product_id, flags={}, updated_at=utcnow())
+            s.add(own)
+        own.projects_new_url = payload.novo_url
+    await s.commit()
+    return {"project_id": project.id, "key": project.key}
+
+
+@router.get("/time", summary="Hour entries of projects in a period (GJ-4 billing)")
+async def time_for_billing(
+    frm: str = Query(..., alias="from"),
+    to: str = Query(...),
+    project_id: list[str] = Query(default_factory=list),
+    s: AsyncSession = Depends(get_session),
+    user: CurrentUser = Depends(system_only),
+) -> dict[str, Any]:
+    from datetime import date as _date
+
+    from .horas import minutes_by_project
+
+    items = await minutes_by_project(
+        s, project_id, _date.fromisoformat(frm), _date.fromisoformat(to)
+    )
+    return {"items": items, "total_minutes": sum(i["minutes"] for i in items)}
+
+
+@router.get(
+    "/overview/metrics",
+    summary="Each product in a period: work in progress, delivered, on time and hours (D45)",
+)
+async def consolidated_metrics(
+    frm: str | None = Query(None, alias="from"),
+    to: str | None = Query(None),
+    s: AsyncSession = Depends(get_session),
+    user: CurrentUser = Depends(require_capability("read_boards_metrics")),
+) -> dict[str, Any]:
+    """The gestor's consolidated numbers (one row per product the caller can read)."""
+    from datetime import date as _date
+
+    from ..tenancy import set_current_product
+    from .horas import people_projects_clients
+
+    links = (await s.scalars(select(ProductLink).order_by(ProductLink.product_id))).all()
+    allowed = _visible_products(dict(user), [link.product_id for link in links])
+    current = user.get("product_id")
+    rows = []
+    try:
+        for product_id in allowed:
+            set_current_product(product_id)
+            leitura = await people_projects_clients(
+                s,
+                _date.fromisoformat(frm) if frm else None,
+                _date.fromisoformat(to) if to else None,
+            )
+            soma = {
+                k: sum(p[k] for p in leitura["people"])
+                for k in ("delivered", "on_time", "late", "wip")
+            }
+            rows.append(
+                {
+                    "product_id": product_id,
+                    **soma,
+                    "minutes": leitura["total_minutes"],
+                    "from": leitura["from"],
+                    "to": leitura["to"],
+                }
+            )
+    finally:
+        set_current_product(current)
+    return {"products": rows}

@@ -103,6 +103,10 @@ async def _project_counts(s: AsyncSession) -> dict[str, dict[str, int]]:
     }
 
 
+def _with_link(row: dict[str, Any]) -> dict[str, Any]:
+    return {**row, "managed_elsewhere": bool(row.get("external_source"))}
+
+
 async def _get_project_or_404(s: AsyncSession, project_id: str) -> dict[str, Any]:
     """Fetch a project by id or by its human key (``NGR``)."""
     row = same_product(as_dict(await s.get(Project, project_id)))
@@ -116,7 +120,7 @@ async def _get_project_or_404(s: AsyncSession, project_id: str) -> dict[str, Any
         )
     if row is None:
         raise NotFound("Project", project_id, code="project_not_found")
-    return row
+    return _with_link(row)
 
 
 def _require_project_write(user: CurrentUser) -> None:
@@ -257,7 +261,7 @@ async def list_projects(
     counts = await _project_counts(s)
     items = []
     for row in rows:
-        merged = as_dict(row[0]) or {}
+        merged = _with_link(as_dict(row[0]) or {})
         merged["owner_name"] = row._mapping["owner_name"]
         merged.update(counts.get(merged["id"], _ZERO_COUNTS))
         items.append(merged)
@@ -380,6 +384,14 @@ async def update_project(
     project = await _get_project_or_404(s, id)
     _require_project_write(user)
     fields = payload.model_dump(exclude_unset=True)
+    kept_elsewhere = {"name", "status", "started_at", "target_date", "archived"} & set(fields)
+    if project.get("external_source") and kept_elsewhere and user.get("role") != "system":
+        # GJ-1: the SR GJ keeps these; change them there (the link opens it).
+        raise Conflict(
+            "project_managed_elsewhere",
+            "This project is kept in another module; change it there.",
+            {"fields": sorted(kept_elsewhere), "url": project.get("external_url")},
+        )
     if fields:
         if fields.get("owner_id") and not await _user_exists(s, fields["owner_id"]):
             raise BadRequest(
