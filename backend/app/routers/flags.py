@@ -50,7 +50,7 @@ from ..deps import (
     require_standalone,
 )
 from ..errors import BadRequest, Conflict, Forbidden, NotFound
-from ..models import FeatureFlag, Plan, Workspace, as_dict
+from ..models import FeatureFlag, Plan, ProductSettings, Workspace, as_dict
 from ..schemas import (
     ApiErrorBody,
     FlagOut,
@@ -63,6 +63,7 @@ from ..schemas import (
     WorkspaceOut,
     WorkspaceUpdate,
 )
+from ..settings import flag_overrides, own_product, product_row
 
 __all__ = ["FlagCategoryOut", "FlagListOut", "WorkspaceDetailOut", "router"]
 
@@ -230,11 +231,28 @@ async def _workspace_row(s: AsyncSession) -> dict[str, Any]:
     return as_dict(workspace) or {}
 
 
+def _with_override(row: dict[str, Any], overrides: dict[str, bool]) -> dict[str, Any]:
+    """The flag row as this product sees it (its own switch over the workspace's)."""
+    if row.get("key") in overrides:
+        return {**row, "is_enabled": overrides[row["key"]]}
+    return row
+
+
+async def _product_settings(s: AsyncSession, product: str) -> ProductSettings:
+    own = await s.get(ProductSettings, product)
+    if own is None:
+        own = ProductSettings(product_id=product, flags={}, updated_at=utcnow())
+        s.add(own)
+        await s.flush()
+    return own
+
+
 async def _workspace_out(s: AsyncSession) -> dict[str, Any]:
+    """The settings in force for the current product (D46): its own over the workspace's."""
     row = await _workspace_row(s)
-    plan_row = (
-        as_dict(await s.get(Plan, row["active_plan_id"])) if row.get("active_plan_id") else None
-    )
+    own = await product_row(s) or {}
+    plan_id = own.get("active_plan_id") or row.get("active_plan_id")
+    plan_row = as_dict(await s.get(Plan, plan_id)) if plan_id else None
     plans = [
         _plan_out(as_dict(item) or {})
         for item in await s.scalars(select(Plan).order_by(Plan.tier_order))
@@ -242,8 +260,8 @@ async def _workspace_out(s: AsyncSession) -> dict[str, Any]:
     return {
         "id": "workspace",
         "name": row["name"],
-        "active_plan_id": row.get("active_plan_id"),
-        "timezone": row.get("timezone") or "UTC",
+        "active_plan_id": plan_id,
+        "timezone": own.get("timezone") or row.get("timezone") or "UTC",
         "updated_at": row.get("updated_at"),
         "plan": _plan_out(plan_row) if plan_row else None,
         "flags": await effective_flags(s),
@@ -271,7 +289,8 @@ async def list_flags(
     await _sync_plan_tiers(s)
     tier = await _active_tier(s)
     rows = await s.scalars(select(FeatureFlag).order_by(FeatureFlag.category, FeatureFlag.key))
-    items = [_flag_out(as_dict(row) or {}, tier) for row in rows]
+    overrides = await flag_overrides(s)
+    items = [_flag_out(_with_override(as_dict(row) or {}, overrides), tier) for row in rows]
     if category:
         items = [item for item in items if item["category"] == category]
 
@@ -331,7 +350,14 @@ async def update_flag(
     row = await _load_flag(s, key)
 
     changes: dict[str, Any] = {}
-    if payload.is_enabled is not None and bool(payload.is_enabled) != bool(row["is_enabled"]):
+    product = own_product()
+    if payload.is_enabled is not None and product:
+        # D46: in a product, the switch is that product's; the workspace default stays.
+        own = await _product_settings(s, product)
+        own.flags = {**(own.flags or {}), key: bool(payload.is_enabled)}
+        own.updated_at = utcnow()
+        await s.commit()
+    elif payload.is_enabled is not None and bool(payload.is_enabled) != bool(row["is_enabled"]):
         changes["is_enabled"] = bool(payload.is_enabled)
     if payload.min_plan is not None and payload.min_plan != row["min_plan"]:
         changes["min_plan"] = payload.min_plan
@@ -339,9 +365,8 @@ async def update_flag(
     if changes:
         await s.execute(update(FeatureFlag).where(FeatureFlag.key == key).values(**changes))
         await s.commit()
-        row = await _load_flag(s, key)
-
-    return _flag_out(row, await _active_tier(s))
+    row = await _load_flag(s, key)
+    return _flag_out(_with_override(row, await flag_overrides(s)), await _active_tier(s))
 
 
 # ---------------------------------------------------------------------------
@@ -513,6 +538,17 @@ async def update_workspace(
         changes["name"] = payload.name.strip()
     if payload.timezone is not None:
         changes["timezone"] = payload.timezone.strip() or "UTC"
+
+    product = own_product()
+    if product and ("active_plan_id" in changes or "timezone" in changes):
+        # D46: plan and time zone are the product's own; the name stays the workspace's.
+        own = await _product_settings(s, product)
+        if "active_plan_id" in changes:
+            own.active_plan_id = changes.pop("active_plan_id")
+        if "timezone" in changes:
+            own.timezone = changes.pop("timezone")
+        own.updated_at = utcnow()
+        await s.commit()
 
     if changes:
         changes["updated_at"] = utcnow()

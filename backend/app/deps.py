@@ -34,6 +34,7 @@ from .errors import ApiError, Conflict, Forbidden, NotFound, Unauthorized
 from .models import PRODUCT_STANDALONE, Board, FeatureFlag, Plan, User, Workspace, as_dict
 from .pampufa import is_pampufa_token, user_for_identity
 from .security import decode_token
+from .settings import flag_overrides, product_row
 from .tenancy import (
     current_product,
     local_product,
@@ -295,7 +296,13 @@ def require_capability(capability: str) -> Callable[..., Awaitable[CurrentUser]]
 
 
 async def get_active_plan(s: AsyncSession) -> dict[str, Any] | None:
-    """The workspace's active plan row (``None`` before seeding)."""
+    """The active plan row: the product's own (D46), else the workspace's (``None`` before
+    seeding)."""
+    own = await product_row(s)
+    if own and own.get("active_plan_id"):
+        mine = as_dict(await s.get(Plan, own["active_plan_id"]))
+        if mine:
+            return mine
     plan = await s.scalar(
         select(Plan)
         .join(Workspace, Workspace.active_plan_id == Plan.id)
@@ -308,8 +315,13 @@ async def effective_flags(s: AsyncSession) -> dict[str, bool]:
     """``{key: bool}`` — enabled **and** unlocked by the active plan (SPEC §3)."""
     plan = await get_active_plan(s)
     tier = plan_tier(plan.get("slug") if plan else None)
+    overrides = await flag_overrides(s)
     flags = await s.scalars(select(FeatureFlag).order_by(FeatureFlag.key))
-    return {flag.key: bool(flag.is_enabled) and plan_tier(flag.min_plan) <= tier for flag in flags}
+    return {
+        flag.key: overrides.get(flag.key, bool(flag.is_enabled))
+        and plan_tier(flag.min_plan) <= tier
+        for flag in flags
+    }
 
 
 async def is_flag_effective(s: AsyncSession, key: str) -> bool:
@@ -321,7 +333,8 @@ async def is_flag_effective(s: AsyncSession, key: str) -> bool:
         return True
     plan = await get_active_plan(s)
     tier = plan_tier(plan.get("slug") if plan else None)
-    return bool(flag.is_enabled) and plan_tier(flag.min_plan) <= tier
+    enabled = (await flag_overrides(s)).get(key, bool(flag.is_enabled))
+    return enabled and plan_tier(flag.min_plan) <= tier
 
 
 def require_flag(key: str) -> Callable[..., Awaitable[None]]:
@@ -333,7 +346,7 @@ def require_flag(key: str) -> Callable[..., Awaitable[None]]:
             return
         plan = await get_active_plan(s)
         plan_slug = plan.get("slug") if plan else None
-        if not flag.is_enabled:
+        if not (await flag_overrides(s)).get(key, bool(flag.is_enabled)):
             raise Forbidden(
                 f"The feature “{flag.name}” is switched off for this workspace.",
                 code="feature_disabled",

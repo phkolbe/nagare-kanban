@@ -476,6 +476,24 @@ class Workspace(Base):
     updated_at: Mapped[str] = mapped_column(Instant, nullable=False)
 
 
+class ProductSettings(Base):
+    """What a product sets for itself (D46, 06/11/2026): time zone, plan and flag switches.
+
+    Anything left empty falls back to the workspace row, which stays the default (and the
+    standalone Nagare's own settings). Flag overrides only switch ``is_enabled``; the plan
+    gate (``min_plan``) is global.
+    """
+
+    __tablename__ = "product_settings"
+
+    product_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    active_plan_id: Mapped[str | None] = _fk("plans.id", "SET NULL")
+    timezone: Mapped[str | None] = mapped_column(String(60))
+    #: ``{flag key: bool}``: this product's switch for the flag.
+    flags: Mapped[dict[str, Any]] = mapped_column(Json, nullable=False, default=dict)
+    updated_at: Mapped[str] = mapped_column(Instant, nullable=False)
+
+
 # ---------------------------------------------------------------------------
 # Simulator
 # ---------------------------------------------------------------------------

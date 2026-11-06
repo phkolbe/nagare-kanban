@@ -34,13 +34,14 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 from typing import Any
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from ..db import parse_iso
-from ..models import Blocker, Board, Card, Project, SimulationRun, Workspace
+from ..models import Blocker, Board, Card, Project, SimulationRun
+from ..settings import zone as settings_zone
 from ..texts import N_, _, num
 from .intervals import (
     ACTIVITY,
@@ -272,12 +273,8 @@ def _parse_bound(value: str | datetime | None, *, end_of_day: bool) -> datetime 
 
 
 def workspace_zone(db: Session) -> ZoneInfo:
-    """The workspace time zone (``UTC`` when unset or unknown)."""
-    name = db.scalar(select(Workspace.timezone)) or "UTC"
-    try:
-        return ZoneInfo(name)
-    except (ZoneInfoNotFoundError, ValueError):
-        return ZoneInfo("UTC")
+    """The product's time zone, else the workspace's (``UTC`` when unset or unknown; D46)."""
+    return settings_zone(db)
 
 
 def end_of_day(day: str | datetime | None, zone: ZoneInfo) -> datetime | None:
