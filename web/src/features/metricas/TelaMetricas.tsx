@@ -6,11 +6,12 @@
  */
 
 import { useState, type ReactNode } from 'react'
-import { Navigate, useNavigate, useParams } from 'react-router-dom'
+import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
 import { Aviso, Cabecalho, Carregando, ErroDeApi, Tag, hojeISO } from '@pampufa/ui'
 
 import { useNagare } from '../../app/contexto'
 import { CLASSES, type ClasseServico, type SegmentoVisao } from '../../api/tipos'
+import { CaixaDeLista } from '../../componentes/CaixaDeLista'
 import { SeletorIdioma } from '../../componentes/SeletorIdioma'
 import {
   AreaEmpilhada,
@@ -28,6 +29,7 @@ import {
 } from '../../graficos/Graficos'
 import { ms } from '../../graficos/escalas'
 import { useT, type Chave } from '../../i18n'
+import { itensDoTrocadorDeQuadro } from '../projetos/listas'
 import { useProjetos, useQuadro, useQuadros, useVinculo } from '../quadro/consultas'
 import { PainelPessoas } from './PainelPessoas'
 import {
@@ -41,7 +43,7 @@ import {
   type Series,
   type ValorMetrica,
 } from './consultas'
-import { formatarIndicador } from './formato'
+import { buscaDoIndicador, formatarIndicador } from './formato'
 import { PainelKmm } from './PainelKmm'
 import { PainelPrevisao } from './PainelPrevisao'
 
@@ -122,18 +124,13 @@ function MetricasDoQuadro({ quadroId }: { quadroId: string }) {
         titulo={q.name}
         acoes={
           <>
-            <label className="ng-seletor-quadro">
-              <span className="visualmente-oculto">{t('quadro.trocar')}</span>
-              <select value={quadroId} aria-label={t('quadro.trocar')} onChange={(e) => navegar(rota(`metricas/${e.target.value}`))}>
-                {(quadros.data?.items ?? [])
-                  .filter((x) => !x.archived)
-                  .map((x) => (
-                    <option key={x.id} value={x.id}>
-                      {x.name}
-                    </option>
-                  ))}
-              </select>
-            </label>
+            <CaixaDeLista
+              compacto
+              rotulo={t('quadro.trocar')}
+              itens={itensDoTrocadorDeQuadro(quadros.data?.items ?? [], t('quadro.so_leitura'))}
+              valor={quadroId}
+              aoMudar={(id) => navegar(rota(`metricas/${id}`))}
+            />
             <SeletorIdioma />
           </>
         }
@@ -205,7 +202,17 @@ function MetricasDoQuadro({ quadroId }: { quadroId: string }) {
                     }
                   : undefined
                 : resumo.data?.metrics[ind.chave]
-            return <Indicador key={ind.chave} rotulo={t(ind.rotulo)} valor={valor} principal={ind.principal} fechado={fechado} />
+            const busca = buscaDoIndicador(ind.chave, filtros)
+            return (
+              <Indicador
+                key={ind.chave}
+                rotulo={t(ind.rotulo)}
+                valor={valor}
+                principal={ind.principal}
+                fechado={fechado}
+                para={busca === null ? undefined : `${rota(`quadro/${quadroId}`)}?${busca}`}
+              />
+            )
           })
         )}
       </section>
@@ -548,7 +555,20 @@ function MetricasDoQuadro({ quadroId }: { quadroId: string }) {
   )
 }
 
-function Indicador({ rotulo, valor, principal, fechado }: { rotulo: string; valor: ValorMetrica | undefined; principal?: boolean; fechado: boolean }) {
+function Indicador({
+  rotulo,
+  valor,
+  principal,
+  fechado,
+  para,
+}: {
+  rotulo: string
+  valor: ValorMetrica | undefined
+  principal?: boolean
+  fechado: boolean
+  /** Regra geral de 09/11/2026: o indicador que conta cartoes abre o quadro filtrado. */
+  para?: string
+}) {
   const { t, numero } = useT()
   if (fechado) {
     return (
@@ -564,8 +584,10 @@ function Indicador({ rotulo, valor, principal, fechado }: { rotulo: string; valo
     porSemana: t('unidade.por_semana'),
   })
   const melhora = valor?.trend_pct != null && valor.higher_is_better != null ? (valor.trend_pct > 0) === valor.higher_is_better : null
-  return (
-    <div className={`ng-indicador${principal ? ' principal' : ''}`} title={valor?.description ?? undefined}>
+  const classe = `ng-indicador${principal ? ' principal' : ''}${para ? ' clicavel' : ''}`
+  const dica = [valor?.description, para ? t('metricas.abrir_no_quadro') : null].filter(Boolean).join(' · ') || undefined
+  const corpo = (
+    <>
       <div className="ng-indicador-rotulo">
         {rotulo}
         {principal && <Tag cor="azul">{t('metricas.lei_de_little')}</Tag>}
@@ -587,6 +609,15 @@ function Indicador({ rotulo, valor, principal, fechado }: { rotulo: string; valo
           {valor.low_confidence && <Tag cor="amarelo">{t('metricas.pouca_confianca')}</Tag>}
         </div>
       )}
+    </>
+  )
+  return para ? (
+    <Link className={classe} to={para} title={dica}>
+      {corpo}
+    </Link>
+  ) : (
+    <div className={classe} title={dica}>
+      {corpo}
     </div>
   )
 }

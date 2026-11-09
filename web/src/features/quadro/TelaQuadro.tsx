@@ -15,10 +15,12 @@ import { Aviso, Cabecalho, Carregando, ErroDeApi, Vazio } from '@pampufa/ui'
 
 import { useNagare } from '../../app/contexto'
 import type { Cartao, ClasseServico, Coluna, SegmentoVisao } from '../../api/tipos'
+import { CaixaDeLista } from '../../componentes/CaixaDeLista'
 import { Janela } from '../../componentes/Sobreposicao'
 import { SeletorIdioma } from '../../componentes/SeletorIdioma'
 import { mensagemDeErro, useT } from '../../i18n'
 import { GavetaCartao } from '../cartao/GavetaCartao'
+import { itensDoTrocadorDeQuadro } from '../projetos/listas'
 import { EditorEstrutura } from '../estrutura/EditorEstrutura'
 import { useAlterarQuadro, useCriarQuadroDoProduto, useMover, useQuadro, useQuadros, useVinculo, useVisao } from './consultas'
 import { EditorWip } from './EditorWip'
@@ -309,19 +311,14 @@ function QuadroDoProduto({ quadroId }: { quadroId: string }) {
         >
           ⛶
         </button>
-        <label className="ng-seletor-quadro">
-          <span className="visualmente-oculto">{t('quadro.trocar')}</span>
-          <select value={quadroId} aria-label={t('quadro.trocar')} onChange={(e) => navegar(rota(`quadro/${e.target.value}`))}>
-            {(quadros.data?.items ?? [])
-              .filter((x) => !x.archived)
-              .map((x) => (
-                <option key={x.id} value={x.id}>
-                  {x.name}
-                  {x.read_only ? ` (${t('quadro.so_leitura')})` : ''}
-                </option>
-              ))}
-          </select>
-        </label>
+        {/* Quadro e cadastro (cresce): o trocador filtra ao digitar (regra geral de 09/11/2026). */}
+        <CaixaDeLista
+          compacto
+          rotulo={t('quadro.trocar')}
+          itens={itensDoTrocadorDeQuadro(quadros.data?.items ?? [], t('quadro.so_leitura'))}
+          valor={quadroId}
+          aoMudar={(id) => navegar(rota(`quadro/${id}`))}
+        />
         <SeletorIdioma />
       </div>
       {formato === 'bar' && barraAberta && <div className="ng-barra ng-barra-ferramentas">{ferramentas}</div>}

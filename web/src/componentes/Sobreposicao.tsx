@@ -8,10 +8,24 @@ import { useEffect, useRef, type ReactNode } from 'react'
 
 import { useT } from '../i18n'
 
+/**
+ * As sobreposicoes abertas, da de baixo para a de cima. Uma janela pode abrir outra por cima (o
+ * "+" ao lado de uma lista abre o cadastro, 09/11/2026): o Esc fecha so a de cima.
+ */
+const abertas: object[] = []
+
 function useFecharComEsc(fechar: () => void) {
+  const eu = useRef({})
+  useEffect(() => {
+    const marca = eu.current
+    abertas.push(marca)
+    return () => {
+      abertas.splice(abertas.indexOf(marca), 1)
+    }
+  }, [])
   useEffect(() => {
     const tecla = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
+      if (e.key === 'Escape' && abertas[abertas.length - 1] === eu.current) {
         e.stopPropagation()
         fechar()
       }

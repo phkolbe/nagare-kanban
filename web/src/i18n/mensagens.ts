@@ -20,6 +20,13 @@ const ptBase = {
   'comum.remover': 'remover',
   'comum.salvar': 'Salvar',
 
+  // Lista de cadastro com filtro (regra geral de 09/11/2026)
+  'lista.filtrar': 'Selecione ou digite para filtrar…',
+  'lista.nada': 'Nada encontrado com “{busca}”.',
+  'lista.incluir': 'Incluir novo',
+  'lista.escolha': 'Escolha um item da lista.',
+  'metricas.abrir_no_quadro': 'Abrir os cartões no quadro',
+
   'idioma.rotulo': 'Língua das telas',
   'idioma.padrao': 'Padrão ({idioma})',
   'idioma.pt': 'Português',
@@ -476,6 +483,12 @@ const enBase: Record<keyof typeof ptBase, string> = {
   'comum.ok': 'Got it',
   'comum.remover': 'remove',
   'comum.salvar': 'Save',
+
+  'lista.filtrar': 'Select or type to filter…',
+  'lista.nada': 'Nothing matches “{busca}”.',
+  'lista.incluir': 'Add new',
+  'lista.escolha': 'Pick an item from the list.',
+  'metricas.abrir_no_quadro': 'Open the cards on the board',
 
   'idioma.rotulo': 'Screen language',
   'idioma.padrao': 'Default ({idioma})',

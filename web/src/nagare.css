@@ -1201,3 +1201,103 @@ textarea:user-invalid {
   border-color: var(--ng-obrigatorio);
   box-shadow: 0 0 0 1px var(--ng-obrigatorio);
 }
+
+/* ------------------------------------------------------------------ lista de cadastro com filtro */
+/* Regra geral de 09/11/2026 (componentes/CaixaDeLista.tsx): digitar filtra; o "+" fica ao lado do
+   campo. A lista e `position: fixed` (o corpo da janela rola e cortaria). Cores por variavel:
+   segue o tema escuro do Nagare sozinho. */
+.ng-caixa-linha {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+.ng-caixa {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.ng-caixa input {
+  width: 100%;
+  padding-right: 26px;
+  background: var(--card);
+  color: var(--text);
+}
+.ng-caixa-seta {
+  position: absolute;
+  right: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--muted);
+  font-size: 11px;
+  pointer-events: none;
+}
+.ng-caixa-lista {
+  position: fixed;
+  z-index: 300;
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  overflow-y: auto;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(15, 40, 64, 0.18);
+}
+.ng-caixa-opcao {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 7px 12px;
+  font-size: 13.5px;
+  cursor: pointer;
+}
+.ng-caixa-opcao.ativa {
+  background: var(--line-soft);
+}
+.ng-caixa-opcao[aria-selected='true'] {
+  font-weight: 600;
+}
+.ng-caixa-opcao.vazia {
+  color: var(--muted);
+  font-style: italic;
+}
+.ng-caixa-nada {
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.ng-caixa-incluir {
+  flex: 0 0 auto;
+  min-width: 38px;
+  padding: 0 10px;
+  font-size: 18px;
+  line-height: 1;
+}
+.ng-caixa-campo.compacto {
+  margin-bottom: 0;
+  min-width: 200px;
+}
+.ng-caixa-campo.compacto input {
+  padding-top: 6px;
+  padding-bottom: 6px;
+  font-size: 13px;
+}
+
+/* ------------------------------------------------------------------ indicador clicavel */
+/* Regra geral de 09/11/2026: o indicador que conta cartoes abre o quadro com o filtro. */
+a.ng-indicador.clicavel {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+  transition: box-shadow 0.12s, border-color 0.12s;
+}
+a.ng-indicador.clicavel:hover {
+  border-color: var(--navy);
+  box-shadow: 0 2px 8px rgba(18, 49, 76, 0.08);
+}
+a.ng-indicador.clicavel:focus-visible {
+  outline: 2px solid var(--navy);
+  outline-offset: 2px;
+}

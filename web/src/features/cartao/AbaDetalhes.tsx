@@ -8,6 +8,7 @@ import { useQueryClient } from '@tanstack/react-query'
 
 import { useNagare } from '../../app/contexto'
 import { chaves } from '../../api/nagare'
+import { CaixaDeLista } from '../../componentes/CaixaDeLista'
 import { Obrigatorio } from '../../componentes/Obrigatorio'
 import {
   AREAS_VALOR,
@@ -18,7 +19,9 @@ import {
   type Quadro,
 } from '../../api/tipos'
 import { useT, type Chave } from '../../i18n'
-import { usePessoas, useProjetos } from '../quadro/consultas'
+import { FormProjeto } from '../projetos/FormProjeto'
+import { itensDePessoas, itensDeProjetos, podeCriarProjeto } from '../projetos/listas'
+import { usePessoas, useProjetos, useVinculo } from '../quadro/consultas'
 import { useAcaoNoCartao } from './acoes'
 
 type Campos = Partial<
@@ -45,6 +48,9 @@ export function AbaDetalhes({ cartao, quadro, editavel }: { cartao: CartaoDetalh
   const queryClient = useQueryClient()
   const projetos = useProjetos()
   const pessoas = usePessoas()
+  const vinculo = useVinculo()
+  // "+" ao lado da lista de projetos (09/11/2026): null fechado; texto, aberto com a sugestao.
+  const [novoProjeto, setNovoProjeto] = useState<string | null>(null)
   const acao = useAcaoNoCartao<CartaoDetalhe>(cartao)
   const gravar = (campos: Campos) =>
     acao.mutate(
@@ -71,30 +77,25 @@ export function AbaDetalhes({ cartao, quadro, editavel }: { cartao: CartaoDetalh
       />
       <div className="ng-linha-campos">
         {flags.multi_project !== false && (
-          <CampoLista
-            rotulo="cartao.campo.projeto"
+          <CaixaDeLista
+            rotulo={t('cartao.campo.projeto')}
+            itens={itensDeProjetos(projetos.data?.items ?? [], cartao.project_id ?? '')}
             valor={cartao.project_id ?? ''}
-            editavel={editavel}
-            opcoes={[
-              { valor: '', texto: t('cartao.sem_projeto') },
-              ...(projetos.data?.items ?? []).map((p) => ({ valor: p.id, texto: `${p.key} · ${p.name}` })),
-            ]}
-            gravar={(v) => gravar({ project_id: v || null })}
+            desabilitado={!editavel}
+            vazio={t('cartao.sem_projeto')}
+            aoMudar={(v) => gravar({ project_id: v || null })}
+            aoIncluir={editavel && podeCriarProjeto(eu, vinculo.data) ? setNovoProjeto : undefined}
+            rotuloIncluir={t('projetos.novo')}
           />
         )}
-        <CampoLista
-          rotulo="cartao.campo.responsavel"
+        <CaixaDeLista
+          rotulo={t('cartao.campo.responsavel')}
+          // Quem ja estava no cartao continua visivel, mesmo fora da lista atual.
+          itens={itensDePessoas(pessoas.data?.people ?? [], { id: cartao.assignee_id, nome: cartao.assignee_name })}
           valor={cartao.assignee_id ?? ''}
-          editavel={editavel}
-          opcoes={[
-            { valor: '', texto: t('cartao.sem_responsavel') },
-            ...(pessoas.data?.people ?? []).map((p) => ({ valor: p.id, texto: p.name })),
-            // Quem ja estava no cartao continua visivel, mesmo fora da lista atual.
-            ...(cartao.assignee_id && !(pessoas.data?.people ?? []).some((p) => p.id === cartao.assignee_id)
-              ? [{ valor: cartao.assignee_id, texto: cartao.assignee_name ?? cartao.assignee_id }]
-              : []),
-          ]}
-          gravar={(v) => gravar({ assignee_id: v || null })}
+          desabilitado={!editavel}
+          vazio={t('cartao.sem_responsavel')}
+          aoMudar={(v) => gravar({ assignee_id: v || null })}
         />
       </div>
       <div className="ng-linha-campos">
@@ -168,6 +169,14 @@ export function AbaDetalhes({ cartao, quadro, editavel }: { cartao: CartaoDetalh
         <CamposPersonalizados cartao={cartao} editavel={editavel} gravar={(campos) => gravar({ custom_fields: campos })} />
       )}
       <p className="mini">{t('cartao.quadro', { quadro: quadro.name })}</p>
+      {novoProjeto !== null && (
+        <FormProjeto
+          projeto={null}
+          nomeSugerido={novoProjeto}
+          fechar={() => setNovoProjeto(null)}
+          criado={(p) => gravar({ project_id: p.id })}
+        />
+      )}
     </div>
   )
 }

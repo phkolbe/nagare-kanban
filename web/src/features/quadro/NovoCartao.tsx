@@ -7,10 +7,13 @@ import { Aviso } from '@pampufa/ui'
 import { useNagare } from '../../app/contexto'
 import { nagare } from '../../api/nagare'
 import { CLASSES, type Cartao, type ClasseServico, type Coluna } from '../../api/tipos'
+import { CaixaDeLista } from '../../componentes/CaixaDeLista'
 import { Janela } from '../../componentes/Sobreposicao'
 import { Obrigatorio, conferirObrigatorios } from '../../componentes/Obrigatorio'
 import { mensagemDeErro, useT } from '../../i18n'
-import { useProjetos, useRecarregarQuadro } from './consultas'
+import { FormProjeto } from '../projetos/FormProjeto'
+import { itensDeProjetos, podeCriarProjeto } from '../projetos/listas'
+import { useProjetos, useRecarregarQuadro, useVinculo } from './consultas'
 
 export function NovoCartao({
   quadroId,
@@ -28,9 +31,12 @@ export function NovoCartao({
   const { t, eu } = useT()
   const produto = useNagare().produto
   const projetos = useProjetos()
+  const vinculo = useVinculo()
   const recarregar = useRecarregarQuadro()
   const [titulo, setTitulo] = useState('')
   const [projeto, setProjeto] = useState('')
+  // "+" ao lado da lista (09/11/2026): null fechado; texto, aberto com a sugestao de nome.
+  const [novoProjeto, setNovoProjeto] = useState<string | null>(null)
   const [classeEscolhida, setClasse] = useState<ClasseServico>(classe ?? 'standard')
   const criar = useMutation({
     mutationFn: () =>
@@ -81,19 +87,15 @@ export function NovoCartao({
           <input value={titulo} maxLength={500} autoFocus required onChange={(e) => setTitulo(e.target.value)} />
         </label>
         {eu?.flags.multi_project !== false && (
-          <label className="campo">
-            <span>{t('cartao.campo.projeto')}</span>
-            <select value={projeto} onChange={(e) => setProjeto(e.target.value)}>
-              <option value="">{t('cartao.sem_projeto')}</option>
-              {(projetos.data?.items ?? [])
-                .filter((p) => !p.archived)
-                .map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.key} · {p.name}
-                  </option>
-                ))}
-            </select>
-          </label>
+          <CaixaDeLista
+            rotulo={t('cartao.campo.projeto')}
+            itens={itensDeProjetos(projetos.data?.items ?? [], projeto)}
+            valor={projeto}
+            aoMudar={setProjeto}
+            vazio={t('cartao.sem_projeto')}
+            aoIncluir={podeCriarProjeto(eu, vinculo.data) ? setNovoProjeto : undefined}
+            rotuloIncluir={t('projetos.novo')}
+          />
         )}
         {eu?.flags.service_classes !== false && (
           <label className="campo">
@@ -110,6 +112,10 @@ export function NovoCartao({
         )}
       </form>
       {criar.isError && <Aviso tipo="erro">{mensagemDeErro(criar.error, t)}</Aviso>}
+      {/* Fora do <form> deste cartao: a janela do projeto tem o form dela. */}
+      {novoProjeto !== null && (
+        <FormProjeto projeto={null} nomeSugerido={novoProjeto} fechar={() => setNovoProjeto(null)} criado={(p) => setProjeto(p.id)} />
+      )}
     </Janela>
   )
 }

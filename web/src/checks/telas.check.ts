@@ -13,7 +13,10 @@ import type { Cartao, Coluna, SituacaoWip } from '../api/tipos'
 import { travaDoUsuario } from '../features/admin/travas'
 import { eficienciaDoCartao } from '../features/cartao/eficiencia'
 import { janela } from '../features/metricas/consultas'
-import { formatarIndicador, valorKmm } from '../features/metricas/formato'
+import { buscaDoIndicador, formatarIndicador, valorKmm } from '../features/metricas/formato'
+import { filtrarDaCaixa, opcoesDaCaixa, proximoIndice, textoDeBusca } from '../componentes/listaComFiltro'
+import { itensDePessoas, itensDeProjetos, itensDeQuadros, itensDoTrocadorDeQuadro, podeCriarProjeto } from '../features/projetos/listas'
+import type { Projeto, Quadro } from '../api/tipos'
 import { melhorLinha, rebalancear } from '../features/simulador/tipos'
 import { eixoRedondo, passoRedondo } from '../graficos/escalas'
 import { rotaDoLinkAntigo } from '../sozinho/linksAntigos'
@@ -327,6 +330,47 @@ confere('horas em texto', [horasEmTexto(90), horasEmTexto(60), horasEmTexto(45)]
 confere('minutos do que se digita', ['1:30', '1h30', '1,5', '45min', '2', 'abc', '25:00'].map(minutosDeTexto), [90, 90, 90, 45, 120, null, null])
 confere('no prazo', [textoNoPrazo({ on_time: 2, late: 1 }), textoNoPrazo({ on_time: 0, late: 0 })], ['2 de 3 (67%)', '—'])
 confere('periodo padrao: do dia 1 a hoje', periodoPadrao(new Date(2026, 10, 6)), { de: '2026-11-01', ate: '2026-11-06' })
+
+// ------------------------------------------- listas com filtro e numeros clicaveis (regra geral de 09/11/2026)
+{
+  const itens = [
+    { id: 'p1', nome: 'SRA · Ação Cível' },
+    { id: 'p2', nome: 'GJ · Gestão Jurídica', detalhe: 'sarah@exemplo.com' },
+    { id: 'p3', nome: 'LOJ · Loja Batoom' },
+  ]
+  confere('lista: texto de busca', textoDeBusca('  Gestão   JURÍDICA '), 'gestao juridica')
+  confere('lista: filtro sem acento e em qualquer ordem', filtrarDaCaixa(itens, 'civel acao').map((i) => i.id), ['p1'])
+  confere('lista: filtro pelo detalhe', filtrarDaCaixa(itens, 'sarah').map((i) => i.id), ['p2'])
+  confere('lista: opcao vazia so sem filtro', [opcoesDaCaixa(itens, '', true).length, opcoesDaCaixa(itens, 'loja', true).length, opcoesDaCaixa(itens, '', false).length], [4, 1, 3])
+  confere('lista: setas param nas pontas', [proximoIndice(0, -1, 3), proximoIndice(2, 1, 3), proximoIndice(1, 1, 3), proximoIndice(0, 1, 0)], [0, 2, 2, 0])
+
+  const projeto = (id: string, archived = false) => ({ id, key: id.toUpperCase(), name: `Projeto ${id}`, archived }) as Projeto
+  const projetos = [projeto('a'), projeto('b', true), projeto('c')]
+  confere('projetos: sem arquivado nem o excluido', itensDeProjetos(projetos, '', 'c').map((i) => i.nome), ['A · Projeto a'])
+  confere('projetos: o escolhido arquivado continua', itensDeProjetos(projetos, 'b').map((i) => i.id), ['a', 'b', 'c'])
+  const quadro = (id: string, archived = false, read_only = false) => ({ id, name: `Quadro ${id}`, archived, read_only }) as Quadro
+  const quadros = [quadro('q1'), quadro('q2', true), quadro('q3', false, true)]
+  confere('quadros: so os que recebem cartao', itensDeQuadros(quadros).map((i) => i.id), ['q1'])
+  confere('trocador: so leitura no detalhe', itensDoTrocadorDeQuadro(quadros, 'só leitura').map((i) => [i.id, i.detalhe]), [['q1', null], ['q3', 'só leitura']])
+  confere(
+    'pessoas: e-mail no detalhe e o atual fora da lista',
+    itensDePessoas([{ id: 'u1', name: 'Sarah', email: 's@x.com' }], { id: 'u9', nome: 'Antiga' }),
+    [{ id: 'u1', nome: 'Sarah', detalhe: 's@x.com' }, { id: 'u9', nome: 'Antiga' }],
+  )
+  const eu = (manage_boards: boolean, multi_project = true) => ({ capabilities: { manage_boards }, flags: { multi_project } })
+  confere(
+    'novo projeto pelo +: gere quadros, usa projetos e nao e cadastro de fora',
+    [podeCriarProjeto(eu(true), null), podeCriarProjeto(eu(false), null), podeCriarProjeto(eu(true, false), null), podeCriarProjeto(eu(true), { projects_new_url: 'https://x' })],
+    [true, false, false, false],
+  )
+
+  const filtros = { projeto: 'p1', classe: 'expedite' as const, segmento: 'unified' as const }
+  confere('indicador WIP abre o quadro com os filtros', buscaDoIndicador('wip', filtros), 'segmento=unified&projeto=p1&classe=expedite')
+  confere('indicador de falha filtra o tipo', buscaDoIndicador('failure_demand', { ...filtros, classe: '' }), 'segmento=unified&projeto=p1&tipo=failure')
+  confere('indicador de prazos filtra a data fixa', buscaDoIndicador('due_date_performance', filtros), 'segmento=unified&projeto=p1&classe=fixed_date')
+  confere('tempos e vazao nao tem lista', [buscaDoIndicador('p50', filtros), buscaDoIndicador('throughput', filtros)], [null, null])
+  confere('o filtro do indicador o quadro le de volta', lerFiltros(new URLSearchParams(buscaDoIndicador('failure_demand', filtros)!)).tipo, 'failure')
+}
 
 if (falhas > 0) throw new Error(`${falhas} de ${total} verificacoes falharam.`)
 console.log(`${total} verificacoes das telas do Nagare passaram.`)

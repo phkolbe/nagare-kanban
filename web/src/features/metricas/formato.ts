@@ -1,5 +1,8 @@
 /** Formatos das metricas (puro: conferido em `npm run check`). */
 
+import type { ClasseServico, SegmentoVisao } from '../../api/tipos'
+import { FILTROS_VAZIOS, gravarFiltros } from '../quadro/regras'
+
 /** O valor de um indicador pronto para o quadrinho: numero e unidade. */
 export function formatarIndicador(
   valor: number | null | undefined,
@@ -54,4 +57,28 @@ export function valorKmm(valor: unknown, numero: (v: number, casas?: number) => 
     .slice(0, 3)
     .map(([k, v]) => `${k} ${typeof v === 'number' ? numero(v, 1) : String(v)}`)
     .join(' · ')
+}
+
+/**
+ * Indicador que conta cartoes abre o quadro com o filtro (regra geral de 09/11/2026): o WIP (os
+ * comprometidos ainda nao entregues), a demanda de falha (tipo "falha") e os prazos (classe
+ * "data fixa"). Leva junto o projeto, a classe e o segmento escolhidos nas metricas. Os outros
+ * (tempos, vazao, SLE) medem entregas do periodo, que nao tem lista para abrir: null.
+ */
+export function buscaDoIndicador(
+  chave: string,
+  filtros: { projeto: string; classe: ClasseServico | ''; segmento: SegmentoVisao },
+): string | null {
+  const base = { ...FILTROS_VAZIOS, projeto: filtros.projeto, classes: filtros.classe ? [filtros.classe] : [] }
+  const comFiltro =
+    chave === 'wip'
+      ? base
+      : chave === 'failure_demand'
+        ? { ...base, tipo: 'failure' as const }
+        : chave === 'due_date_performance'
+          ? { ...base, classes: ['fixed_date' as const] }
+          : null
+  if (!comFiltro) return null
+  const busca = gravarFiltros(new URLSearchParams({ segmento: filtros.segmento }), comFiltro)
+  return busca.toString()
 }

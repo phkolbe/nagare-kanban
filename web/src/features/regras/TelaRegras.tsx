@@ -10,10 +10,12 @@ import { Aviso, Cabecalho, Carregando, ErroDeApi, Tag, requisitar, useProduto } 
 
 import { chaves, urlRegras } from '../../api/nagare'
 import { CLASSES, type ClasseServico, type Regra, type Regras } from '../../api/tipos'
+import { CaixaDeLista } from '../../componentes/CaixaDeLista'
 import { SeletorIdioma } from '../../componentes/SeletorIdioma'
 import { Janela } from '../../componentes/Sobreposicao'
 import { Obrigatorio, conferirObrigatorios } from '../../componentes/Obrigatorio'
 import { mensagemDeErro, useT, type Chave } from '../../i18n'
+import { itensDePessoas } from '../projetos/listas'
 
 /** Servicos que abrem providencias (prefixo do evento `<servico>.providencia.aberta`). */
 const SERVICOS = ['*', 'financeiro', 'sradv', 'batoom'] as const
@@ -189,17 +191,13 @@ function FormRegra({
             <small className="mini">{t('regras.tipo_dica')}</small>
           </label>
         </div>
-        <label className="campo">
-          <span>{t('regras.responsavel')}</span>
-          <select value={responsavel} onChange={(e) => setResponsavel(e.target.value)}>
-            <option value="">{t('regras.sem_responsavel')}</option>
-            {pessoas.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.nome} ({p.email})
-              </option>
-            ))}
-          </select>
-        </label>
+        <CaixaDeLista
+          rotulo={t('regras.responsavel')}
+          itens={itensDePessoas(pessoas.map((p) => ({ id: p.id, name: p.nome, email: p.email })))}
+          valor={responsavel}
+          aoMudar={setResponsavel}
+          vazio={t('regras.sem_responsavel')}
+        />
         <div className="ng-linha-campos">
           <label className="campo">
             <span>{t('regras.prazo')}</span>

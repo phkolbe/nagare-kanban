@@ -15,15 +15,18 @@ export function FormProjeto({
   projeto,
   fechar,
   criado,
+  nomeSugerido = '',
 }: {
   projeto: Projeto | null
   fechar: () => void
   criado?: (projeto: Projeto) => void
+  /** Do "+" ao lado da lista de projetos (09/11/2026): o que a pessoa tinha digitado no filtro. */
+  nomeSugerido?: string
 }) {
   const { t } = useT()
   const produto = useNagare().produto
   const queryClient = useQueryClient()
-  const [nome, setNome] = useState(projeto?.name ?? '')
+  const [nome, setNome] = useState(projeto?.name ?? nomeSugerido.trim().slice(0, 200))
   const [chave, setChave] = useState(projeto?.key ?? '')
   const [cor, setCor] = useState(projeto?.color ?? '#24548f')
   const [situacao, setSituacao] = useState<SituacaoProjeto>(projeto?.status ?? 'active')

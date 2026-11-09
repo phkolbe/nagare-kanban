@@ -18,10 +18,12 @@ import {
   type Tamanho,
   type TipoDemanda,
 } from '../../api/tipos'
+import { CaixaDeLista } from '../../componentes/CaixaDeLista'
 import { Janela } from '../../componentes/Sobreposicao'
 import { Obrigatorio, conferirObrigatorios } from '../../componentes/Obrigatorio'
 import { mensagemDeErro, useT } from '../../i18n'
 import { useQuadros } from '../quadro/consultas'
+import { itensDeQuadros } from './listas'
 
 export function NovaDemanda({ projeto, fechar }: { projeto: ProjetoDetalhe; fechar: () => void }) {
   const { t } = useT()
@@ -107,19 +109,13 @@ export function NovaDemanda({ projeto, fechar }: { projeto: ProjetoDetalhe; fech
             <span>{t('cartao.campo.solicitante')}</span>
             <input value={f.solicitante} maxLength={200} onChange={(e) => muda('solicitante', e.target.value)} />
           </label>
-          <label className="campo">
-            <span>{t('demanda.quadro')}</span>
-            <select value={f.quadro} onChange={(e) => muda('quadro', e.target.value)}>
-              <option value="">{t('demanda.quadro_padrao')}</option>
-              {(quadros.data?.items ?? [])
-                .filter((q) => !q.archived && !q.read_only)
-                .map((q) => (
-                  <option key={q.id} value={q.id}>
-                    {q.name}
-                  </option>
-                ))}
-            </select>
-          </label>
+          <CaixaDeLista
+            rotulo={t('demanda.quadro')}
+            itens={itensDeQuadros(quadros.data?.items ?? [])}
+            valor={f.quadro}
+            aoMudar={(v) => muda('quadro', v)}
+            vazio={t('demanda.quadro_padrao')}
+          />
         </div>
         <div className="ng-linha-campos">
           <label className="campo">
