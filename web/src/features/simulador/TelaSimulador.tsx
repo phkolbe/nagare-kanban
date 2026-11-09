@@ -15,6 +15,7 @@ import { nagare } from '../../api/nagare'
 import { CLASSES, type ClasseServico, type Lista, type Quadro } from '../../api/tipos'
 import { useAvisos } from '../../componentes/Avisos'
 import { Janela } from '../../componentes/Sobreposicao'
+import { Obrigatorio, conferirObrigatorios } from '../../componentes/Obrigatorio'
 import { SeletorIdioma } from '../../componentes/SeletorIdioma'
 import { mensagemDeErro, useT } from '../../i18n'
 import { Bloqueado } from '../metricas/TelaMetricas'
@@ -131,7 +132,14 @@ function NovoQuadroDeSimulacao({ operacionais, fechar }: { operacionais: Quadro[
       fechar={fechar}
       rodape={
         <>
-          <button className="btn" type="button" disabled={!nome.trim() || criar.isPending} onClick={() => criar.mutate()}>
+          <button
+            className="btn"
+            type="button"
+            disabled={criar.isPending}
+            onClick={(e) => {
+              if (conferirObrigatorios(e.currentTarget.closest<HTMLElement>('.ng-janela')) && nome.trim()) criar.mutate()
+            }}
+          >
             {t('comum.criar')}
           </button>
           <button className="btn ghost" type="button" onClick={fechar}>
@@ -141,8 +149,11 @@ function NovoQuadroDeSimulacao({ operacionais, fechar }: { operacionais: Quadro[
       }
     >
       <label className="campo">
-        <span>{t('estrutura.nome_quadro')}</span>
-        <input value={nome} maxLength={120} autoFocus onChange={(e) => setNome(e.target.value)} />
+        <span>
+          {t('estrutura.nome_quadro')}
+          <Obrigatorio />
+        </span>
+        <input value={nome} maxLength={120} autoFocus required onChange={(e) => setNome(e.target.value)} />
       </label>
       <label className="campo">
         <span>{t('simulador.origem')}</span>

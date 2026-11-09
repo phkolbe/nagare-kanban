@@ -13,6 +13,7 @@ import { chaves, nagare } from '../../api/nagare'
 import type { Lista, Quadro, Vinculo } from '../../api/tipos'
 import { useAvisos } from '../../componentes/Avisos'
 import { Janela } from '../../componentes/Sobreposicao'
+import { Obrigatorio, conferirObrigatorios } from '../../componentes/Obrigatorio'
 import { mensagemDeErro, useT, type Chave } from '../../i18n'
 import { useProjetos, useQuadros } from '../quadro/consultas'
 import { FormProjeto } from './FormProjeto'
@@ -84,8 +85,11 @@ export function TrocarFluxo({ atual, fechar }: { atual: NonNullable<Vinculo['lin
           <button
             className="btn"
             type="button"
-            disabled={!projeto || !quadro || motivo.trim().length < 3 || trocar.isPending}
-            onClick={() => trocar.mutate()}
+            disabled={trocar.isPending}
+            onClick={(e) => {
+              const janela = e.currentTarget.closest<HTMLElement>('.ng-janela')
+              if (conferirObrigatorios(janela) && projeto && quadro && motivo.trim().length >= 3) trocar.mutate()
+            }}
           >
             {t('vinculo.confirmar_troca')}
           </button>
@@ -100,8 +104,11 @@ export function TrocarFluxo({ atual, fechar }: { atual: NonNullable<Vinculo['lin
 
       <div className="ng-linha-campos">
         <label className="campo">
-          <span>{t('vinculo.novo_projeto')}</span>
-          <select value={projeto} onChange={(e) => setProjeto(e.target.value)}>
+          <span>
+            {t('vinculo.novo_projeto')}
+            <Obrigatorio />
+          </span>
+          <select value={projeto} required onChange={(e) => setProjeto(e.target.value)}>
             <option value="">—</option>
             {(projetos.data?.items ?? [])
               .filter((p) => !p.archived && p.id !== atual.project_id)
@@ -118,8 +125,11 @@ export function TrocarFluxo({ atual, fechar }: { atual: NonNullable<Vinculo['lin
       </div>
 
       <label className="campo">
-        <span>{t('vinculo.novo_quadro')}</span>
-        <select value={quadro} onChange={(e) => setQuadro(e.target.value)}>
+        <span>
+          {t('vinculo.novo_quadro')}
+          <Obrigatorio />
+        </span>
+        <select value={quadro} required onChange={(e) => setQuadro(e.target.value)}>
           <option value="">—</option>
           {candidatos.map((q) => (
             <option key={q.id} value={q.id}>
@@ -159,8 +169,11 @@ export function TrocarFluxo({ atual, fechar }: { atual: NonNullable<Vinculo['lin
       </fieldset>
 
       <label className="campo">
-        <span>{t('vinculo.motivo')}</span>
-        <textarea rows={2} value={motivo} maxLength={500} onChange={(e) => setMotivo(e.target.value)} />
+        <span>
+          {t('vinculo.motivo')}
+          <Obrigatorio />
+        </span>
+        <textarea rows={2} value={motivo} required minLength={3} maxLength={500} onChange={(e) => setMotivo(e.target.value)} />
       </label>
       {trocar.isError && <Aviso tipo="erro">{mensagemDeErro(trocar.error, t)}</Aviso>}
       {novoProjeto && (

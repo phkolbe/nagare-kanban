@@ -7,6 +7,8 @@
   --ng-standard: #24548f;
   --ng-intangible: #5f6e80;
   --ng-coluna: 248px;
+  /* Obrigatorios: asterisco e borda do campo vazio (o tema escuro troca no nagare-n3.css). */
+  --ng-obrigatorio: #b3261e;
 }
 
 /* ------------------------------------------------------------------ barra do quadro */
@@ -1176,4 +1178,26 @@ html.ng-tela-cheia .ng-mapa {
 }
 .ng-menu-preferencia .abas {
   margin: 0;
+}
+
+/* ------------------------------------------------------------------ obrigatorios */
+/* Regra geral da homologacao (08/11/2026): asterisco vermelho no rotulo; o campo vazio ganha a
+   borda vermelha depois que a pessoa passa por ele ou tenta salvar (conferirObrigatorios, em
+   componentes/Obrigatorio.tsx). Regras separadas: um navegador sem :user-invalid descartaria a
+   lista inteira. */
+.ng-obrigatorio {
+  color: var(--ng-obrigatorio);
+  font-weight: 700;
+}
+input:user-invalid,
+select:user-invalid,
+textarea:user-invalid {
+  border-color: var(--ng-obrigatorio);
+  box-shadow: 0 0 0 1px var(--ng-obrigatorio);
+}
+.ng-tentou-salvar input:invalid,
+.ng-tentou-salvar select:invalid,
+.ng-tentou-salvar textarea:invalid {
+  border-color: var(--ng-obrigatorio);
+  box-shadow: 0 0 0 1px var(--ng-obrigatorio);
 }

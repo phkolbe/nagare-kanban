@@ -8,6 +8,7 @@ import { useQueryClient } from '@tanstack/react-query'
 
 import { useNagare } from '../../app/contexto'
 import { chaves } from '../../api/nagare'
+import { Obrigatorio } from '../../componentes/Obrigatorio'
 import {
   AREAS_VALOR,
   CLASSES,
@@ -198,11 +199,14 @@ function CampoTexto({
   }
   return (
     <label className="campo">
-      <span>{t(rotulo)}</span>
+      <span>
+        {t(rotulo)}
+        {obrigatorio && editavel && <Obrigatorio />}
+      </span>
       {multilinha ? (
-        <textarea value={texto} rows={4} disabled={!editavel} onChange={(e) => setTexto(e.target.value)} onBlur={sair} />
+        <textarea value={texto} rows={4} disabled={!editavel} required={obrigatorio} onChange={(e) => setTexto(e.target.value)} onBlur={sair} />
       ) : (
-        <input value={texto} disabled={!editavel} onChange={(e) => setTexto(e.target.value)} onBlur={sair} />
+        <input value={texto} disabled={!editavel} required={obrigatorio} onChange={(e) => setTexto(e.target.value)} onBlur={sair} />
       )}
       {dica && <small className="mini">{dica}</small>}
     </label>

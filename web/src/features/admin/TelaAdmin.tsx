@@ -13,6 +13,7 @@ import { nagare } from '../../api/nagare'
 import type { Lista } from '../../api/tipos'
 import { useAvisos } from '../../componentes/Avisos'
 import { Janela } from '../../componentes/Sobreposicao'
+import { Obrigatorio, conferirObrigatorios } from '../../componentes/Obrigatorio'
 import { mensagemDeErro, useT, type Chave } from '../../i18n'
 import { iniciaisDe } from '../quadro/CartaoMini'
 import { travaDoUsuario } from './travas'
@@ -298,7 +299,7 @@ function FormUsuario({ usuario, papeis, fechar }: { usuario: Usuario | null; pap
       fechar={fechar}
       rodape={
         <>
-          <button className="btn" type="submit" form="form-usuario" disabled={!valido || gravar.isPending}>
+          <button className="btn" type="submit" form="form-usuario" disabled={gravar.isPending}>
             {t('comum.salvar')}
           </button>
           <button className="btn ghost" type="button" onClick={fechar}>
@@ -309,17 +310,24 @@ function FormUsuario({ usuario, papeis, fechar }: { usuario: Usuario | null; pap
     >
       <form
         id="form-usuario"
+        noValidate
         onSubmit={(e) => {
           e.preventDefault()
-          if (valido) gravar.mutate()
+          if (conferirObrigatorios(e.currentTarget) && valido) gravar.mutate()
         }}
       >
         <label className="campo">
-          <span>{t('admin.nome')}</span>
+          <span>
+            {t('admin.nome')}
+            <Obrigatorio />
+          </span>
           <input value={nome} maxLength={200} autoFocus required onChange={(e) => setNome(e.target.value)} />
         </label>
         <label className="campo">
-          <span>{t('entrar.email')}</span>
+          <span>
+            {t('entrar.email')}
+            <Obrigatorio />
+          </span>
           <input type="email" value={email} required onChange={(e) => setEmail(e.target.value)} />
           {emailTomado && <small className="erro-campo">{t('admin.email_tomado')}</small>}
         </label>
@@ -342,8 +350,18 @@ function FormUsuario({ usuario, papeis, fechar }: { usuario: Usuario | null; pap
           </div>
         )}
         <label className="campo">
-          <span>{t('entrar.senha')}</span>
-          <input type="password" autoComplete="new-password" value={senha} onChange={(e) => setSenha(e.target.value)} />
+          <span>
+            {t('entrar.senha')}
+            {!usuario && <Obrigatorio />}
+          </span>
+          <input
+            type="password"
+            autoComplete="new-password"
+            required={!usuario}
+            minLength={6}
+            value={senha}
+            onChange={(e) => setSenha(e.target.value)}
+          />
           <small className="mini">{usuario ? t('admin.senha_manter') : t('admin.senha_minimo')}</small>
         </label>
       </form>

@@ -8,6 +8,7 @@ import { useNagare } from '../../app/contexto'
 import { nagare } from '../../api/nagare'
 import { CLASSES, type Cartao, type ClasseServico, type Coluna } from '../../api/tipos'
 import { Janela } from '../../componentes/Sobreposicao'
+import { Obrigatorio, conferirObrigatorios } from '../../componentes/Obrigatorio'
 import { mensagemDeErro, useT } from '../../i18n'
 import { useProjetos, useRecarregarQuadro } from './consultas'
 
@@ -55,7 +56,7 @@ export function NovoCartao({
       fechar={fechar}
       rodape={
         <>
-          <button className="btn" type="submit" form="novo-cartao" disabled={!titulo.trim() || criar.isPending}>
+          <button className="btn" type="submit" form="novo-cartao" disabled={criar.isPending}>
             {t('novo.criar')}
           </button>
           <button className="btn ghost" type="button" onClick={fechar}>
@@ -66,13 +67,17 @@ export function NovoCartao({
     >
       <form
         id="novo-cartao"
+        noValidate
         onSubmit={(e) => {
           e.preventDefault()
-          if (titulo.trim()) criar.mutate()
+          if (conferirObrigatorios(e.currentTarget) && titulo.trim()) criar.mutate()
         }}
       >
         <label className="campo">
-          <span>{t('cartao.campo.titulo')}</span>
+          <span>
+            {t('cartao.campo.titulo')}
+            <Obrigatorio />
+          </span>
           <input value={titulo} maxLength={500} autoFocus required onChange={(e) => setTitulo(e.target.value)} />
         </label>
         {eu?.flags.multi_project !== false && (

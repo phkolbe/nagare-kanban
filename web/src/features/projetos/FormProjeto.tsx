@@ -8,6 +8,7 @@ import { exemploDeChave, useNagare } from '../../app/contexto'
 import { chaves, nagare } from '../../api/nagare'
 import { SITUACOES_PROJETO, type Projeto, type SituacaoProjeto } from '../../api/tipos'
 import { Janela } from '../../componentes/Sobreposicao'
+import { Obrigatorio, conferirObrigatorios } from '../../componentes/Obrigatorio'
 import { mensagemDeErro, useT } from '../../i18n'
 
 export function FormProjeto({
@@ -58,7 +59,7 @@ export function FormProjeto({
       fechar={fechar}
       rodape={
         <>
-          <button className="btn" type="submit" form="form-projeto" disabled={!valido || gravar.isPending}>
+          <button className="btn" type="submit" form="form-projeto" disabled={gravar.isPending}>
             {t('comum.salvar')}
           </button>
           <button className="btn ghost" type="button" onClick={fechar}>
@@ -69,23 +70,31 @@ export function FormProjeto({
     >
       <form
         id="form-projeto"
+        noValidate
         onSubmit={(e) => {
           e.preventDefault()
-          if (valido) gravar.mutate()
+          if (conferirObrigatorios(e.currentTarget) && valido) gravar.mutate()
         }}
       >
         <label className="campo">
-          <span>{t('projeto.nome')}</span>
+          <span>
+            {t('projeto.nome')}
+            <Obrigatorio />
+          </span>
           <input value={nome} maxLength={200} autoFocus required onChange={(e) => setNome(e.target.value)} />
         </label>
         <div className="ng-linha-campos">
           <label className="campo">
-            <span>{t('projeto.chave')}</span>
+            <span>
+              {t('projeto.chave')}
+              {!projeto && <Obrigatorio />}
+            </span>
             <input
               value={chave}
               maxLength={8}
               disabled={Boolean(projeto)}
               required
+              pattern="[A-Za-z0-9]{2,8}"
               onChange={(e) => setChave(e.target.value.toUpperCase())}
             />
             {!projeto && <small className="mini">{t('projeto.chave_dica', { exemplo: exemploDeChave(produto) })}</small>}

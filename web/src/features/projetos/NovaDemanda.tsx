@@ -19,6 +19,7 @@ import {
   type TipoDemanda,
 } from '../../api/tipos'
 import { Janela } from '../../componentes/Sobreposicao'
+import { Obrigatorio, conferirObrigatorios } from '../../componentes/Obrigatorio'
 import { mensagemDeErro, useT } from '../../i18n'
 import { useQuadros } from '../quadro/consultas'
 
@@ -73,7 +74,7 @@ export function NovaDemanda({ projeto, fechar }: { projeto: ProjetoDetalhe; fech
       largura={600}
       rodape={
         <>
-          <button className="btn" type="submit" form="nova-demanda" disabled={!f.titulo.trim() || criar.isPending}>
+          <button className="btn" type="submit" form="nova-demanda" disabled={criar.isPending}>
             {t('demanda.criar')}
           </button>
           <button className="btn ghost" type="button" onClick={fechar}>
@@ -84,13 +85,17 @@ export function NovaDemanda({ projeto, fechar }: { projeto: ProjetoDetalhe; fech
     >
       <form
         id="nova-demanda"
+        noValidate
         onSubmit={(e) => {
           e.preventDefault()
-          if (f.titulo.trim()) criar.mutate()
+          if (conferirObrigatorios(e.currentTarget) && f.titulo.trim()) criar.mutate()
         }}
       >
         <label className="campo">
-          <span>{t('cartao.campo.titulo')}</span>
+          <span>
+            {t('cartao.campo.titulo')}
+            <Obrigatorio />
+          </span>
           <input value={f.titulo} maxLength={500} autoFocus required onChange={(e) => muda('titulo', e.target.value)} />
         </label>
         <label className="campo">

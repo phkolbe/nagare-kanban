@@ -1,4 +1,8 @@
-/** Janela (modal) e gaveta lateral: Esc fecha, o foco entra e volta para onde estava. */
+/**
+ * Janela (modal) e gaveta lateral: Esc fecha, o foco entra e volta para onde estava. O clique
+ * no fundo NAO fecha (regra geral da homologacao, 08/11/2026: um clique sem querer perdia o que
+ * foi digitado); fecham o X, o Cancelar/Fechar de cada tela e o Esc.
+ */
 
 import { useEffect, useRef, type ReactNode } from 'react'
 
@@ -45,7 +49,7 @@ export function Janela({
   useFecharComEsc(fechar)
   const ref = useFocoPreso<HTMLDivElement>()
   return (
-    <div className="ng-fundo" onMouseDown={(e) => e.target === e.currentTarget && fechar()}>
+    <div className="ng-fundo">
       <div
         className="ng-janela"
         role="dialog"
@@ -81,7 +85,7 @@ export function Gaveta({
   useFecharComEsc(fechar)
   const ref = useFocoPreso<HTMLElement>()
   return (
-    <div className="ng-fundo ng-fundo-gaveta" onMouseDown={(e) => e.target === e.currentTarget && fechar()}>
+    <div className="ng-fundo ng-fundo-gaveta">
       <aside className="ng-gaveta" role="dialog" aria-modal="true" aria-label={titulo} ref={ref} tabIndex={-1}>
         <button type="button" className="ng-fechar ng-fechar-gaveta" aria-label={t('comum.fechar')} onClick={fechar}>
           ×

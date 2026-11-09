@@ -12,6 +12,7 @@ import { chaves, urlRegras } from '../../api/nagare'
 import { CLASSES, type ClasseServico, type Regra, type Regras } from '../../api/tipos'
 import { SeletorIdioma } from '../../componentes/SeletorIdioma'
 import { Janela } from '../../componentes/Sobreposicao'
+import { Obrigatorio, conferirObrigatorios } from '../../componentes/Obrigatorio'
 import { mensagemDeErro, useT, type Chave } from '../../i18n'
 
 /** Servicos que abrem providencias (prefixo do evento `<servico>.providencia.aberta`). */
@@ -148,7 +149,7 @@ function FormRegra({
       fechar={fechar}
       rodape={
         <>
-          <button className="btn" type="submit" form="form-regra" disabled={motivo.trim().length < 3 || gravar.isPending}>
+          <button className="btn" type="submit" form="form-regra" disabled={gravar.isPending}>
             {t('comum.salvar')}
           </button>
           <button className="btn ghost" type="button" onClick={fechar}>
@@ -159,9 +160,10 @@ function FormRegra({
     >
       <form
         id="form-regra"
+        noValidate
         onSubmit={(e) => {
           e.preventDefault()
-          if (motivo.trim().length >= 3) gravar.mutate()
+          if (conferirObrigatorios(e.currentTarget) && motivo.trim().length >= 3) gravar.mutate()
         }}
       >
         <div className="ng-linha-campos">
@@ -216,8 +218,11 @@ function FormRegra({
           </label>
         </div>
         <label className="campo">
-          <span>{t('regras.motivo')}</span>
-          <input value={motivo} maxLength={500} required onChange={(e) => setMotivo(e.target.value)} />
+          <span>
+            {t('regras.motivo')}
+            <Obrigatorio />
+          </span>
+          <input value={motivo} minLength={3} maxLength={500} required onChange={(e) => setMotivo(e.target.value)} />
           <small className="mini">{t('regras.motivo_dica')}</small>
         </label>
       </form>
