@@ -12,7 +12,11 @@
     <script>
       // Nagare fora da plataforma: o tema antes da primeira pintura (sem piscar). Na Pampufa, claro.
       ;(function () {
-        if (location.pathname.indexOf('/grupo-sr') === 0) return
+        if (location.pathname.indexOf('/grupo-sr') === 0) {
+          // dentro da Pampufa, o icone da plataforma (o mesmo das outras telas)
+          document.querySelector('link[rel="icon"]').href = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2312314c'/%3E%3Cg transform='translate(4 4) scale(1.2)' fill='%23d4ac72' stroke='%23d4ac72' stroke-width='1.7' stroke-linecap='round'%3E%3Cpath d='M10 12a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM4.5 6a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM15.5 6a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM4.5 17a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM15.5 17a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM5.6 5.6l2.9 2.9M14.4 5.6l-2.9 2.9M5.6 14.4l2.9-2.9M14.4 14.4l-2.9-2.9'/%3E%3C/g%3E%3C/svg%3E"
+          return
+        }
         document.title = 'Nagare Kanban'
         document.documentElement.lang = 'en'
         var tema = 'system'
