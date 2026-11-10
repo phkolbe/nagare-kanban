@@ -47,6 +47,7 @@ from .texts import effective_locale, set_locale, set_via
 __all__ = [
     "CurrentUser",
     "can_write_board",
+    "check_flag",
     "effective_flags",
     "get_active_plan",
     "get_board_or_404",
@@ -337,27 +338,47 @@ async def is_flag_effective(s: AsyncSession, key: str) -> bool:
     return enabled and plan_tier(flag.min_plan) <= tier
 
 
-def require_flag(key: str) -> Callable[..., Awaitable[None]]:
-    """Dependency factory that 403s when a feature is off or plan-locked."""
+async def check_flag(s: AsyncSession, key: str) -> None:
+    """403 when ``key`` is off or plan-locked for the product of the request.
 
-    async def _guard(s: AsyncSession = Depends(get_session)) -> None:
-        flag = await s.get(FeatureFlag, key)
-        if flag is None:
-            return
-        plan = await get_active_plan(s)
-        plan_slug = plan.get("slug") if plan else None
-        if not (await flag_overrides(s)).get(key, bool(flag.is_enabled)):
-            raise Forbidden(
-                f"The feature “{flag.name}” is switched off for this workspace.",
-                code="feature_disabled",
-                details={"flag": key, "min_plan": flag.min_plan, "plan": plan_slug},
-            )
-        if plan_tier(flag.min_plan) > plan_tier(plan_slug):
-            raise Forbidden(
-                f"“{flag.name}” requires the {str(flag.min_plan).title()} plan.",
-                code="plan_upgrade_required",
-                details={"flag": key, "min_plan": flag.min_plan, "plan": plan_slug},
-            )
+    The product comes from :func:`get_current_user` (the contextvar it sets), so call
+    this only after the user is resolved; :func:`require_flag` makes sure of it.
+    """
+    flag = await s.get(FeatureFlag, key)
+    if flag is None:
+        return
+    plan = await get_active_plan(s)
+    plan_slug = plan.get("slug") if plan else None
+    if not (await flag_overrides(s)).get(key, bool(flag.is_enabled)):
+        raise Forbidden(
+            f"The feature “{flag.name}” is switched off for this workspace.",
+            code="feature_disabled",
+            details={"flag": key, "min_plan": flag.min_plan, "plan": plan_slug},
+        )
+    if plan_tier(flag.min_plan) > plan_tier(plan_slug):
+        raise Forbidden(
+            f"“{flag.name}” requires the {str(flag.min_plan).title()} plan.",
+            code="plan_upgrade_required",
+            details={"flag": key, "min_plan": flag.min_plan, "plan": plan_slug},
+        )
+
+
+def require_flag(key: str) -> Callable[..., Awaitable[None]]:
+    """Dependency factory that 403s when a feature is off or plan-locked.
+
+    It depends on :func:`get_current_user` so the product of the request (D46: its own
+    plan and flags) is known before the flag is read. Without it, a guard declared in
+    the route decorator ran first (FastAPI resolves those before the parameters) and
+    judged the account's flags instead of the product's.
+    """
+
+    async def _guard(
+        s: AsyncSession = Depends(get_session),
+        user: CurrentUser = Depends(get_current_user),
+    ) -> None:
+        # The product whose plan and flags count is the one this user works in.
+        set_current_product(user["product_id"])
+        await check_flag(s, key)
 
     _guard.__name__ = f"require_flag_{key}"
     return _guard

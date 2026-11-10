@@ -39,6 +39,7 @@ from ..db import new_id, seconds_between, utcnow
 from ..deps import (
     CurrentUser,
     assert_board_writable,
+    check_flag,
     get_board_or_404,
     get_session,
     is_flag_effective,
@@ -71,6 +72,7 @@ from ..schemas import (
     ColumnOut,
     ColumnReorderRequest,
     ColumnUpdate,
+    DayText,
     GroupCreate,
     GroupOut,
     GroupUpdate,
@@ -1348,7 +1350,7 @@ async def _assert_may_create(s: AsyncSession, user: CurrentUser, kind: str) -> N
                 code="insufficient_role",
                 details={"role": user.get("role")},
             )
-        await require_flag("simulator")(s)
+        await check_flag(s, "simulator")
     elif user.get("role") not in STRUCTURE_ROLES:
         raise Forbidden(
             "Your role cannot create boards.",
@@ -1755,7 +1757,7 @@ async def board_view(
     demand_type: str | None = Query(None),
     value_area: str | None = Query(None),
     size: str | None = Query(None),
-    due_before: str | None = Query(None),
+    due_before: DayText | None = Query(None),
     envelope_state: str | None = Query(None),
     archived: bool = Query(False),
     s: AsyncSession = Depends(get_session),
@@ -1771,7 +1773,7 @@ async def board_view(
     board = await get_board_or_404(s, id)
     if segment == "unified":
         # Seeing both halves as one continuous flow is the Team-plan feature.
-        await require_flag("unified_flow")(s)
+        await check_flag(s, "unified_flow")
 
     columns = await canonical_columns(s, board["id"])
     visible = columns if segment == "unified" else [c for c in columns if c["segment"] == segment]

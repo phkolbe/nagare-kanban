@@ -1033,3 +1033,107 @@ def test_projeto_do_sr_gj_ligado_com_horas_e_metricas(client, pampufa, database_
         assert leitura["projects"][0]["minutes"] == 120
     finally:
         _remove_products(database_url, (product,))
+
+
+# ---------------------------------------------------------------------------
+# fix-15 e fix-16 da auditoria (10/11/2026)
+# ---------------------------------------------------------------------------
+
+
+def test_a_flag_off_in_the_product_closes_its_routes(client, auth, board_id: str, pampufa) -> None:
+    """D46: a rota com a flag no decorator le as flags do produto, nao as da conta."""
+    created = client.post(
+        f"{API}/integration/providencias", json=providencia(), headers=headers(pampufa.service())
+    )
+    assert created.status_code in (200, 201), created.text
+    product_board = created.json()["card"]["board_id"]
+    admin = pampufa.person({PRODUCT: ["nagare.admin"]})
+    cfd = f"{API}/boards/{product_board}/metrics/cfd"
+    assert client.get(cfd, headers=headers(admin)).status_code == 200
+
+    master_adv = {**auth("master"), "X-Produto": PRODUCT}
+    off = client.patch(
+        f"{API}/flags/metrics_advanced", json={"is_enabled": False}, headers=master_adv
+    )
+    assert off.status_code == 200, off.text
+    try:
+        denied = client.get(cfd, headers=headers(admin))
+        assert denied.status_code == 403, denied.text
+        assert denied.json()["error"]["code"] == "feature_disabled"
+        # A conta segue com a flag ligada, e o quadro dela continua respondendo.
+        account = client.get(f"{API}/flags/effective", headers=auth("master")).json()
+        assert account["metrics_advanced"] is True
+        own = client.get(f"{API}/boards/{board_id}/metrics/cfd", headers=auth("master"))
+        assert own.status_code == 200, own.text
+    finally:
+        client.patch(f"{API}/flags/metrics_advanced", json={"is_enabled": True}, headers=master_adv)
+
+
+@pytest.mark.parametrize("prazo", ["30/11/2026", "2026-13-01", "amanha"])
+def test_an_invalid_deadline_is_a_422_not_a_500(client, pampufa, prazo: str) -> None:
+    """A Pampufa nao deve repetir para sempre uma providencia com data invalida."""
+    body = providencia(prazo=prazo)
+    response = client.post(
+        f"{API}/integration/providencias", json=body, headers=headers(pampufa.service())
+    )
+    assert response.status_code == 422, response.text
+    assert "prazo" in response.text
+    where = client.get(
+        f"{API}/integration/providencias/{body['providencia_id']}",
+        headers=headers(pampufa.service()),
+    )
+    assert where.status_code == 404, "nada foi gravado"
+
+
+def test_a_deadline_as_a_timestamp_keeps_its_day(client, pampufa, db: Database) -> None:
+    created = client.post(
+        f"{API}/integration/providencias",
+        json=providencia(prazo="2026-11-30T23:00:00-03:00"),
+        headers=headers(pampufa.service()),
+    )
+    assert created.status_code == 201, created.text
+    stored = db.q1("SELECT due_date FROM cards WHERE id = ?", created.json()["card"]["id"])
+    assert str(stored["due_date"]).startswith("2026-11-30")
+
+
+def test_an_invalid_resolution_moment_is_a_422(client, pampufa) -> None:
+    service = pampufa.service()
+    body = providencia()
+    created = client.post(f"{API}/integration/providencias", json=body, headers=headers(service))
+    assert created.status_code == 201, created.text
+    path = f"{API}/integration/providencias/{body['providencia_id']}/resolved-at-origin"
+    bad = client.post(
+        path, json={"em": "30/11/2026 10:00", "origem": "financeiro"}, headers=headers(service)
+    )
+    assert bad.status_code == 422, bad.text
+    good = client.post(
+        path,
+        json={"em": "2026-11-09T22:30:00-03:00", "origem": "financeiro"},
+        headers=headers(service),
+    )
+    assert good.status_code == 200, good.text
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/integration/time?from=30/11/2026&to=2026-12-01",
+        "/integration/time/by-external?source=sradv&from=2026-11-01&to=30/11/2026",
+        "/integration/overview/metrics?from=30/11/2026",
+    ],
+)
+def test_invalid_period_dates_are_a_422(client, pampufa, path: str) -> None:
+    response = client.get(f"{API}{path}", headers=headers(pampufa.service()))
+    assert response.status_code == 422, response.text
+
+
+def test_card_dates_from_the_screens_are_validated(client, auth, board_id: str) -> None:
+    master = auth("master")
+    bad = client.post(
+        f"{API}/cards",
+        json={"board_id": board_id, "title": "Prazo torto", "due_date": "30/11/2026"},
+        headers=master,
+    )
+    assert bad.status_code == 422, bad.text
+    assert client.get(f"{API}/cards?due_before=30/11/2026", headers=master).status_code == 422
+    assert client.get(f"{API}/cards?due_before=2026-11-30", headers=master).status_code == 200

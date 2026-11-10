@@ -45,6 +45,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..db import iso, new_id, utcnow
 from ..deps import (
     CurrentUser,
+    check_flag,
     get_board_or_404,
     get_session,
     require_capability,
@@ -577,7 +578,7 @@ async def create_run(
     """
     board = await get_board_or_404(s, payload.board_id)
     if payload.kind in _MONTE_CARLO_KINDS:
-        await require_flag("monte_carlo")(s)
+        await check_flag(s, "monte_carlo")
 
     try:
         results = await _run_kind(s, board, payload.kind, payload.params)

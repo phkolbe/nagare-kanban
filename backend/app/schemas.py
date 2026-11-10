@@ -8,9 +8,19 @@ metric owners enrich them, and the frontend reads whatever is present.
 
 from __future__ import annotations
 
+from datetime import date, datetime
 from typing import Annotated, Any, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+)
+
+from .sqltypes import day_of
 
 __all__ = [
     "ApiErrorBody",
@@ -150,6 +160,20 @@ Segment = Literal["upstream", "downstream"]
 SegmentQuery = Literal["upstream", "downstream", "unified"]
 ColumnKind = Literal["envelope", "queue", "activity", "done"]
 ProjectStatus = Literal["discovery", "active", "on_hold", "done", "cancelled"]
+
+
+def _instant_text(value: datetime) -> str:
+    return value.isoformat()
+
+
+#: A calendar day from the client: ``2026-11-30``, or a timestamp whose date part (in its
+#: own offset) is the day. Validated as a date so a malformed value (``30/11/2026``) is a
+#: 422; the handler then sees the ISO day as text, as the ``Day`` columns hold it.
+DayText = Annotated[date | datetime, AfterValidator(day_of)]
+#: A moment from the client, validated as a datetime (422 when malformed) and handed on
+#: as ISO text with the offset it came with (no offset: UTC, as ``Instant`` reads it).
+InstantText = Annotated[datetime, AfterValidator(_instant_text)]
+
 ServiceClass = Literal["expedite", "standard", "fixed_date", "intangible"]
 DemandType = Literal["value", "failure", "maintenance"]
 ValueArea = Literal["feature", "defect", "risk", "debt", "compliance"]
@@ -608,7 +632,7 @@ class CardCreate(Schema):
     size: CardSize | None = None
     value_area: ValueArea = "feature"
     demand_type: DemandType = "value"
-    due_date: str | None = None
+    due_date: DayText | None = None
     envelope_state: EnvelopeState = "opened"
     tags: list[str] = Field(default_factory=list)
     custom_fields: dict[str, Any] = Field(default_factory=dict)
@@ -624,7 +648,7 @@ class CardUpdate(Schema):
     size: CardSize | None = None
     value_area: ValueArea | None = None
     demand_type: DemandType | None = None
-    due_date: str | None = None
+    due_date: DayText | None = None
     position: int | None = None
     tags: list[str] | None = None
     custom_fields: dict[str, Any] | None = None
@@ -806,8 +830,8 @@ class ProjectCreate(Schema):
     description: str | None = None
     status: ProjectStatus = "active"
     owner_id: str | None = None
-    started_at: str | None = None
-    target_date: str | None = None
+    started_at: DayText | None = None
+    target_date: DayText | None = None
 
 
 class ProjectUpdate(Schema):
@@ -816,8 +840,8 @@ class ProjectUpdate(Schema):
     description: str | None = None
     status: ProjectStatus | None = None
     owner_id: str | None = None
-    started_at: str | None = None
-    target_date: str | None = None
+    started_at: DayText | None = None
+    target_date: DayText | None = None
     archived: bool | None = None
 
 
@@ -839,7 +863,7 @@ class DemandCreate(Schema):
     value_area: ValueArea = "feature"
     demand_type: DemandType = "value"
     size: CardSize | None = None
-    due_date: str | None = None
+    due_date: DayText | None = None
     tags: list[str] = Field(default_factory=list)
     custom_fields: dict[str, Any] = Field(default_factory=dict)
     sealed: bool = True

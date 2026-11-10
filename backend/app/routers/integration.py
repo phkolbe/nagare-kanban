@@ -24,6 +24,7 @@ And by people who administer a product's board:
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
@@ -57,6 +58,7 @@ from ..models import (
     User,
     as_dict,
 )
+from ..schemas import DayText, InstantText
 
 router = APIRouter(prefix="/integration", tags=["integration"])
 
@@ -82,12 +84,13 @@ class ProvidenciaIn(BaseModel):
     url: str | None = None
     produto_nome: str | None = Field(default=None, max_length=120)
     responsavel: Person | None = None
-    prazo: str | None = None
+    #: A malformed day is a 422 (the Pampufa must not retry it), never a 500 at bind time.
+    prazo: DayText | None = None
     classe_servico: str | None = None
 
 
 class ResolvedIn(BaseModel):
-    em: str | None = None
+    em: InstantText | None = None
     origem: str | None = Field(default=None, max_length=200)
 
 
@@ -443,19 +446,15 @@ async def upsert_external_project(
 
 @router.get("/time", summary="Hour entries of projects in a period (GJ-4 billing)")
 async def time_for_billing(
-    frm: str = Query(..., alias="from"),
-    to: str = Query(...),
+    frm: date = Query(..., alias="from"),
+    to: date = Query(...),
     project_id: list[str] = Query(default_factory=list),
     s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(system_only),
 ) -> dict[str, Any]:
-    from datetime import date as _date
-
     from .horas import minutes_by_project
 
-    items = await minutes_by_project(
-        s, project_id, _date.fromisoformat(frm), _date.fromisoformat(to)
-    )
+    items = await minutes_by_project(s, project_id, frm, to)
     return {"items": items, "total_minutes": sum(i["minutes"] for i in items)}
 
 
@@ -465,8 +464,8 @@ async def time_for_billing(
 )
 async def time_by_external(
     source: str = Query(..., min_length=1, max_length=40),
-    frm: str | None = Query(default=None, alias="from"),
-    to: str | None = Query(default=None),
+    frm: date | None = Query(default=None, alias="from"),
+    to: date | None = Query(default=None),
     s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(system_only),
 ) -> dict[str, Any]:
@@ -502,14 +501,12 @@ async def time_by_external(
     summary="Each product in a period: work in progress, delivered, on time and hours (D45)",
 )
 async def consolidated_metrics(
-    frm: str | None = Query(None, alias="from"),
-    to: str | None = Query(None),
+    frm: date | None = Query(None, alias="from"),
+    to: date | None = Query(None),
     s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("read_boards_metrics")),
 ) -> dict[str, Any]:
     """The gestor's consolidated numbers (one row per product the caller can read)."""
-    from datetime import date as _date
-
     from ..tenancy import set_current_product
     from .horas import people_projects_clients
 
@@ -520,11 +517,7 @@ async def consolidated_metrics(
     try:
         for product_id in allowed:
             set_current_product(product_id)
-            leitura = await people_projects_clients(
-                s,
-                _date.fromisoformat(frm) if frm else None,
-                _date.fromisoformat(to) if to else None,
-            )
+            leitura = await people_projects_clients(s, frm, to)
             soma = {
                 k: sum(p[k] for p in leitura["people"])
                 for k in ("delivered", "on_time", "late", "wip")
