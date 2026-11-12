@@ -813,7 +813,13 @@ def _require(args: dict[str, Any], key: str) -> str:
 
 _SERVICE_CLASSES = ["expedite", "standard", "fixed_date", "intangible"]
 _DEMAND_TYPES = ["value", "failure", "maintenance"]
-_VALUE_AREAS = ["feature", "defect", "risk", "debt", "compliance"]
+#: The card type is a key of the product's list (GET /card-types, PPLAT-312); the software
+#: one below is the default list, so it is a hint, not an enum.
+_VALUE_AREA = {
+    "type": "string",
+    "description": "Card type: a key of the product's list (GET /card-types); the default "
+    "list is feature, defect, risk, debt, compliance.",
+}
 _SIZES = ["xs", "s", "m", "l", "xl"]
 
 
@@ -900,7 +906,7 @@ TOOLS: list[dict[str, Any]] = [
                     "enum": _DEMAND_TYPES,
                     "description": "value = new demand, failure = rework caused by a defect, maintenance = keeping the lights on.",
                 },
-                "value_area": {"type": "string", "enum": _VALUE_AREAS},
+                "value_area": _VALUE_AREA,
                 "size": {"type": "string", "enum": _SIZES},
                 "tag": {"type": "string", "description": "Cards carrying this tag."},
                 "q": {
@@ -983,7 +989,7 @@ TOOLS: list[dict[str, Any]] = [
                     "enum": _SIZES,
                     "description": "Optional relative size.",
                 },
-                "value_area": {"type": "string", "enum": _VALUE_AREAS, "default": "feature"},
+                "value_area": _VALUE_AREA,
                 "demand_type": {"type": "string", "enum": _DEMAND_TYPES, "default": "value"},
                 "due_date": {
                     "type": "string",
@@ -1087,7 +1093,7 @@ TOOLS: list[dict[str, Any]] = [
                     "enum": _SERVICE_CLASSES,
                     "default": "standard",
                 },
-                "value_area": {"type": "string", "enum": _VALUE_AREAS, "default": "feature"},
+                "value_area": _VALUE_AREA,
                 "demand_type": {"type": "string", "enum": _DEMAND_TYPES, "default": "value"},
                 "size": {"type": "string", "enum": _SIZES},
                 "due_date": {"type": "string", "description": "ISO date for fixed-date demands."},

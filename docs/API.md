@@ -436,7 +436,7 @@ Business with every flag on.
 | `PATCH /boards/{id}` | any subset of `{name, description, count_envelope_in_metrics, confirm_moves, wip_min, wip_max, sle_days, sle_percentile, archived}` | structure role | — |
 | `DELETE /boards/{id}` | `?hard=true` | archive: structure role; hard delete: master only | — |
 | `POST /boards/{id}/clone` | `{name, kind (default simulator), copy_cards}` | as `POST /boards` | `simulator` for `kind=simulator` |
-| `GET /boards/{id}/view` | `?segment=upstream\|downstream\|unified` + `project_id, service_class, assignee_id, column_id, tag, q, is_blocked, demand_type, value_area, size, due_before, envelope_state, archived` | any | `unified_flow` for `segment=unified` |
+| `GET /boards/{id}/view` | `?segment=upstream\|downstream\|unified` + `project_id, service_class, assignee_id, column_id, tag, q, is_blocked, demand_type, value_area, size, due_before, envelope_state, case_id, archived` | any | `unified_flow` for `segment=unified` |
 | `GET /boards/{id}/wip` | — | any | — |
 | `POST /boards/{id}/columns` | `{name, segment, kind, position?, wip_min?, wip_max?, group_id?, color?, description?}` | structure role | — |
 | `PATCH /columns/{id}` | any subset | structure role | — |
@@ -535,10 +535,10 @@ read-only board refuses them (`409 board_read_only`).
 
 | Method & path | Query / body | Notes |
 |---|---|---|
-| `GET /cards` | `?board_id=&project_id=&service_class=&assignee_id=&segment=&column_id=&tag=&q=&is_blocked=&demand_type=&value_area=&size=&due_before=&archived=&envelope_state=&in_flight=&sort=&order=&limit=(≤1000, default 200)&offset=` | `project_id=none`, `assignee_id=unassigned`; `service_class`, `column_id`, `tag` take comma lists; `sort ∈ {created_at, aging, due_date, title, key, position}`, `order ∈ {asc, desc}`; `total` is the filtered count |
-| `POST /cards` | `{board_id, title, column_id?, project_id?, description?, service_class?, assignee_id?, requester?, size?, value_area?, demand_type?, due_date?, envelope_state?, tags?, custom_fields?}` | Writes the creation movement (`from_column_id: null`) and event; created at/after the commitment column → `committed_at` at once |
+| `GET /cards` | `?board_id=&project_id=&service_class=&assignee_id=&segment=&column_id=&tag=&q=&is_blocked=&demand_type=&value_area=&size=&case_id=&due_before=&archived=&envelope_state=&in_flight=&sort=&order=&limit=(≤1000, default 200)&offset=` | `project_id=none`, `assignee_id=unassigned`; `service_class`, `column_id`, `tag` take comma lists; `sort ∈ {created_at, aging, due_date, title, key, position}`, `order ∈ {asc, desc}`; `total` is the filtered count |
+| `POST /cards` | `{board_id, title, column_id?, project_id?, description?, service_class?, assignee_id?, requester?, size?, value_area?, demand_type?, due_date?, envelope_state?, tags?, custom_fields?, case_id?, case_label?, client_id?, client_name?}` | Writes the creation movement (`from_column_id: null`) and event; created at/after the commitment column → `committed_at` at once. Without a project the key is the product's (`SRADV-`, the key of the project that receives the providências; the product's initials before there is one); the standalone Nagare keeps the board's three letters. `value_area` empty → the product's first card type |
 | `GET /cards/{card_id}` | — | Id or key (`NGR-104`). Card + `tasks[]`, `blockers[]`, `comments[]`, `movements[]`, `intervals[]`, `flow{}` (touch/wait/efficiency), `can_edit` |
-| `PATCH /cards/{card_id}` | subset of `title, description, project_id, service_class, assignee_id, requester, size, value_area, demand_type, due_date, position, tags, custom_fields, archived` | One `card_events` row per changed field; `column_id` → `400 field_not_editable` (use `/move`). `archived: true` on a providência card discards it (webhook, §14.3) |
+| `PATCH /cards/{card_id}` | subset of `title, description, project_id, service_class, assignee_id, requester, size, value_area, demand_type, due_date, position, tags, custom_fields, archived, case_id, case_label, client_id, client_name` | One `card_events` row per changed field (the case and its client: one `case` event; `case_id: null` unlinks); `column_id` → `400 field_not_editable` (use `/move`). `archived: true` on a providência card discards it (webhook, §14.3) |
 | `DELETE /cards/{card_id}` | — | Archives (soft, idempotent); same webhook rule |
 | `GET /cards/{card_id}/tasks` | — | Checklist in display order (`{items, total}`) |
 | `POST /cards/{card_id}/tasks` | `{title, assignee_id?, position?, is_done?}` | |
@@ -550,6 +550,31 @@ read-only board refuses them (`409 board_read_only`).
 | `PATCH /comments/{comment_id}` / `DELETE /comments/{comment_id}` | `{body}` | Author or master/administrator (`403 comment_not_yours`) |
 
 Inside a product, assignees come from `GET /integration/people` (§14.2).
+
+**Card types (PPLAT-312).** `value_area` is a key of the product's list. A product without a
+list of its own uses the software one (`feature, defect, risk, debt, compliance`, labelled by
+the screens); SR Adv and SR GJ start with `prazo, peticao, audiencia, diligencia,
+administrativo` (`ng_0007`). A new card takes an active type (`400 invalid_card_type`
+otherwise); a card keeps the type it has even after it is archived.
+
+| Method & path | Body | Notes |
+|---|---|---|
+| `GET /card-types` | — | `{product_id, items: [{key, name, position, archived, builtin}], can_edit}`; `name: null` → the screens' label for the key |
+| `POST /card-types` | `{name}` | `manage_boards`. The key comes from the name (no accents, `_`), never changes; `409 card_type_name_taken` |
+| `PATCH /card-types/{key}` | `{name?, archived?}` | `manage_boards`; `409 card_type_last_active` |
+| `POST /card-types/order` | `{keys: [...]}` (every key once) | `manage_boards`; `400 card_type_order_mismatch` |
+| `DELETE /card-types/{key}` | — | `manage_boards`; a type some card has → `409 card_type_in_use` (archive it instead) |
+
+The first edit of a product on the default list copies it into the product's own rows.
+
+**The SR Adv case (PPLAT-310).** `case_id` is the case's id in the `sr-adv` service;
+`case_label`, `client_id` and `client_name` are what the case picker showed (the client comes
+from the case); `case_url` is set by the server (`<NAGARE_URL_TELAS>/<product>/processos/<id>`).
+Only inside a Pampufa product (`400 case_link_unavailable` in the standalone Nagare). The
+board's "Tarefas deste caso" link is `/grupo-sr/<product>/tarefas/quadro?caso=<case id>`: the
+screen opens the product's board with `GET /boards/{id}/view?case_id=…`. The screens find the
+cases in the `sr-adv` API through the gateway with the person's own token
+(`GET /api/v1/p/<product>/sr-adv/casos?busca=&limite=20`, `GET …/casos/{id}`).
 
 ---
 
@@ -767,7 +792,7 @@ platform reaches **only by API** (NG1): **the Pampufa calls, the Nagare answers 
 
 | Method & path | Body | Answer |
 |---|---|---|
-| `POST /integration/providencias` | `{providencia_id, servico, tipo, titulo?, motivo?, url?, produto_nome?, responsavel?: {sub?, email?, nome?}, prazo?, classe_servico?}` | `201 {created: true, card}`; the same `providencia_id` again → `200 {created: false, card}` (idempotent, never a second card) |
+| `POST /integration/providencias` | `{providencia_id, servico, tipo, titulo?, motivo?, url?, produto_nome?, responsavel?: {sub?, email?, nome?}, prazo?, classe_servico?, entidade?, entidade_id?}` | A `url` that is a case page of the product (`/grupo-sr/<product>/processos/<id>`), or `entidade: sa_caso` with `entidade_id`, links the card to that case. `201 {created: true, card}`; the same `providencia_id` again → `200 {created: false, card}` (idempotent, never a second card) |
 | `GET /integration/providencias/{providencia_id}` | — | `{state, card}`; `state ∈ {open, resolved_at_origin, delivered, discarded}` |
 | `POST /integration/providencias/{providencia_id}/resolved-at-origin` | `{em?, origem?}` | `{changed, state, card}` |
 | `GET /integration/overview` | — | `{stages, delivered_window_days, products: [...]}` |

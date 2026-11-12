@@ -49,6 +49,7 @@ __all__ = [
     "CardEvent",
     "CardMovement",
     "CardTask",
+    "CardType",
     "ColumnGroup",
     "Comment",
     "ExternalRef",
@@ -284,9 +285,8 @@ class Card(Base):
             name="service_class",
         ),
         CheckConstraint("size IS NULL OR size IN ('xs','s','m','l','xl')", name="size"),
-        CheckConstraint(
-            "value_area IN ('feature','defect','risk','debt','compliance')", name="value_area"
-        ),
+        # ``value_area`` is the card type, a key of the product's list (``card_types``,
+        # PPLAT-312): no fixed check since ng_0007.
         CheckConstraint("demand_type IN ('value','failure','maintenance')", name="demand_type"),
         CheckConstraint("envelope_state IN ('sealed','opened')", name="envelope_state"),
         Index("idx_cards_board_column", "board_id", "column_id"),
@@ -297,6 +297,7 @@ class Card(Base):
         Index("idx_cards_assignee", "assignee_id"),
         Index("idx_cards_service_class", "board_id", "service_class"),
         Index("idx_cards_envelope", "board_id", "envelope_state"),
+        Index("idx_cards_case", "product_id", "case_id"),
     )
 
     id: Mapped[str] = _id()
@@ -325,6 +326,39 @@ class Card(Base):
     delivered_at: Mapped[str | None] = mapped_column(Instant)
     archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_by: Mapped[str | None] = _fk("users.id", "SET NULL")
+    #: PPLAT-310 (12/11/2026): the SR Adv case the card is about. ``case_id`` is the case's
+    #: id in the ``sr-adv`` service, ``case_url`` its page; label and client are copied
+    #: from the case when it is chosen (the client comes from the case).
+    case_id: Mapped[str | None] = mapped_column(String(64))
+    case_label: Mapped[str | None] = mapped_column(String(200))
+    case_url: Mapped[str | None] = mapped_column(String(300))
+    client_id: Mapped[str | None] = mapped_column(String(64))
+    client_name: Mapped[str | None] = mapped_column(String(200))
+
+
+class CardType(Base):
+    """A product's card types (PPLAT-312, 12/11/2026), the keys ``cards.value_area`` takes.
+
+    A product without rows uses the software list (``VALUE_AREAS``, labelled by the
+    screens). ``name`` empty means "the screens' label for the key". A type in use is
+    archived, never deleted: its cards keep it, new cards cannot pick it.
+    """
+
+    __tablename__ = "card_types"
+    __table_args__ = (
+        UniqueConstraint("product_id", "key"),
+        Index("idx_card_types_product", "product_id", "position"),
+    )
+
+    id: Mapped[str] = _id()
+    product_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    key: Mapped[str] = mapped_column(String(20), nullable=False)
+    name: Mapped[str | None] = mapped_column(String(80))
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    archived: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+    created_at: Mapped[str] = mapped_column(Instant, nullable=False)
 
 
 # ---------------------------------------------------------------------------

@@ -1028,6 +1028,7 @@ def card_filter_clauses(
     size: str | None = None,
     due_before: str | None = None,
     envelope_state: str | None = None,
+    case_id: str | None = None,
 ) -> list[Any]:
     """Translate the SPEC §5 card query string into SQL conditions."""
     conditions: list[Any] = []
@@ -1059,6 +1060,9 @@ def card_filter_clauses(
         conditions.append(Card.due_date <= due_before)
     if envelope_state:
         conditions.append(Card.envelope_state == envelope_state)
+    if case_id:
+        # PPLAT-310: "Tarefas deste caso" (the SR Adv case page opens the board filtered).
+        conditions.append(Card.case_id == case_id)
     return conditions
 
 
@@ -1759,6 +1763,7 @@ async def board_view(
     size: str | None = Query(None),
     due_before: DayText | None = Query(None),
     envelope_state: str | None = Query(None),
+    case_id: str | None = Query(None, description="Only the cards about this SR Adv case."),
     archived: bool = Query(False),
     s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(require_capability("read_boards_metrics")),
@@ -1806,6 +1811,7 @@ async def board_view(
         size=size,
         due_before=due_before,
         envelope_state=envelope_state,
+        case_id=case_id,
     )
 
     wip = await board_wip_status(s, board, columns=columns, groups=groups)

@@ -176,7 +176,11 @@ InstantText = Annotated[datetime, AfterValidator(_instant_text)]
 
 ServiceClass = Literal["expedite", "standard", "fixed_date", "intangible"]
 DemandType = Literal["value", "failure", "maintenance"]
-ValueArea = Literal["feature", "defect", "risk", "debt", "compliance"]
+#: The card type: a key of the product's list (``/card-types``, PPLAT-312). The software
+#: list (feature, defect, risk, debt, compliance) is the default one.
+ValueArea = Annotated[str, StringConstraints(pattern=r"^[a-z0-9_]{1,20}$")]
+#: An id in another service (the SR Adv case, its client): letters, digits and dashes.
+ExternalId = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9-]{1,64}$")]
 EnvelopeState = Literal["sealed", "opened"]
 CardSize = Literal["xs", "s", "m", "l", "xl"]
 MovementSource = Literal["ui", "api", "mcp", "seed", "simulation"]
@@ -569,7 +573,7 @@ class CardOut(Schema):
     assignee_id: str | None = None
     requester: str | None = None
     size: CardSize | None = None
-    value_area: ValueArea = "feature"
+    value_area: str = "feature"
     demand_type: DemandType = "value"
     due_date: str | None = None
     position: int = 0
@@ -583,6 +587,12 @@ class CardOut(Schema):
     delivered_at: str | None = None
     archived: bool = False
     created_by: str | None = None
+    #: PPLAT-310: the SR Adv case the card is about, and its client.
+    case_id: str | None = None
+    case_label: str | None = None
+    case_url: str | None = None
+    client_id: str | None = None
+    client_name: str | None = None
     # denormalised helpers the board view needs to render a compact card
     project_key: str | None = None
     project_color: str | None = None
@@ -630,12 +640,18 @@ class CardCreate(Schema):
     assignee_id: str | None = None
     requester: str | None = None
     size: CardSize | None = None
-    value_area: ValueArea = "feature"
+    #: Empty: the product's first card type.
+    value_area: ValueArea | None = None
     demand_type: DemandType = "value"
     due_date: DayText | None = None
     envelope_state: EnvelopeState = "opened"
     tags: list[str] = Field(default_factory=list)
     custom_fields: dict[str, Any] = Field(default_factory=dict)
+    #: PPLAT-310: the SR Adv case (label and client as the case picker showed them).
+    case_id: ExternalId | None = None
+    case_label: str | None = Field(default=None, max_length=200)
+    client_id: ExternalId | None = None
+    client_name: str | None = Field(default=None, max_length=200)
 
 
 class CardUpdate(Schema):
@@ -653,6 +669,11 @@ class CardUpdate(Schema):
     tags: list[str] | None = None
     custom_fields: dict[str, Any] | None = None
     archived: bool | None = None
+    #: PPLAT-310: ``case_id`` null unlinks the case (and its client).
+    case_id: ExternalId | None = None
+    case_label: str | None = Field(default=None, max_length=200)
+    client_id: ExternalId | None = None
+    client_name: str | None = Field(default=None, max_length=200)
 
 
 class TaskOut(Schema):
@@ -860,7 +881,8 @@ class DemandCreate(Schema):
     description: str | None = None
     requester: str | None = None
     service_class: ServiceClass = "standard"
-    value_area: ValueArea = "feature"
+    #: Empty: the product's first card type.
+    value_area: ValueArea | None = None
     demand_type: DemandType = "value"
     size: CardSize | None = None
     due_date: DayText | None = None

@@ -87,6 +87,11 @@ class ProvidenciaIn(BaseModel):
     #: A malformed day is a 422 (the Pampufa must not retry it), never a 500 at bind time.
     prazo: DayText | None = None
     classe_servico: str | None = None
+    #: What the providência is about, as the Pampufa keeps it (``sa_caso`` and the case id:
+    #: the card is linked to the case, PPLAT-310). Optional; the link to a case page does
+    #: the same.
+    entidade: str | None = Field(default=None, max_length=80)
+    entidade_id: str | None = Field(default=None, max_length=64)
 
 
 class ResolvedIn(BaseModel):

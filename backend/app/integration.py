@@ -22,6 +22,8 @@ from typing import Any
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .card_types import PROVIDENCIA_TYPES, default_type
+from .cases import CASE_FIELDS, case_from_url, case_page_url
 from .config import SERVICE_CLASSES, settings
 from .db import add_days, new_id, utcnow
 from .errors import BadRequest, Conflict, NotFound
@@ -529,6 +531,20 @@ async def card_for_providencia(
     if url:
         description = f"{motivo}\n\nResolver em: {url}" if motivo else f"Resolver em: {url}"
     tags = [tag for tag in (TAG_PROVIDENCIA, servico, tipo) if tag]
+    # PPLAT-310: a providência about one SR Adv case (its link is the case page, or it says
+    # so in ``entidade``) is a card about that case, found by the case's "Tarefas" filter.
+    case_id = case_from_url(url, product_id)
+    if case_id is None and payload.get("entidade") == "sa_caso" and payload.get("entidade_id"):
+        case_id = str(payload["entidade_id"])[:64]
+    case = (
+        {
+            **dict.fromkeys(CASE_FIELDS),
+            "case_id": case_id,
+            "case_url": case_page_url(product_id, case_id),
+        }
+        if case_id
+        else {}
+    )
     card = await _insert_card(
         s,
         board=board,
@@ -541,7 +557,7 @@ async def card_for_providencia(
             "assignee_id": await _assignee(s, payload.get("responsavel")),
             "requester": servico or None,
             "size": None,
-            "value_area": "feature",
+            "value_area": await default_type(s, product_id, PROVIDENCIA_TYPES),
             "demand_type": "value",
             "due_date": payload.get("prazo"),
             "tags": tags,
@@ -553,6 +569,7 @@ async def card_for_providencia(
                     "url": url,
                 }
             },
+            **case,
         },
         actor_id=actor_id,
         note="Providência da Pampufa",
@@ -751,6 +768,7 @@ async def swap_product_project(
                         "due_date",
                         "tags",
                         "custom_fields",
+                        *CASE_FIELDS,
                     )
                 },
                 actor_id=actor_id,

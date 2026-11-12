@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy import case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..card_types import check_type, default_type
 from ..db import new_id, seconds_between, utcnow
 from ..deps import (
     CurrentUser,
@@ -466,6 +467,11 @@ async def create_demand(
     else:
         column = _first_open_column(columns)
 
+    value_area = (
+        await check_type(s, board["product_id"], payload.value_area)
+        if payload.value_area
+        else await default_type(s, board["product_id"])
+    )
     now = utcnow()
     card_id = new_id()
     s.add(
@@ -482,7 +488,7 @@ async def create_demand(
             assignee_id=None,
             requester=payload.requester,
             size=payload.size,
-            value_area=payload.value_area,
+            value_area=value_area,
             demand_type=payload.demand_type,
             due_date=payload.due_date,
             position=await _next_position(s, column["id"]),

@@ -473,7 +473,18 @@ PROJECT_STATUSES: tuple[str, ...] = (
 )
 SERVICE_CLASSES: tuple[str, ...] = ("expedite", "standard", "fixed_date", "intangible")
 DEMAND_TYPES: tuple[str, ...] = ("value", "failure", "maintenance")
+#: The card types a product uses while it has no list of its own (``card_types``): the
+#: software ones, labelled by the screens (PPLAT-312, 12/11/2026).
 VALUE_AREAS: tuple[str, ...] = ("feature", "defect", "risk", "debt", "compliance")
+#: The legal products' first list (Sarah, 05/11/2026), seeded by ``ng_0007``; editable.
+LEGAL_CARD_TYPES: tuple[tuple[str, str], ...] = (
+    ("prazo", "Prazo"),
+    ("peticao", "Petição"),
+    ("audiencia", "Audiência"),
+    ("diligencia", "Diligência"),
+    ("administrativo", "Administrativo"),
+)
+LEGAL_PRODUCTS: tuple[str, ...] = ("sr-adv", "sr-gj")
 ENVELOPE_STATES: tuple[str, ...] = ("sealed", "opened")
 CARD_SIZES: tuple[str, ...] = ("xs", "s", "m", "l", "xl")
 MOVEMENT_SOURCES: tuple[str, ...] = ("ui", "api", "mcp", "seed", "simulation")

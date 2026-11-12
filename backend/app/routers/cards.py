@@ -28,11 +28,12 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
+from ..card_types import check_type, default_type, product_types
+from ..cases import CASE_FIELDS, case_values
 from ..config import (
     CARD_SIZES,
     DEMAND_TYPES,
     SERVICE_CLASSES,
-    VALUE_AREAS,
 )
 from ..db import new_id, seconds_between, utcnow
 from ..deps import (
@@ -47,6 +48,7 @@ from ..deps import (
 from ..errors import BadRequest, Conflict, Forbidden, NotFound
 from ..integration import close_card
 from ..models import (
+    PRODUCT_STANDALONE,
     Blocker,
     Board,
     BoardColumn,
@@ -56,6 +58,7 @@ from ..models import (
     CardTask,
     ColumnGroup,
     Comment,
+    ProductLink,
     Project,
     User,
     as_dict,
@@ -80,7 +83,7 @@ from ..schemas import (
     TaskUpdate,
 )
 from ..sqltypes import day_of
-from ..tenancy import in_product, same_product
+from ..tenancy import in_product, product_for_new_rows, project_key_for, same_product
 
 router = APIRouter(tags=["cards"])
 
@@ -422,10 +425,22 @@ async def next_card_key(s: AsyncSession, prefix: str, product_id: str | None = N
     return f"{prefix}-{highest + 1}"
 
 
-def _key_prefix(project: dict[str, Any] | None, board: dict[str, Any]) -> str:
-    """Key prefix: the project key, or a board-derived one for loose cards."""
+async def _key_prefix(
+    s: AsyncSession, project: dict[str, Any] | None, board: dict[str, Any]
+) -> str:
+    """Key prefix: the project key; for a loose card, the product's own one (PPLAT-315).
+
+    Inside a Pampufa product a card without a project takes the key of the project that
+    receives the providências (``SRADV``), as the integration's cards do, or the product's
+    initials before there is one. The standalone Nagare keeps the board-derived prefix.
+    """
     if project and project.get("key"):
         return str(project["key"]).upper()
+    product = str(board.get("product_id") or PRODUCT_STANDALONE)
+    if product != PRODUCT_STANDALONE:
+        link = await s.get(ProductLink, product)
+        linked = await s.get(Project, link.project_id) if link is not None else None
+        return str(linked.key).upper() if linked is not None else project_key_for(product)
     letters = [ch for ch in str(board.get("slug") or board.get("name") or "card") if ch.isalnum()]
     return ("".join(letters[:3]) or "CARD").upper()
 
@@ -808,6 +823,7 @@ async def list_cards(
     demand_type: str | None = Query(None),
     value_area: str | None = Query(None),
     size: str | None = Query(None),
+    case_id: str | None = Query(None, description="The SR Adv case the cards are about."),
     due_before: DayText | None = Query(None, description="ISO date/timestamp upper bound."),
     archived: bool | None = Query(None, description="Defaults to active cards only."),
     envelope_state: EnvelopeState | None = Query(None),
@@ -846,10 +862,11 @@ async def list_cards(
     if columns:
         conditions.append(Card.column_id.in_(columns))
 
+    card_types = [t["key"] for t in await product_types(s, product_for_new_rows())]
     for name, raw, allowed in (
         ("service_class", service_class, SERVICE_CLASSES),
         ("demand_type", demand_type, DEMAND_TYPES),
-        ("value_area", value_area, VALUE_AREAS),
+        ("value_area", value_area, card_types),
         ("size", size, CARD_SIZES),
     ):
         values = _validate_enum(name, _split_csv(raw), allowed)
@@ -859,6 +876,8 @@ async def list_cards(
     tags = _split_csv(tag)
     if tags:
         conditions.append(or_(*(_tag_condition(s, value) for value in tags)))
+    if case_id:
+        conditions.append(Card.case_id == case_id)
 
     if q:
         needle = f"%{q.strip()}%"
@@ -987,6 +1006,12 @@ async def create_card(
             raise NotFound("Project", payload.project_id, code="project_not_found")
     if payload.assignee_id and not await _user_exists(s, payload.assignee_id):
         raise NotFound("User", payload.assignee_id, code="user_not_found")
+    value_area = (
+        await check_type(s, board["product_id"], payload.value_area)
+        if payload.value_area
+        else await default_type(s, board["product_id"])
+    )
+    case = case_values(board["product_id"], payload.model_dump())
 
     commitment = commitment_column(columns)
     delivery = delivery_column(columns)
@@ -998,7 +1023,7 @@ async def create_card(
     opened_at = None if payload.envelope_state == "sealed" else now
 
     card_id = new_id()
-    prefix = _key_prefix(project, board)
+    prefix = await _key_prefix(s, project, board)
     position = await next_position(s, target["id"])
     key = await next_card_key(s, prefix, board["product_id"])
 
@@ -1016,7 +1041,7 @@ async def create_card(
             assignee_id=payload.assignee_id,
             requester=payload.requester,
             size=payload.size,
-            value_area=payload.value_area,
+            value_area=value_area,
             demand_type=payload.demand_type,
             due_date=payload.due_date,
             position=position,
@@ -1030,6 +1055,7 @@ async def create_card(
             delivered_at=delivered_at,
             archived=False,
             created_by=user["id"],
+            **case,
         )
     )
     await s.flush()
@@ -1175,7 +1201,7 @@ async def update_card(
     board = await require_card_write(s, user, row)
 
     changes = payload.model_dump(exclude_unset=True)
-    unknown = [field for field in changes if field not in _EDITABLE]
+    unknown = [f for f in changes if f not in _EDITABLE and f not in CASE_FIELDS]
     if unknown:
         raise BadRequest(
             f"These fields cannot be edited here: {', '.join(sorted(unknown))}.",
@@ -1187,6 +1213,15 @@ async def update_card(
         raise NotFound("Project", changes["project_id"], code="project_not_found")
     if changes.get("assignee_id") and not await _user_exists(s, changes["assignee_id"]):
         raise NotFound("User", changes["assignee_id"], code="user_not_found")
+    if "value_area" in changes:
+        if changes["value_area"] is None:
+            changes.pop("value_area")
+        else:
+            await check_type(
+                s, row["product_id"], changes["value_area"], current=row.get("value_area")
+            )
+    # The case and its client change together, audited as one "case" change.
+    case_changes = {field: changes.pop(field) for field in list(changes) if field in CASE_FIELDS}
 
     now = utcnow()
     applied: list[dict[str, Any]] = []
@@ -1220,6 +1255,24 @@ async def update_card(
         applied.append(
             {"field": field, "old": _display(field, old_value), "new": _display(field, new_value)}
         )
+
+    if "case_id" in case_changes:
+        case = case_values(row["product_id"], case_changes)
+        if any(case[field] != row.get(field) for field in CASE_FIELDS):
+            values.update(case)
+            old_case = row.get("case_label") or row.get("case_id")
+            new_case = case["case_label"] or case["case_id"]
+            record_event(
+                s,
+                row,
+                "updated",
+                actor_id=user["id"],
+                field="case",
+                old_value=old_case,
+                new_value=new_case,
+                at=now,
+            )
+            applied.append({"field": "case", "old": old_case, "new": new_case})
 
     if values:
         await s.execute(update(Card).where(Card.id == row["id"]).values(**values))
