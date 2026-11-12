@@ -23,10 +23,18 @@ def _url() -> str:
 
 
 def _run(connection: Connection) -> None:
+    sqlite = connection.dialect.name == "sqlite"
+    if sqlite:
+        # Batch mode rebuilds a SQLite table (copy, DROP, rename). With foreign keys on, the
+        # DROP deletes the old rows first and ON DELETE CASCADE empties every table that
+        # points at it: rebuilding `cards` (ng_0007) would wipe the movements, events and
+        # providência links. Off before the first statement (a PRAGMA inside a transaction
+        # does nothing); the app's connections turn it back on (db._sqlite_pragmas).
+        connection.exec_driver_sql("PRAGMA foreign_keys = OFF")
     context.configure(
         connection=connection,
         target_metadata=metadata,
-        render_as_batch=connection.dialect.name == "sqlite",
+        render_as_batch=sqlite,
         compare_type=True,
     )
     with context.begin_transaction():
