@@ -39,6 +39,9 @@ import {
   validarDestino,
 } from '../features/quadro/regras'
 import { CATALOGOS, pt, type Chave } from '../i18n/mensagens'
+import { itensDeCasos, rotuloDoCaso, SEM_CASO, termoDaBusca, vinculoDoCartao, vinculoDoCaso } from '../features/cartao/casos'
+import { moverTipo, opcoesDeTipo, rotuloDoTipo, tipoInicial } from '../features/cartao/tiposDeCartao'
+import type { CasoDoSrAdv, TipoDeCartao } from '../api/tipos'
 import { chaveDoErro, interpolar, traducao } from '../i18n/texto'
 
 let falhas = 0
@@ -370,6 +373,72 @@ confere('periodo padrao: do dia 1 a hoje', periodoPadrao(new Date(2026, 10, 6)),
   confere('indicador de prazos filtra a data fixa', buscaDoIndicador('due_date_performance', filtros), 'segmento=unified&projeto=p1&classe=fixed_date')
   confere('tempos e vazao nao tem lista', [buscaDoIndicador('p50', filtros), buscaDoIndicador('throughput', filtros)], [null, null])
   confere('o filtro do indicador o quadro le de volta', lerFiltros(new URLSearchParams(buscaDoIndicador('failure_demand', filtros)!)).tipo, 'failure')
+}
+
+// ----------------------------------------------- R5-D: tipos por produto e o caso do SR Adv
+{
+  const tPt = traducao('pt-BR').t
+  const juridicos: TipoDeCartao[] = [
+    { key: 'prazo', name: 'Prazo', position: 0, archived: false, builtin: false },
+    { key: 'peticao', name: 'Petição', position: 1, archived: false, builtin: false },
+    { key: 'feature', name: null, position: 5, archived: true, builtin: false },
+    { key: 'audiencia', name: 'Audiência', position: 2, archived: false, builtin: false },
+  ]
+  confere('tipo com nome do produto', rotuloDoTipo('peticao', juridicos, tPt), 'Petição')
+  confere('tipo sem nome: o rotulo das telas', rotuloDoTipo('feature', juridicos, tPt), 'Funcionalidade')
+  confere('tipo desconhecido: a chave', rotuloDoTipo('reuniao', juridicos, tPt), 'reuniao')
+  confere('sem lista: a padrao', rotuloDoTipo('debt', undefined, tPt), 'Dívida técnica')
+  confere(
+    'opcoes: em uso na ordem, sem os arquivados',
+    opcoesDeTipo(juridicos, null, tPt).map((o) => o.valor),
+    ['prazo', 'peticao', 'audiencia'],
+  )
+  confere(
+    'o tipo arquivado do cartao continua na lista',
+    opcoesDeTipo(juridicos, 'feature', tPt).map((o) => o.texto),
+    ['Prazo', 'Petição', 'Audiência', 'Funcionalidade (arquivado)'],
+  )
+  confere('tipo fora da lista continua', opcoesDeTipo(juridicos, 'velho', tPt).at(-1), { valor: 'velho', texto: 'velho' })
+  confere('cartao novo: o primeiro em uso', [tipoInicial(juridicos), tipoInicial(undefined)], ['prazo', 'feature'])
+  confere('subir e descer', [moverTipo(['a', 'b', 'c'], 'c', -1), moverTipo(['a', 'b', 'c'], 'a', -1)], [['a', 'c', 'b'], ['a', 'b', 'c']])
+
+  const caso: CasoDoSrAdv = {
+    id: 'c1',
+    codigo: 'Caso 07',
+    titulo: null,
+    rotulo: 'Revisional · Maria Silva',
+    cliente_id: 'p1',
+    cliente_nome: 'Maria Silva',
+    numero_processo: '1000123-45.2026.8.26.0100',
+    situacao: 'ativo',
+  }
+  confere('rotulo do caso: codigo e titulo (ou rotulo)', [rotuloDoCaso(caso), rotuloDoCaso({ ...caso, titulo: 'Laudêmio' })], [
+    'Caso 07 · Revisional · Maria Silva',
+    'Caso 07 · Laudêmio',
+  ])
+  confere('o cliente vem do caso', vinculoDoCaso(caso), {
+    case_id: 'c1',
+    case_label: 'Caso 07 · Revisional · Maria Silva',
+    client_id: 'p1',
+    client_name: 'Maria Silva',
+  })
+  confere(
+    'itens: cliente e processo no detalhe; encerrado marcado; o do cartao fica',
+    itensDeCasos([caso, { ...caso, id: 'c2', situacao: 'encerrado', numero_processo: null }], { ...SEM_CASO, case_id: 'c9', case_label: 'Caso 09' }, 'encerrado'),
+    [
+      { id: 'c9', nome: 'Caso 09', detalhe: null },
+      { id: 'c1', nome: 'Caso 07 · Revisional · Maria Silva', detalhe: 'Maria Silva · 1000123-45.2026.8.26.0100' },
+      { id: 'c2', nome: 'Caso 07 · Revisional · Maria Silva', detalhe: 'Maria Silva · encerrado' },
+    ],
+  )
+  confere('cartao sem caso', vinculoDoCartao({}), SEM_CASO)
+  confere('busca sem espaco sobrando', termoDaBusca('  maria   silva '), 'maria silva')
+
+  const porCaso = lerFiltros(new URLSearchParams('caso=c1&cartao=x'))
+  confere('o quadro le o caso da URL', porCaso.caso, 'c1')
+  confere('o servidor filtra pelo caso', parametrosDaVisao(porCaso).case_id, 'c1')
+  confere('o caso conta como filtro', contarFiltros(porCaso), 1)
+  confere('o caso volta para a URL', gravarFiltros(new URLSearchParams(), { ...FILTROS_VAZIOS, caso: 'c1' }).toString(), 'caso=c1')
 }
 
 if (falhas > 0) throw new Error(`${falhas} de ${total} verificacoes falharam.`)

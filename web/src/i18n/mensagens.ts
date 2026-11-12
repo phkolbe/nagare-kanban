@@ -6,6 +6,7 @@
 
 import type { Idioma } from '../api/tipos'
 import { enN3, ptN3 } from './mensagens_n3'
+import { enR5, ptR5 } from './mensagens_r5'
 
 const ptBase = {
   // ------------------------------------------------------------------ comum
@@ -212,7 +213,7 @@ const ptBase = {
   'cartao.campo.classe': 'Classe de serviço',
   'cartao.campo.prazo': 'Prazo',
   'cartao.campo.tipo': 'Tipo de demanda',
-  'cartao.campo.area': 'Área de valor',
+  'cartao.campo.area': 'Tipo de cartão',
   'cartao.campo.tamanho': 'Tamanho',
   'cartao.campo.solicitante': 'Solicitante',
   'cartao.campo.etiquetas': 'Etiquetas',
@@ -468,7 +469,7 @@ const ptBase = {
   'erro.auth.sem_permissao': 'Você não tem permissão para esta ação.',
 } as const
 
-export const pt = { ...ptBase, ...ptN3 } as const
+export const pt = { ...ptBase, ...ptN3, ...ptR5 } as const
 
 export type Chave = keyof typeof pt
 
@@ -672,7 +673,7 @@ const enBase: Record<keyof typeof ptBase, string> = {
   'cartao.campo.classe': 'Class of service',
   'cartao.campo.prazo': 'Due date',
   'cartao.campo.tipo': 'Demand type',
-  'cartao.campo.area': 'Value area',
+  'cartao.campo.area': 'Card type',
   'cartao.campo.tamanho': 'Size',
   'cartao.campo.solicitante': 'Requester',
   'cartao.campo.etiquetas': 'Tags',
@@ -923,6 +924,6 @@ const enBase: Record<keyof typeof ptBase, string> = {
   'erro.auth.sem_permissao': 'You are not allowed to perform this action.',
 }
 
-const en: Record<Chave, string> = { ...enBase, ...enN3 }
+const en: Record<Chave, string> = { ...enBase, ...enN3, ...enR5 }
 
 export const CATALOGOS: Record<Idioma, Record<Chave, string>> = { 'pt-BR': pt, en }

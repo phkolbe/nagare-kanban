@@ -31,6 +31,7 @@ export function CaixaDeLista({
   rotuloIncluir,
   dica,
   compacto = false,
+  aoDigitar,
 }: {
   rotulo: string
   itens: ItemDaCaixa[]
@@ -47,6 +48,11 @@ export function CaixaDeLista({
   dica?: string
   /** Sem rotulo visivel e menor (ex.: o trocador de quadro no cabecalho). */
   compacto?: boolean
+  /**
+   * A lista vem de uma busca no servidor (ex.: os casos do SR Adv): recebe o que se digita (e ''
+   * ao fechar); os itens que chegam ainda passam pelo filtro local, como os outros.
+   */
+  aoDigitar?: (texto: string) => void
 }) {
   const { t } = useT()
   const id = useId()
@@ -109,6 +115,7 @@ export function CaixaDeLista({
   function fechar() {
     setAberto(false)
     setBusca('')
+    aoDigitar?.('')
   }
 
   function escolher(opcao: OpcaoDaCaixa | undefined) {
@@ -148,6 +155,7 @@ export function CaixaDeLista({
               setBusca(e.target.value)
               setAberto(true)
               setAtivo(0)
+              aoDigitar?.(e.target.value)
             }}
             onKeyDown={(e) => {
               if (e.key === 'ArrowDown') {

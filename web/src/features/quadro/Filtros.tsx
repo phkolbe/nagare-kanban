@@ -5,7 +5,10 @@ import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 
 import { CLASSES, TIPOS_DEMANDA, type Cartao, type ClasseServico, type TipoDemanda } from '../../api/tipos'
+import { useNagare } from '../../app/contexto'
 import { useT } from '../../i18n'
+import { rotuloDoCaso } from '../cartao/casos'
+import { useCaso } from '../cartao/SeletorDeCaso'
 import { usePessoas, useProjetos } from './consultas'
 import { contarFiltros, FILTROS_VAZIOS, gravarFiltros, type Filtros } from './regras'
 
@@ -52,6 +55,35 @@ export function SeloFiltrado({ filtros, total, segmentado, limpar }: { filtros: 
   )
 }
 
+/**
+ * O filtro por caso do SR Adv (PPLAT-310): a pagina do caso abre o quadro com `?caso=<id>`. Diz
+ * qual caso (pelo nome que os cartoes guardam), leva de volta a ele e mostra todas as tarefas.
+ */
+export function SeloDoCaso({ filtros, cartoes }: { filtros: Filtros; cartoes: Cartao[] }) {
+  const { t } = useT()
+  const { produto } = useNagare()
+  const [busca, setBusca] = useSearchParams()
+  const doCartao = cartoes.find((c) => c.case_id === filtros.caso && c.case_label)?.case_label
+  // Sem cartao com o nome (ainda nenhum, ou so de providencia): o nome vem do SR Adv.
+  const doSrAdv = useCaso(filtros.caso, Boolean(filtros.caso) && !doCartao)
+  if (!filtros.caso) return null
+  const nome = doCartao ?? (doSrAdv.data ? rotuloDoCaso(doSrAdv.data) : null)
+  const url =
+    cartoes.find((c) => c.case_id === filtros.caso && c.case_url)?.case_url ??
+    `/grupo-sr/${encodeURIComponent(produto)}/processos/${encodeURIComponent(filtros.caso)}`
+  return (
+    <span className="ng-pilula ng-selo-filtrado ng-selo-caso">
+      {nome ? t('caso.filtro', { caso: nome }) : t('caso.filtro_sem_nome')}
+      <a className="link" href={url}>
+        {t('caso.abrir')} ↗
+      </a>
+      <button type="button" className="link" onClick={() => setBusca(gravarFiltros(busca, { ...filtros, caso: '' }), { replace: true })}>
+        {t('caso.ver_todas')}
+      </button>
+    </span>
+  )
+}
+
 /** O botao dos filtros (projeto, responsavel, etiqueta, tipo, classe, bloqueado), com o painel. */
 export function BotaoDeFiltros({ filtros, cartoes }: { filtros: Filtros; cartoes: Cartao[] }) {
   const { t, eu } = useT()
@@ -59,7 +91,8 @@ export function BotaoDeFiltros({ filtros, cartoes }: { filtros: Filtros; cartoes
   const [aberto, setAberto] = useState(false)
   const projetos = useProjetos()
   const pessoas = usePessoas()
-  const ativos = contarFiltros({ ...filtros, texto: '' })
+  // O caso tem o selo dele (SeloDoCaso): nao conta aqui nem sai no "limpar" destes filtros.
+  const ativos = contarFiltros({ ...filtros, texto: '', caso: '' })
   const etiquetas = [...new Set(cartoes.flatMap((c) => c.tags))].sort()
 
   const aplicar = (parcial: Partial<Filtros>) => setBusca(gravarFiltros(busca, { ...filtros, ...parcial }), { replace: true })
@@ -76,7 +109,7 @@ export function BotaoDeFiltros({ filtros, cartoes }: { filtros: Filtros; cartoes
         {ativos > 0 && <span className="contador">{ativos}</span>}
       </button>
       {ativos > 0 && (
-        <button type="button" className="link" onClick={() => setBusca(gravarFiltros(busca, { ...FILTROS_VAZIOS, texto: filtros.texto }), { replace: true })}>
+        <button type="button" className="link" onClick={() => setBusca(gravarFiltros(busca, { ...FILTROS_VAZIOS, texto: filtros.texto, caso: filtros.caso }), { replace: true })}>
           {t('filtros.limpar')}
         </button>
       )}

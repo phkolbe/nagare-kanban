@@ -46,9 +46,19 @@ export const chaves = {
   modelos: (produto: string) => ['nagare', produto, 'modelos'] as const,
   consolidado: () => ['nagare', 'pampufa', 'consolidado'] as const,
   regras: (produto: string) => ['pampufa', produto, 'nagare', 'regras'] as const,
+  tipos: (produto: string) => ['nagare', produto, 'tipos'] as const,
+  casos: (produto: string, termo: string) => ['sr-adv', produto, 'casos', termo] as const,
 }
 
 /** Regras por tipo de providencia: API do pampufa, dono da ponte (NG9). */
 export function urlRegras(produto: string): string {
   return `/api/v1/p/${encodeURIComponent(produto)}/pampufa/nagare/regras`
+}
+
+/**
+ * Casos do SR Adv (PPLAT-310): a API do `sr-adv` atras do mesmo gateway, com o mesmo token da
+ * Pampufa (login unico); o produto vai no caminho, como nas telas do SR Adv.
+ */
+export function urlCasos(produto: string): string {
+  return `/api/v1/p/${encodeURIComponent(produto)}/sr-adv/casos`
 }

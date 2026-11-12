@@ -76,6 +76,8 @@ export interface Filtros {
   bloqueado: boolean
   texto: string
   classes: ClasseServico[]
+  /** PPLAT-310: so os cartoes do caso do SR Adv (`?caso=<id>`, o "Tarefas deste caso"). */
+  caso: string
 }
 
 export const FILTROS_VAZIOS: Filtros = {
@@ -86,6 +88,7 @@ export const FILTROS_VAZIOS: Filtros = {
   bloqueado: false,
   texto: '',
   classes: [],
+  caso: '',
 }
 
 /** Os filtros moram na URL (link compartilhavel, voltar do navegador). */
@@ -99,6 +102,7 @@ export function lerFiltros(busca: URLSearchParams): Filtros {
     bloqueado: busca.get('bloqueado') === '1',
     texto: busca.get('q') ?? '',
     classes,
+    caso: busca.get('caso') ?? '',
   }
 }
 
@@ -112,6 +116,7 @@ export function gravarFiltros(busca: URLSearchParams, filtros: Filtros): URLSear
     bloqueado: filtros.bloqueado ? '1' : '',
     q: filtros.texto,
     classe: filtros.classes.join(','),
+    caso: filtros.caso,
   }
   for (const [chave, valor] of Object.entries(valores)) {
     if (valor) nova.set(chave, valor)
@@ -129,6 +134,7 @@ export function contarFiltros(filtros: Filtros): number {
     filtros.bloqueado,
     filtros.texto,
     filtros.classes.length > 0,
+    filtros.caso,
   ].filter(Boolean).length
 }
 
@@ -141,6 +147,7 @@ export function parametrosDaVisao(filtros: Filtros): Record<string, string | boo
     demand_type: filtros.tipo || undefined,
     is_blocked: filtros.bloqueado || undefined,
     q: filtros.texto || undefined,
+    case_id: filtros.caso || undefined,
   }
 }
 

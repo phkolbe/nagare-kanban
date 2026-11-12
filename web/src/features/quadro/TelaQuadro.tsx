@@ -19,12 +19,13 @@ import { CaixaDeLista } from '../../componentes/CaixaDeLista'
 import { Janela } from '../../componentes/Sobreposicao'
 import { SeletorIdioma } from '../../componentes/SeletorIdioma'
 import { mensagemDeErro, useT } from '../../i18n'
+import { SEM_CASO, vinculoDoCartao, type VinculoDoCaso } from '../cartao/casos'
 import { GavetaCartao } from '../cartao/GavetaCartao'
 import { itensDoTrocadorDeQuadro } from '../projetos/listas'
 import { EditorEstrutura } from '../estrutura/EditorEstrutura'
 import { useAlterarQuadro, useCriarQuadroDoProduto, useMover, useQuadro, useQuadros, useVinculo, useVisao } from './consultas'
 import { EditorWip } from './EditorWip'
-import { BotaoDeFiltros, BuscaDeCartoes, SeloFiltrado } from './Filtros'
+import { BotaoDeFiltros, BuscaDeCartoes, SeloDoCaso, SeloFiltrado } from './Filtros'
 import { Grade } from './Grade'
 import { NovoCartao } from './NovoCartao'
 import { destinosAFrente, FILTROS_VAZIOS, filtrarNaTela, gravarFiltros, lerFiltros, ordenarColunas, validarDestino } from './regras'
@@ -67,6 +68,12 @@ export function TelaQuadro() {
   }
   const sufixo = busca.toString()
   return <Navigate to={`${padrao}${sufixo ? `?${sufixo}` : ''}`} replace />
+}
+
+function casoDoFiltro(caso: string, cartoes: Cartao[]): VinculoDoCaso | undefined {
+  if (!caso) return undefined
+  const deUm = cartoes.find((c) => c.case_id === caso)
+  return deUm ? vinculoDoCartao(deUm) : { ...SEM_CASO, case_id: caso }
 }
 
 function chaveRecolhidas(quadroId: string) {
@@ -287,6 +294,7 @@ function QuadroDoProduto({ quadroId }: { quadroId: string }) {
             {t('quadro.wip_fluxo')} <EditorWip alvo={{ tipo: 'fluxo', quadroId }} celula={v.wip.flow} podeEditar={podePoliticas} />
           </span>
         )}
+        <SeloDoCaso filtros={filtros} cartoes={cartoes} />
         {!(formato === 'bar' && barraAberta) && (
           <SeloFiltrado filtros={filtros} total={cartoes.length} segmentado={segmentado} limpar={limparTudo} />
         )}
@@ -369,6 +377,8 @@ function QuadroDoProduto({ quadroId }: { quadroId: string }) {
           quadroId={quadroId}
           coluna={novo.coluna}
           classe={novo.classe}
+          // Quadro filtrado por caso ("Tarefas deste caso"): o cartao novo ja nasce dele.
+          caso={casoDoFiltro(filtros.caso, cartoes)}
           fechar={() => setNovo(null)}
           criado={(cartao) => {
             setNovo(null)

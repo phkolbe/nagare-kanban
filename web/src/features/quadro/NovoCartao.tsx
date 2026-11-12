@@ -1,6 +1,9 @@
-/** Novo cartao numa coluna: titulo, projeto e classe; o resto se edita no cartao. */
+/**
+ * Novo cartao numa coluna: titulo, projeto, tipo (lista do produto, PPLAT-312), caso do SR Adv
+ * (PPLAT-310) e classe; o resto se edita no cartao.
+ */
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { Aviso } from '@pampufa/ui'
 
@@ -11,20 +14,25 @@ import { CaixaDeLista } from '../../componentes/CaixaDeLista'
 import { Janela } from '../../componentes/Sobreposicao'
 import { Obrigatorio, conferirObrigatorios } from '../../componentes/Obrigatorio'
 import { mensagemDeErro, useT } from '../../i18n'
+import { SEM_CASO, vinculoDoCaso, type VinculoDoCaso } from '../cartao/casos'
+import { SeletorDeCaso, useCaso } from '../cartao/SeletorDeCaso'
+import { opcoesDeTipo, tipoInicial } from '../cartao/tiposDeCartao'
 import { FormProjeto } from '../projetos/FormProjeto'
 import { itensDeProjetos, podeCriarProjeto } from '../projetos/listas'
-import { useProjetos, useRecarregarQuadro, useVinculo } from './consultas'
+import { useProjetos, useRecarregarQuadro, useTiposDeCartao, useVinculo } from './consultas'
 
 export function NovoCartao({
   quadroId,
   coluna,
   classe,
+  caso: casoInicial,
   fechar,
   criado,
 }: {
   quadroId: string
   coluna: Coluna
   classe?: ClasseServico
+  caso?: VinculoDoCaso
   fechar: () => void
   criado: (cartao: Cartao) => void
 }) {
@@ -38,6 +46,16 @@ export function NovoCartao({
   // "+" ao lado da lista (09/11/2026): null fechado; texto, aberto com a sugestao de nome.
   const [novoProjeto, setNovoProjeto] = useState<string | null>(null)
   const [classeEscolhida, setClasse] = useState<ClasseServico>(classe ?? 'standard')
+  const tipos = useTiposDeCartao()
+  // Vazio ate a pessoa escolher: vale o primeiro da lista do produto.
+  const [tipo, setTipo] = useState('')
+  const [caso, setCaso] = useState<VinculoDoCaso>(casoInicial ?? SEM_CASO)
+  const tipoMostrado = tipo || tipoInicial(tipos.data?.items)
+  // Quadro filtrado por um caso que ainda nao tem cartao: o nome e o cliente vem do SR Adv.
+  const doFiltro = useCaso(caso.case_id, Boolean(caso.case_id && !caso.case_label))
+  useEffect(() => {
+    if (doFiltro.data) setCaso((atual) => (atual.case_id === doFiltro.data.id && !atual.case_label ? vinculoDoCaso(doFiltro.data) : atual))
+  }, [doFiltro.data])
   const criar = useMutation({
     mutationFn: () =>
       nagare<Cartao>(produto, '/cards', {
@@ -48,6 +66,9 @@ export function NovoCartao({
           title: titulo.trim(),
           project_id: projeto || null,
           service_class: classeEscolhida,
+          // Sem a lista ainda: o servidor poe o primeiro tipo do produto.
+          value_area: tipos.data ? tipoMostrado : undefined,
+          ...(caso.case_id ? caso : {}),
         },
       }),
     onSuccess: (cartao) => {
@@ -97,6 +118,17 @@ export function NovoCartao({
             rotuloIncluir={t('projetos.novo')}
           />
         )}
+        <label className="campo">
+          <span>{t('cartao.campo.area')}</span>
+          <select value={tipoMostrado} onChange={(e) => setTipo(e.target.value)}>
+            {opcoesDeTipo(tipos.data?.items, null, t).map((o) => (
+              <option key={o.valor} value={o.valor}>
+                {o.texto}
+              </option>
+            ))}
+          </select>
+        </label>
+        <SeletorDeCaso valor={caso} aoMudar={setCaso} />
         {eu?.flags.service_classes !== false && (
           <label className="campo">
             <span>{t('cartao.campo.classe')}</span>

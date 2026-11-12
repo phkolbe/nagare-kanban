@@ -7,11 +7,9 @@ import { Aviso } from '@pampufa/ui'
 import { useNagare } from '../../app/contexto'
 import { chaves, nagare } from '../../api/nagare'
 import {
-  AREAS_VALOR,
   CLASSES,
   TAMANHOS,
   TIPOS_DEMANDA,
-  type AreaValor,
   type Cartao,
   type ClasseServico,
   type ProjetoDetalhe,
@@ -22,7 +20,8 @@ import { CaixaDeLista } from '../../componentes/CaixaDeLista'
 import { Janela } from '../../componentes/Sobreposicao'
 import { Obrigatorio, conferirObrigatorios } from '../../componentes/Obrigatorio'
 import { mensagemDeErro, useT } from '../../i18n'
-import { useQuadros } from '../quadro/consultas'
+import { opcoesDeTipo, tipoInicial } from '../cartao/tiposDeCartao'
+import { useQuadros, useTiposDeCartao } from '../quadro/consultas'
 import { itensDeQuadros } from './listas'
 
 export function NovaDemanda({ projeto, fechar }: { projeto: ProjetoDetalhe; fechar: () => void }) {
@@ -30,13 +29,15 @@ export function NovaDemanda({ projeto, fechar }: { projeto: ProjetoDetalhe; fech
   const produto = useNagare().produto
   const queryClient = useQueryClient()
   const quadros = useQuadros()
+  const tipos = useTiposDeCartao()
   const [f, setF] = useState({
     titulo: '',
     descricao: '',
     solicitante: '',
     classe: 'standard' as ClasseServico,
     tipo: 'value' as TipoDemanda,
-    area: 'feature' as AreaValor,
+    // Vazio ate a pessoa escolher: vale o primeiro tipo do produto (PPLAT-312).
+    area: '',
     tamanho: '' as Tamanho | '',
     prazo: '',
     etiquetas: '',
@@ -53,7 +54,7 @@ export function NovaDemanda({ projeto, fechar }: { projeto: ProjetoDetalhe; fech
           requester: f.solicitante.trim() || null,
           service_class: f.classe,
           demand_type: f.tipo,
-          value_area: f.area,
+          value_area: f.area || (tipos.data ? tipoInicial(tipos.data.items) : undefined),
           size: f.tamanho || null,
           due_date: f.prazo || null,
           tags: f.etiquetas.split(',').map((x) => x.trim()).filter(Boolean),
@@ -140,10 +141,10 @@ export function NovaDemanda({ projeto, fechar }: { projeto: ProjetoDetalhe; fech
           </label>
           <label className="campo">
             <span>{t('cartao.campo.area')}</span>
-            <select value={f.area} onChange={(e) => muda('area', e.target.value as AreaValor)}>
-              {AREAS_VALOR.map((x) => (
-                <option key={x} value={x}>
-                  {t(`area.${x}`)}
+            <select value={f.area || tipoInicial(tipos.data?.items)} onChange={(e) => muda('area', e.target.value)}>
+              {opcoesDeTipo(tipos.data?.items, null, t).map((o) => (
+                <option key={o.valor} value={o.valor}>
+                  {o.texto}
                 </option>
               ))}
             </select>

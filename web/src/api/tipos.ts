@@ -5,7 +5,8 @@ export type SegmentoVisao = Segmento | 'unified'
 export type TipoColuna = 'envelope' | 'queue' | 'activity' | 'done'
 export type ClasseServico = 'expedite' | 'standard' | 'fixed_date' | 'intangible'
 export type TipoDemanda = 'value' | 'failure' | 'maintenance'
-export type AreaValor = 'feature' | 'defect' | 'risk' | 'debt' | 'compliance'
+/** O tipo do cartao: uma chave da lista do produto (`/card-types`, PPLAT-312). */
+export type AreaValor = string
 export type Tamanho = 'xs' | 's' | 'm' | 'l' | 'xl'
 export type EstadoWip = 'under' | 'ok' | 'at_limit' | 'over'
 export type CategoriaBloqueio =
@@ -22,6 +23,7 @@ export type Idioma = 'pt-BR' | 'en'
 
 export const CLASSES: ClasseServico[] = ['expedite', 'fixed_date', 'standard', 'intangible']
 export const TIPOS_DEMANDA: TipoDemanda[] = ['value', 'failure', 'maintenance']
+/** A lista padrao (de software), com o rotulo das telas (`area.<chave>`). */
 export const AREAS_VALOR: AreaValor[] = ['feature', 'defect', 'risk', 'debt', 'compliance']
 export const TAMANHOS: Tamanho[] = ['xs', 's', 'm', 'l', 'xl']
 export const TIPOS_COLUNA: TipoColuna[] = ['envelope', 'queue', 'activity', 'done']
@@ -150,6 +152,12 @@ export interface Cartao {
   committed_at: string | null
   delivered_at: string | null
   archived: boolean
+  /** PPLAT-310: o caso do SR Adv e o cliente dele. */
+  case_id?: string | null
+  case_label?: string | null
+  case_url?: string | null
+  client_id?: string | null
+  client_name?: string | null
   project_key: string | null
   project_color: string | null
   assignee_name: string | null
@@ -389,4 +397,37 @@ export interface LeituraPessoas {
 
 export interface ConsolidadoMetricas {
   products: { product_id: string; delivered: number; on_time: number; late: number; wip: number; minutes: number; from: string; to: string }[]
+}
+
+/** Um tipo de cartao do produto (PPLAT-312). `name` vazio: o rotulo das telas (`area.<chave>`). */
+export interface TipoDeCartao {
+  key: string
+  name: string | null
+  position: number
+  archived: boolean
+  /** Ainda a lista padrao do Nagare (o produto nao tem lista propria). */
+  builtin: boolean
+}
+
+export interface TiposDeCartao {
+  product_id: string
+  items: TipoDeCartao[]
+  can_edit: boolean
+}
+
+/** Um caso do SR Adv como `GET /api/v1/p/<produto>/sr-adv/casos` devolve (so o que o Nagare usa). */
+export interface CasoDoSrAdv {
+  id: string
+  codigo: string | null
+  titulo: string | null
+  rotulo: string
+  cliente_id: string
+  cliente_nome: string
+  numero_processo: string | null
+  situacao: string
+}
+
+export interface ListaDeCasos {
+  itens: CasoDoSrAdv[]
+  proximo: number | null
 }

@@ -10,6 +10,7 @@ import type {
   Quadro,
   ResultadoMovimento,
   SegmentoVisao,
+  TiposDeCartao,
   Vinculo,
   VisaoQuadro,
 } from '../../api/tipos'
@@ -74,6 +75,16 @@ export function useProjetos() {
     queryKey: chaves.projetos(produto),
     queryFn: () => nagare<Lista<Projeto>>(produto, '/projects'),
     staleTime: 30_000,
+  })
+}
+
+/** Os tipos de cartao do produto (PPLAT-312), arquivados inclusive. */
+export function useTiposDeCartao() {
+  const produto = useNagare().produto
+  return useQuery({
+    queryKey: chaves.tipos(produto),
+    queryFn: () => nagare<TiposDeCartao>(produto, '/card-types'),
+    staleTime: 60_000,
   })
 }
 

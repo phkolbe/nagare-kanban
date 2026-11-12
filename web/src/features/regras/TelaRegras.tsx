@@ -1,7 +1,8 @@
 /**
  * Regras de tarefa (NG9): para cada tipo de providencia, quem recebe o cartao, em quantos dias
  * vence e com que classe de servico. Moram no pampufa (dono da ponte), com historico; a mais
- * especifica vence e a curinga (`*`/`*`) e o responsavel padrao do produto.
+ * especifica vence e a curinga (`*`/`*`) e o responsavel padrao do produto. Embaixo, os tipos de
+ * cartao do produto (PPLAT-312), que sao do Nagare.
  */
 
 import { useState } from 'react'
@@ -16,6 +17,7 @@ import { Janela } from '../../componentes/Sobreposicao'
 import { Obrigatorio, conferirObrigatorios } from '../../componentes/Obrigatorio'
 import { mensagemDeErro, useT, type Chave } from '../../i18n'
 import { itensDePessoas } from '../projetos/listas'
+import { TiposDeCartao } from './TiposDeCartao'
 
 /** Servicos que abrem providencias (prefixo do evento `<servico>.providencia.aberta`). */
 const SERVICOS = ['*', 'financeiro', 'sradv', 'batoom'] as const
@@ -102,6 +104,8 @@ export function TelaRegras() {
           </div>
         </section>
       )}
+      {/* PPLAT-312: a lista de tipos de cartao do produto mora aqui, com as regras de tarefa. */}
+      <TiposDeCartao />
       {editando && regras.data && (
         <FormRegra regra={editando === 'nova' ? null : editando} pessoas={regras.data.pessoas} fechar={() => setEditando(null)} />
       )}

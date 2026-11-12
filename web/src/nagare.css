@@ -1301,3 +1301,40 @@ a.ng-indicador.clicavel:focus-visible {
   outline: 2px solid var(--navy);
   outline-offset: 2px;
 }
+
+/* R5-D (12/11/2026): o caso do SR Adv no cartao e no filtro do quadro, e os tipos do produto. */
+.ng-caso {
+  margin: 6px 0 10px;
+}
+.ng-selo-caso {
+  border-color: color-mix(in srgb, var(--ng-standard) 55%, var(--line));
+  background: color-mix(in srgb, var(--ng-standard) 10%, var(--card));
+}
+.ng-selo-caso .link + .link {
+  margin-left: 4px;
+}
+.ng-lista-tipos {
+  margin: 10px 0;
+  padding-left: 22px;
+}
+.ng-lista-tipos > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+.ng-lista-tipos > li.arquivado > span:first-child {
+  color: var(--muted);
+}
+.ng-lista-tipos .ng-acoes-tipo {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.ng-lista-tipos > li > form {
+  flex: 1;
+}

@@ -11,7 +11,6 @@ import { chaves } from '../../api/nagare'
 import { CaixaDeLista } from '../../componentes/CaixaDeLista'
 import { Obrigatorio } from '../../componentes/Obrigatorio'
 import {
-  AREAS_VALOR,
   CLASSES,
   TAMANHOS,
   TIPOS_DEMANDA,
@@ -21,8 +20,11 @@ import {
 import { useT, type Chave } from '../../i18n'
 import { FormProjeto } from '../projetos/FormProjeto'
 import { itensDePessoas, itensDeProjetos, podeCriarProjeto } from '../projetos/listas'
-import { usePessoas, useProjetos, useVinculo } from '../quadro/consultas'
+import { usePessoas, useProjetos, useTiposDeCartao, useVinculo } from '../quadro/consultas'
 import { useAcaoNoCartao } from './acoes'
+import { vinculoDoCartao } from './casos'
+import { LinkDoCaso, SeletorDeCaso } from './SeletorDeCaso'
+import { opcoesDeTipo } from './tiposDeCartao'
 
 type Campos = Partial<
   Pick<
@@ -39,6 +41,10 @@ type Campos = Partial<
     | 'due_date'
     | 'tags'
     | 'custom_fields'
+    | 'case_id'
+    | 'case_label'
+    | 'client_id'
+    | 'client_name'
   >
 >
 
@@ -49,6 +55,8 @@ export function AbaDetalhes({ cartao, quadro, editavel }: { cartao: CartaoDetalh
   const projetos = useProjetos()
   const pessoas = usePessoas()
   const vinculo = useVinculo()
+  const tipos = useTiposDeCartao()
+  const caso = vinculoDoCartao(cartao)
   // "+" ao lado da lista de projetos (09/11/2026): null fechado; texto, aberto com a sugestao.
   const [novoProjeto, setNovoProjeto] = useState<string | null>(null)
   const acao = useAcaoNoCartao<CartaoDetalhe>(cartao)
@@ -137,8 +145,8 @@ export function AbaDetalhes({ cartao, quadro, editavel }: { cartao: CartaoDetalh
           rotulo="cartao.campo.area"
           valor={cartao.value_area}
           editavel={editavel}
-          opcoes={AREAS_VALOR.map((x) => ({ valor: x, texto: t(`area.${x}`) }))}
-          gravar={(v) => gravar({ value_area: v as CartaoDetalhe['value_area'] })}
+          opcoes={opcoesDeTipo(tipos.data?.items, cartao.value_area, t)}
+          gravar={(v) => gravar({ value_area: v })}
         />
         <CampoLista
           rotulo="cartao.campo.tamanho"
@@ -148,6 +156,11 @@ export function AbaDetalhes({ cartao, quadro, editavel }: { cartao: CartaoDetalh
           gravar={(v) => gravar({ size: (v || null) as CartaoDetalhe['size'] })}
         />
       </div>
+      {/* PPLAT-310: o caso do SR Adv (o cliente vem dele) e o link para a pagina do caso. */}
+      {editavel ? (
+        <SeletorDeCaso valor={caso} aoMudar={(novo) => gravar(novo)} />
+      ) : null}
+      <LinkDoCaso vinculo={caso} url={cartao.case_url} />
       <CampoTexto
         rotulo="cartao.campo.solicitante"
         valor={cartao.requester ?? ''}
