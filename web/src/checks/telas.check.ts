@@ -416,6 +416,9 @@ confere('periodo padrao: do dia 1 a hoje', periodoPadrao(new Date(2026, 10, 6)),
     'Caso 07 · Revisional · Maria Silva',
     'Caso 07 · Laudêmio',
   ])
+  // Como o SR Adv manda de verdade: o rotulo ja traz o codigo.
+  confere('rotulo do caso sem repetir o codigo', rotuloDoCaso({ ...caso, rotulo: 'Caso 07 · Revisional · Maria Silva' }),
+    'Caso 07 · Revisional · Maria Silva')
   confere('o cliente vem do caso', vinculoDoCaso(caso), {
     case_id: 'c1',
     case_label: 'Caso 07 · Revisional · Maria Silva',

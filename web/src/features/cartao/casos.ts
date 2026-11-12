@@ -19,7 +19,9 @@ export const SEM_CASO: VinculoDoCaso = { case_id: null, case_label: null, client
 /** "Caso 07 · Revisional · Maria Silva": o codigo e o titulo da pasta (ou o rotulo do SR Adv). */
 export function rotuloDoCaso(caso: Pick<CasoDoSrAdv, 'codigo' | 'titulo' | 'rotulo'>): string {
   const nome = caso.titulo?.trim() || caso.rotulo
-  return caso.codigo ? `${caso.codigo} · ${nome}` : nome
+  // O rotulo do SR Adv ja comeca pelo codigo ("Caso 04 · Benefício…"): nao repetir.
+  if (!caso.codigo || nome.toLowerCase().startsWith(caso.codigo.toLowerCase())) return nome
+  return `${caso.codigo} · ${nome}`
 }
 
 export function vinculoDoCaso(caso: CasoDoSrAdv): VinculoDoCaso {
