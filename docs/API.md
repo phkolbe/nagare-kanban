@@ -438,6 +438,7 @@ Business with every flag on.
 | `POST /boards/{id}/clone` | `{name, kind (default simulator), copy_cards}` | as `POST /boards` | `simulator` for `kind=simulator` |
 | `GET /boards/{id}/view` | `?segment=upstream\|downstream\|unified` + `project_id, service_class, assignee_id, column_id, tag, q, is_blocked, demand_type, value_area, size, due_before, envelope_state, case_id, archived` | any | `unified_flow` for `segment=unified` |
 | `GET /boards/{id}/wip` | — | any | — |
+| `GET /boards/{id}/version` | — | any | — |
 | `POST /boards/{id}/columns` | `{name, segment, kind, position?, wip_min?, wip_max?, group_id?, color?, description?}` | structure role | — |
 | `PATCH /columns/{id}` | any subset | structure role | — |
 | `DELETE /columns/{id}` | — | structure role | — |
@@ -463,6 +464,12 @@ total_cards, generated_at}`. `GET /boards/{id}/wip`:
  "groups": {"05203746-...": {"count": 20, "min": 6, "max": 24, "state": "ok"}},
  "flow": {"count": 35, "min": 10, "max": 45, "state": "ok", "label": "Whole flow"}}
 ```
+
+`GET /boards/{id}/version` returns `{version, checked_at}`: a fingerprint of everything the board
+screens show (board, groups, columns, every card row, archived ones too, and the counts of events,
+movements, comments, tasks, blockers and hours). The screens poll it every ~10 s while the tab is
+visible and reload `/view` and the open card only when `version` changes (23/11/2026), so a move
+made by someone else, another tab or an integration shows up without a page reload.
 
 **Templates** (`GET /boards/templates`, the `template` of `POST /boards`):
 `upstream_downstream` (12 columns, the seeded shape; aliases `default`, `full`,

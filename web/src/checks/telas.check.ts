@@ -43,6 +43,7 @@ import { itensDeCasos, rotuloDoCaso, SEM_CASO, termoDaBusca, vinculoDoCartao, vi
 import { moverTipo, opcoesDeTipo, rotuloDoTipo, tipoInicial } from '../features/cartao/tiposDeCartao'
 import type { CasoDoSrAdv, TipoDeCartao } from '../api/tipos'
 import { chaveDoErro, interpolar, traducao } from '../i18n/texto'
+import { deveRecarregar, marcarArrasto, quandoPuder, segundosDesde } from '../features/quadro/atualizacao'
 
 let falhas = 0
 let total = 0
@@ -442,6 +443,26 @@ confere('periodo padrao: do dia 1 a hoje', periodoPadrao(new Date(2026, 10, 6)),
   confere('o servidor filtra pelo caso', parametrosDaVisao(porCaso).case_id, 'c1')
   confere('o caso conta como filtro', contarFiltros(porCaso), 1)
   confere('o caso volta para a URL', gravarFiltros(new URLSearchParams(), { ...FILTROS_VAZIOS, caso: 'c1' }).toString(), 'caso=c1')
+}
+
+// Atualizacao automatica do quadro (23/11/2026).
+confere('a primeira versao so guarda', deveRecarregar(null, 'v1'), false)
+confere('versao igual nao recarrega', deveRecarregar('v1', 'v1'), false)
+confere('versao nova recarrega', deveRecarregar('v1', 'v2'), true)
+confere('sem resposta nao recarrega', deveRecarregar('v1', undefined), false)
+confere('segundos em passos de 5', [segundosDesde(0, 3_999), segundosDesde(0, 5_000), segundosDesde(0, 14_000), segundosDesde(0, 61_000), segundosDesde(10_000, 0)], [0, 5, 10, 60, 0])
+{
+  const vezes: string[] = []
+  quandoPuder(() => vezes.push('livre'))
+  confere('sem arrasto, recarrega na hora', vezes, ['livre'])
+  marcarArrasto(true)
+  quandoPuder(() => vezes.push('primeira'))
+  quandoPuder(() => vezes.push('segunda'))
+  confere('durante o arrasto, espera', vezes, ['livre'])
+  marcarArrasto(false)
+  confere('ao soltar, recarrega uma vez (a ultima pedida)', vezes, ['livre', 'segunda'])
+  marcarArrasto(false)
+  confere('soltar de novo nao repete', vezes, ['livre', 'segunda'])
 }
 
 if (falhas > 0) throw new Error(`${falhas} de ${total} verificacoes falharam.`)

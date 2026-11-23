@@ -1063,6 +1063,12 @@ button.ng-pilula {
   border-color: color-mix(in srgb, var(--amber) 55%, var(--line));
   background: color-mix(in srgb, var(--amber) 10%, var(--card));
 }
+/* Atualizacao automatica (23/11/2026): quando o quadro conferiu pela ultima vez. */
+.ng-selo-atualizado {
+  color: var(--muted);
+  white-space: nowrap;
+  align-self: center;
+}
 .ng-barra-ferramentas {
   margin-bottom: 10px;
 }

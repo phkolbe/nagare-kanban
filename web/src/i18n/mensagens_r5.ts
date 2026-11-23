@@ -39,6 +39,12 @@ export const ptR5 = {
   'caso.filtro_sem_nome': 'Tarefas deste caso',
   'caso.ver_todas': 'ver todas as tarefas',
   'erro.case_link_unavailable': 'Só um cartão de um produto da Pampufa se liga a um caso do SR Adv.',
+
+  // ------------------------------------------------------------------ atualizacao automatica (23/11/2026)
+  'atualizacao.agora': 'Atualizado agora',
+  'atualizacao.ha': 'Atualizado há {segundos} s',
+  'atualizacao.dica':
+    'O quadro confere sozinho a cada 10 segundos se algo mudou (outra pessoa, outra aba ou uma integração) e se atualiza sem recarregar a página.',
 } as const
 
 export type ChaveR5 = keyof typeof ptR5
@@ -76,4 +82,9 @@ export const enR5: Record<ChaveR5, string> = {
   'caso.filtro_sem_nome': 'Tasks of this case',
   'caso.ver_todas': 'see every task',
   'erro.case_link_unavailable': 'Only a card of a Pampufa product links to an SR Adv case.',
+
+  'atualizacao.agora': 'Updated just now',
+  'atualizacao.ha': 'Updated {segundos}s ago',
+  'atualizacao.dica':
+    'The board checks by itself every 10 seconds whether anything changed (another person, another tab or an integration) and updates without reloading the page.',
 }

@@ -25,6 +25,8 @@ produce a flow dashboard that disagrees with itself.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from collections.abc import Sequence
 from typing import Any
@@ -58,7 +60,9 @@ from ..models import (
     CardMovement,
     CardTask,
     ColumnGroup,
+    Comment,
     Project,
+    TimeEntry,
     User,
     as_dict,
 )
@@ -67,6 +71,7 @@ from ..schemas import (
     BoardCreate,
     BoardOut,
     BoardUpdate,
+    BoardVersionOut,
     BoardViewOut,
     ColumnCreate,
     ColumnOut,
@@ -1845,6 +1850,70 @@ async def board_wip(
     """Counts against min/max with a ``under|ok|at_limit|over`` state each."""
     board = await get_board_or_404(s, id)
     return await board_wip_status(s, board)
+
+
+async def board_version(s: AsyncSession, board: dict[str, Any]) -> str:
+    """A fingerprint of everything the board screens show (23/11/2026).
+
+    Not every change writes a ``card_events`` row (deleting a task, editing or deleting a
+    comment, hours), so the fingerprint takes the board, its groups and columns, every card
+    row (archived ones too) and per-board aggregates of events, movements, comments, tasks,
+    blockers and hours. Any change to one of them changes the version; equal versions mean
+    the screen is current.
+    """
+    board_id = board["id"]
+    of_board = select(Card.id).where(Card.board_id == board_id)
+    parts: list[Any] = [
+        {k: v for k, v in board.items() if k not in ("card_count",)},
+        [
+            as_dict(g)
+            for g in await s.scalars(select(ColumnGroup).where(ColumnGroup.board_id == board_id))
+        ],
+        [
+            as_dict(c)
+            for c in await s.scalars(select(BoardColumn).where(BoardColumn.board_id == board_id))
+        ],
+        [as_dict(c) for c in await s.scalars(select(Card).where(Card.board_id == board_id))],
+    ]
+    aggregates = [
+        select(func.count(), func.max(CardEvent.created_at)).where(CardEvent.board_id == board_id),
+        select(func.count(), func.max(CardMovement.moved_at)).where(
+            CardMovement.board_id == board_id
+        ),
+        select(
+            func.count(), func.max(Comment.created_at), func.sum(func.length(Comment.body))
+        ).where(Comment.card_id.in_(of_board)),
+        select(
+            func.count(),
+            func.sum(case((CardTask.is_done.is_(True), 1), else_=0)),
+            func.sum(func.length(CardTask.title)),
+            func.sum(CardTask.position),
+        ).where(CardTask.card_id.in_(of_board)),
+        select(func.count(), func.sum(case((Blocker.ended_at.is_(None), 1), else_=0))).where(
+            Blocker.card_id.in_(of_board)
+        ),
+        select(func.count(), func.sum(TimeEntry.minutes)).where(TimeEntry.card_id.in_(of_board)),
+    ]
+    for query in aggregates:
+        parts.append(list((await s.execute(query)).one()))
+    raw = json.dumps(parts, sort_keys=True, default=str, separators=(",", ":"))
+    return hashlib.sha256(raw.encode()).hexdigest()[:24]
+
+
+@router.get(
+    "/boards/{id}/version",
+    response_model=BoardVersionOut,
+    summary="Fingerprint of the board, to reload only when something changed",
+)
+async def get_board_version(
+    id: str,
+    s: AsyncSession = Depends(get_session),
+    user: CurrentUser = Depends(require_capability("read_boards_metrics")),
+) -> dict[str, Any]:
+    """The screens poll this every few seconds (cheap: no WIP, no card decoration) and
+    reload ``/view`` and the open card only when ``version`` changes."""
+    board = await get_board_or_404(s, id)
+    return {"version": await board_version(s, board), "checked_at": utcnow()}
 
 
 # ---------------------------------------------------------------------------

@@ -5,7 +5,7 @@
  * minimapa, setas e arrasto do fundo fica em `Navegacao.tsx` (18/10/2026).
  */
 
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   DndContext,
   DragOverlay,
@@ -22,6 +22,7 @@ import { hojeISO } from '@pampufa/ui'
 
 import { CLASSES, type Cartao, type ClasseServico, type Coluna, type Quadro, type VisaoQuadro } from '../../api/tipos'
 import { useT } from '../../i18n'
+import { marcarArrasto } from './atualizacao'
 import { CartaoMini } from './CartaoMini'
 import { EditorWip, SeloWip } from './EditorWip'
 import { MiniMapa, SetasDaGrade, useGradeNaTela, usePanoramica } from './Navegacao'
@@ -97,7 +98,12 @@ export function Grade({
   const contagem = useMemo(() => new Map([...porColuna].map(([id, lista]) => [id, lista.length])), [porColuna])
   useGradeNaTela(rolagem, `${unificado}-${raias}-${visao.groups.length}`)
 
-  const inicio = (e: DragStartEvent) => setArrastado((e.active.data.current?.cartao as Cartao) ?? null)
+  // Atualizacao automatica (23/11/2026): a recarga que chega durante o arrasto espera soltar.
+  useEffect(() => () => marcarArrasto(false), [])
+  const inicio = (e: DragStartEvent) => {
+    marcarArrasto(true)
+    setArrastado((e.active.data.current?.cartao as Cartao) ?? null)
+  }
   const passar = (e: DragOverEvent) => setSobre((e.over?.data.current?.colunaId as string) ?? null)
   const soltar = (e: DragEndEvent) => {
     const cartao = e.active.data.current?.cartao as Cartao | undefined
@@ -107,6 +113,7 @@ export function Grade({
     acabouDeArrastar.current = true
     window.setTimeout(() => (acabouDeArrastar.current = false), 0)
     if (cartao && colunaId && colunaId !== cartao.column_id) acoes.mover(cartao, colunaId)
+    marcarArrasto(false)
   }
   const abrir = (cartao: Cartao) => {
     if (!acabouDeArrastar.current) acoes.abrirCartao(cartao)
@@ -122,6 +129,7 @@ export function Grade({
       onDragCancel={() => {
         setArrastado(null)
         setSobre(null)
+        marcarArrasto(false)
       }}
     >
       <MiniMapa alvo={rolagem} colunas={colunas} contagem={contagem} recolhidas={recolhidas} />

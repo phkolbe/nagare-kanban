@@ -28,6 +28,7 @@ import { EditorWip } from './EditorWip'
 import { BotaoDeFiltros, BuscaDeCartoes, SeloDoCaso, SeloFiltrado } from './Filtros'
 import { Grade } from './Grade'
 import { NovoCartao } from './NovoCartao'
+import { SeloAtualizado } from './SeloAtualizado'
 import { destinosAFrente, FILTROS_VAZIOS, filtrarNaTela, gravarFiltros, lerFiltros, ordenarColunas, validarDestino } from './regras'
 import { useFormatoFerramentas, useLigadoNoNavegador, useTeclasDaVisualizacao, useTelaCheia } from './visualizacao'
 
@@ -299,6 +300,7 @@ function QuadroDoProduto({ quadroId }: { quadroId: string }) {
           <SeloFiltrado filtros={filtros} total={cartoes.length} segmentado={segmentado} limpar={limparTudo} />
         )}
         <span className="ng-espaco" />
+        <SeloAtualizado quadroId={quadroId} />
         <PainelFlutuante aberto={formato === 'panel' && painelAberto} fechar={() => setPainelAberto(false)} conteudo={ferramentas}>
           <button
             type="button"

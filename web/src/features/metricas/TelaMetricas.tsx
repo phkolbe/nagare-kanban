@@ -31,6 +31,7 @@ import { ms } from '../../graficos/escalas'
 import { useT, type Chave } from '../../i18n'
 import { itensDoTrocadorDeQuadro } from '../projetos/listas'
 import { useProjetos, useQuadro, useQuadros, useVinculo } from '../quadro/consultas'
+import { SeloAtualizado } from '../quadro/SeloAtualizado'
 import { PainelPessoas } from './PainelPessoas'
 import {
   flagDoPainel,
@@ -124,6 +125,7 @@ function MetricasDoQuadro({ quadroId }: { quadroId: string }) {
         titulo={q.name}
         acoes={
           <>
+            <SeloAtualizado quadroId={quadroId} />
             <CaixaDeLista
               compacto
               rotulo={t('quadro.trocar')}

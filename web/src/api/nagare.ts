@@ -38,6 +38,11 @@ export const chaves = {
   visao: (produto: string, id: string, filtros: string) => ['nagare', produto, 'visao', id, filtros] as const,
   visoes: (produto: string, id: string) => ['nagare', produto, 'visao', id] as const,
   cartao: (produto: string, id: string) => ['nagare', produto, 'cartao', id] as const,
+  /** Todos os cartoes abertos (detalhe, historico, horas): recarregados quando o quadro muda. */
+  cartoes: (produto: string) => ['nagare', produto, 'cartao'] as const,
+  /** A versao do quadro, conferida a cada ~10 s (atualizacao automatica, 23/11/2026). */
+  versao: (produto: string, id: string) => ['nagare', produto, 'versao', id] as const,
+  metricas: (produto: string, id: string) => ['nagare', produto, 'metricas', id] as const,
   historico: (produto: string, id: string) => ['nagare', produto, 'cartao', id, 'historico'] as const,
   projetos: (produto: string) => ['nagare', produto, 'projetos'] as const,
   projeto: (produto: string, id: string) => ['nagare', produto, 'projeto', id] as const,

@@ -813,6 +813,17 @@ class BoardViewOut(Schema):
     generated_at: str | None = None
 
 
+class BoardVersionOut(Schema):
+    """``GET /boards/{id}/version`` — a fingerprint of everything the board screens show.
+
+    The screens poll it every few seconds and reload the board (and the open card) only
+    when it changes, so a move made elsewhere shows up without a page reload.
+    """
+
+    version: str
+    checked_at: str
+
+
 # ---------------------------------------------------------------------------
 # projects & demands
 # ---------------------------------------------------------------------------
