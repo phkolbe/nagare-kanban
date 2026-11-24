@@ -25,7 +25,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import event, func, select
+from sqlalchemy import event, func, select, text
 from sqlalchemy.ext import asyncio as sa_asyncio
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import ORMExecuteState, Session
@@ -50,6 +50,7 @@ def _always_fresh(state: ORMExecuteState) -> None:
 __all__ = [
     "Database",
     "add_days",
+    "advisory_lock",
     "create_engine",
     "is_seeded",
     "iso",
@@ -63,6 +64,20 @@ __all__ = [
 ]
 
 MIGRATIONS_DIR: Path = BASE_DIR / "backend" / "migrations"
+
+
+async def advisory_lock(s: AsyncSession, *parts: object) -> None:
+    """Serialise, until the transaction ends, every request that names the same ``parts``.
+
+    For the read-then-insert spots that have to be idempotent or unique (the next card
+    key, the first providência of a product, a retried providência): the second request
+    waits for the first to commit and then reads what it wrote. PostgreSQL only; SQLite
+    has a single writer, and a collision that still slips through is a 409, not a 500.
+    """
+    if s.get_bind().dialect.name != "postgresql":
+        return
+    key = ":".join(str(part) for part in parts)
+    await s.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"), {"key": key})
 
 
 # ---------------------------------------------------------------------------

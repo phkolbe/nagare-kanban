@@ -32,7 +32,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..db import new_id, utcnow
+from ..db import advisory_lock, new_id, utcnow
 from ..deps import CurrentUser, get_current_user, get_session, require_capability, require_roles
 from ..errors import NotFound
 from ..integration import (
@@ -396,6 +396,8 @@ async def upsert_external_project(
     from ..tenancy import product_for_new_rows
 
     product_id = product_for_new_rows()
+    # A retried PUT racing the first one waits for it, then updates what it created.
+    await advisory_lock(s, "external-project", product_id)
     project = await s.scalar(
         select(Project).where(
             Project.product_id == product_id,

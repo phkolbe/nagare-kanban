@@ -332,3 +332,35 @@ def test_an_open_demand_respects_the_wip_of_its_column(client, master, scratch) 
     opened = client.post(f"{API}/cards/{sealed.json()['id']}/open-envelope", headers=master)
     assert opened.status_code == 409, opened.text
     assert opened.json()["error"]["code"] == "wip_limit_exceeded"
+
+
+# ---------------------------------------------------------------------------
+# 4. Chave de cartão sem corrida
+# ---------------------------------------------------------------------------
+
+
+def parallel(calls: int, fn) -> list[Any]:
+    """``calls`` requests at once through the same TestClient (one event loop)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=calls) as pool:
+        return list(pool.map(lambda _: fn(), range(calls)))
+
+
+def on_postgres(client) -> bool:
+    return client.app.state.database.url.startswith("postgresql")
+
+
+def test_cards_created_at_once_never_share_a_key(client, master, scratch) -> None:
+    board = scratch["board"]()
+    project = scratch["project"]()
+    responses = parallel(
+        8, lambda: make_card(client, master, board["id"], project_id=project["id"])
+    )
+    statuses = [r.status_code for r in responses]
+    created = [r.json()["key"] for r in responses if r.status_code == 201]
+    assert len(created) == len(set(created)), created
+    if on_postgres(client):
+        assert statuses == [201] * 8, [r.text for r in responses]
+    else:  # one writer: a collision that slips through is a 409, never a 500
+        assert set(statuses) <= {201, 409}, [r.text for r in responses]

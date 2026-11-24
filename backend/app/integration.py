@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .card_types import PROVIDENCIA_TYPES, default_type
 from .cases import CASE_FIELDS, case_from_url, case_page_url
 from .config import SERVICE_CLASSES, settings
-from .db import add_days, new_id, utcnow
+from .db import add_days, advisory_lock, new_id, utcnow
 from .errors import BadRequest, Conflict, NotFound
 from .models import (
     PRODUCT_STANDALONE,
@@ -98,6 +98,9 @@ async def ensure_product_link(
     providência, or someone creating the board in Tarefas (SR GJ 4.3). Since 04/11/2026
     a new one is named "Tarefas", because it holds the team's tasks too; the ones that
     already exist keep their name."""
+    # Two first providências of a new product arrive together: one provisions, the
+    # other waits and reads the link.
+    await advisory_lock(s, "product-link", product_id)
     link = as_dict(await s.get(ProductLink, product_id))
     if link is not None:
         return link
@@ -488,6 +491,8 @@ async def card_for_providencia(
 ) -> tuple[dict[str, Any], bool]:
     """The card for one providência: ``(card, created)``. Repeating returns the same card."""
     providencia_id = str(payload["providencia_id"])
+    # A retry racing the first delivery waits for it and returns the same card.
+    await advisory_lock(s, "providencia", providencia_id)
     existing = await find_ref(s, providencia_id)
     if existing is not None:
         card = as_dict(await s.get(Card, existing["card_id"])) or {}

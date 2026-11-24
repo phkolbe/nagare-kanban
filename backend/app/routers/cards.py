@@ -84,6 +84,7 @@ from ..schemas import (
 )
 from ..sqltypes import day_of
 from ..tenancy import in_product, product_for_new_rows, project_key_for, same_product
+from .boards import next_card_key
 
 router = APIRouter(tags=["cards"])
 
@@ -404,25 +405,6 @@ def record_event(
         )
     )
     return event_id
-
-
-async def next_card_key(s: AsyncSession, prefix: str, product_id: str | None = None) -> str:
-    """Next ``PREFIX-nnn`` key, continuing the per-project counter.
-
-    The seed starts each project at 101, so a fresh project's first card is
-    ``KEY-101`` and an existing project continues from its highest number —
-    including numbers that were skipped or deleted, which keeps keys stable and
-    never reuses a retired reference. Keys are unique per product.
-    """
-    query = select(Card.key).where(Card.key.like(f"{prefix}-%"))
-    if product_id is not None:
-        query = query.where(Card.product_id == product_id)
-    highest = 100
-    for key in await s.scalars(query):
-        _, _, number = str(key).partition("-")
-        if number.isdigit():
-            highest = max(highest, int(number))
-    return f"{prefix}-{highest + 1}"
 
 
 async def _key_prefix(

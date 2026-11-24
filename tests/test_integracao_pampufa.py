@@ -1172,3 +1172,55 @@ def test_the_product_board_is_neither_archived_nor_deleted(client, auth, pampufa
         f"{API}/boards/{board_id}", json={"name": "Fluxo do SR Adv"}, headers=headers(admin)
     )
     assert renamed.status_code == 200, renamed.text
+
+
+def _parallel(calls: int, fn) -> list[Any]:
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=calls) as pool:
+        return list(pool.map(lambda _: fn(), range(calls)))
+
+
+def _postgres(client) -> bool:
+    return client.app.state.database.url.startswith("postgresql")
+
+
+def test_a_providencia_retried_at_once_makes_one_card(client, pampufa, db: Database) -> None:
+    service = pampufa.service()
+    body = providencia()
+    responses = _parallel(
+        6,
+        lambda: client.post(f"{API}/integration/providencias", json=body, headers=headers(service)),
+    )
+    statuses = sorted(r.status_code for r in responses)
+    texts = [r.text for r in responses]
+    if _postgres(client):
+        assert statuses == [200] * 5 + [201], texts
+        assert len({r.json()["card"]["id"] for r in responses}) == 1
+    else:
+        assert set(statuses) <= {200, 201, 409}, texts
+    refs = db.q("SELECT id FROM external_refs WHERE external_id = ?", body["providencia_id"])
+    assert len(refs) == 1
+
+
+def test_the_first_providencias_of_a_new_product_share_one_link(
+    client, pampufa, database_url: str, db: Database
+) -> None:
+    _remove_products(database_url, (OTHER,))
+    service = pampufa.service()
+    responses = _parallel(
+        4,
+        lambda: client.post(
+            f"{API}/integration/providencias",
+            json=providencia(produto_nome="SR GJ"),
+            headers=headers(service, OTHER),
+        ),
+    )
+    statuses = [r.status_code for r in responses]
+    if _postgres(client):
+        assert statuses == [201] * 4, [r.text for r in responses]
+    else:
+        assert set(statuses) <= {201, 409}, [r.text for r in responses]
+    assert len(db.q("SELECT * FROM product_links WHERE product_id = ?", OTHER)) == 1
+    assert len(db.q("SELECT * FROM projects WHERE product_id = ?", OTHER)) == 1
+    _remove_products(database_url, (OTHER,))

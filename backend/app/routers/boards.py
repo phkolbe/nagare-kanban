@@ -37,7 +37,7 @@ from sqlalchemy import String, case, cast, delete, func, insert, or_, select, ty
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..db import new_id, seconds_between, utcnow
+from ..db import advisory_lock, new_id, seconds_between, utcnow
 from ..deps import (
     CurrentUser,
     assert_board_writable,
@@ -1142,7 +1142,16 @@ async def select_cards(
 
 
 async def next_card_key(s: AsyncSession, prefix: str, product_id: str | None = None) -> str:
-    """The next free ``PREFIX-n`` card key. Numbering starts at 101 like the seed."""
+    """Next ``PREFIX-nnn`` key, continuing the per-project counter.
+
+    The seed starts each project at 101, so a fresh project's first card is
+    ``KEY-101`` and an existing project continues from its highest number —
+    including numbers that were skipped or deleted, which keeps keys stable and
+    never reuses a retired reference. Keys are unique per product, and the counter
+    is locked until the transaction ends, so two cards created at once never get
+    the same key.
+    """
+    await advisory_lock(s, "card-key", product_id or "", prefix)
     query = select(Card.key).where(Card.key.like(f"{prefix}-%"))
     if product_id is not None:
         query = query.where(Card.product_id == product_id)
