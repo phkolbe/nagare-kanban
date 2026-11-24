@@ -40,7 +40,7 @@ from ..config import (
     flags_for_plan,
     plan_tier,
 )
-from ..db import new_id, utcnow
+from ..db import advisory_lock, new_id, utcnow
 from ..deps import (
     CurrentUser,
     effective_flags,
@@ -210,13 +210,16 @@ def _validate_flag_keys(keys: list[str]) -> list[str]:
     return list(dict.fromkeys(keys))
 
 
-async def _workspace_row(s: AsyncSession) -> dict[str, Any]:
-    """The singleton workspace row, provisioned on first read if absent.
+async def _workspace_row(s: AsyncSession, *, provision: bool = False) -> dict[str, Any]:
+    """The singleton workspace row, with defaults when the database has none yet.
 
     A cold database that has been migrated but not seeded would otherwise answer
     every ``/workspace`` read with a 404 and leave the shell with no header to
-    draw. Provisioning is idempotent and picks the lowest tier available.
+    draw. A read answers the defaults (the lowest active plan) without writing; the
+    first ``PATCH /workspace`` (``provision``) creates the row, once.
     """
+    if provision:
+        await advisory_lock(s, "workspace")
     row = as_dict(await s.get(Workspace, "workspace"))
     if row is not None:
         return row
@@ -226,9 +229,11 @@ async def _workspace_row(s: AsyncSession) -> dict[str, Any]:
     workspace = Workspace(
         id="workspace", name="Nagare", active_plan_id=fallback, timezone="UTC", updated_at=utcnow()
     )
+    if not provision:
+        return as_dict(workspace) or {}
     s.add(workspace)
     await s.commit()
-    return as_dict(workspace) or {}
+    return as_dict(await s.get(Workspace, "workspace")) or {}
 
 
 def _with_override(row: dict[str, Any], overrides: dict[str, bool]) -> dict[str, Any]:
@@ -515,7 +520,7 @@ async def update_workspace(
     stays with the master, matching "Manage plans & flags" in SPEC §4.
     """
     await _sync_plan_tiers(s)
-    row = await _workspace_row(s)
+    row = await _workspace_row(s, provision=True)
     changes: dict[str, Any] = {}
 
     if payload.active_plan_id is not None and payload.active_plan_id != row.get("active_plan_id"):

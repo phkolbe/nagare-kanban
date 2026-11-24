@@ -618,7 +618,8 @@ def test_another_product_cannot_reach_this_products_card(client, pampufa) -> Non
 
 def test_people_of_the_product_come_from_the_pampufa(client, pampufa, db: Database) -> None:
     """17/10/2026: the assignee picker lists the product's nagare.* people, even
-    those who never opened the Nagare; each gets a Nagare user to be assigned."""
+    those who never opened the Nagare. Since the audit of 09/11/2026 listing them
+    writes nothing: the user is created when a card is assigned to them."""
     from backend.app.integration import forget_people
 
     newcomer = str(uuid.uuid4())
@@ -642,7 +643,7 @@ def test_people_of_the_product_come_from_the_pampufa(client, pampufa, db: Databa
         newcomer,
         ["nagare.editor"],
     )
-    assert db.scalar("SELECT role FROM users WHERE id = ?", person["id"]) == "viewer"
+    assert db.scalar("SELECT count(*) FROM users WHERE external_subject = ?", newcomer) == 0
 
     service = pampufa.service()
     card = client.post(
@@ -653,6 +654,11 @@ def test_people_of_the_product_come_from_the_pampufa(client, pampufa, db: Databa
     )
     assert assigned.status_code == 200, assigned.text
     assert assigned.json()["assignee_id"] == person["id"]
+    created = db.q1("SELECT role, email FROM users WHERE id = ?", person["id"])
+    assert (created["role"], created["email"]) == ("viewer", "nova@grupo-sr.test")
+    forget_people()
+    again = client.get(f"{API}/integration/people", headers=headers(editor)).json()["people"]
+    assert [p["id"] for p in again] == [person["id"]], "the id does not change"
 
     pampufa.directory[OTHER] = []
     other = pampufa.person({OTHER: ["nagare.leitor"]})
@@ -1224,3 +1230,26 @@ def test_the_first_providencias_of_a_new_product_share_one_link(
     assert len(db.q("SELECT * FROM product_links WHERE product_id = ?", OTHER)) == 1
     assert len(db.q("SELECT * FROM projects WHERE product_id = ?", OTHER)) == 1
     _remove_products(database_url, (OTHER,))
+
+
+def test_an_unknown_assignee_is_still_a_404(client, pampufa) -> None:
+    service = pampufa.service()
+    card = client.post(
+        f"{API}/integration/providencias", json=providencia(), headers=headers(service)
+    ).json()["card"]
+    editor = pampufa.person({PRODUCT: ["nagare.editor"]})
+    response = client.patch(
+        f"{API}/cards/{card['id']}",
+        json={"assignee_id": str(uuid.uuid4())},
+        headers=headers(editor),
+    )
+    assert response.status_code == 404, response.text
+    assert response.json()["error"]["code"] == "user_not_found"
+
+
+def test_the_first_requests_of_a_new_person_create_one_user(client, pampufa, db: Database) -> None:
+    token = pampufa.person({PRODUCT: ["nagare.editor"]})
+    responses = _parallel(6, lambda: client.get(f"{API}/auth/me", headers=headers(token)))
+    assert [r.status_code for r in responses] == [200] * 6, [r.text for r in responses]
+    sub = jwt.decode(token, options={"verify_signature": False})["sub"]
+    assert db.scalar("SELECT count(*) FROM users WHERE external_subject = ?", sub) == 1

@@ -41,7 +41,13 @@ from .models import (
     User,
     as_dict,
 )
-from .pampufa import EVENT_ARCHIVED, EVENT_DELIVERED, EVENT_MOVED, enqueue_webhook
+from .pampufa import (
+    EVENT_ARCHIVED,
+    EVENT_DELIVERED,
+    EVENT_MOVED,
+    enqueue_webhook,
+    person_id,
+)
 from .routers.boards import canonical_columns, create_board_from_template, next_card_key
 from .tenancy import local_role_in, project_key_for, role_from_pampufa
 
@@ -173,38 +179,76 @@ async def _assignee(s: AsyncSession, person: dict[str, Any] | None) -> str | Non
     return user.id if user else None
 
 
-async def person_user(s: AsyncSession, person: dict[str, Any] | None) -> User | None:
-    """The Nagare user for a Pampufa person, created without a password if new.
-
-    Same rule as the sign-in: the Pampufa ``sub`` first, then the e-mail (linked).
-    """
-    if not person or not (person.get("sub") or person.get("email")):
-        return None
+def _person_keys(person: dict[str, Any] | None) -> tuple[str | None, str | None]:
+    if not person:
+        return None, None
     sub = str(person.get("sub") or "") or None
     email = str(person.get("email") or "").strip().lower() or None
+    return sub, email
+
+
+async def find_person_user(s: AsyncSession, person: dict[str, Any] | None) -> User | None:
+    """The Nagare user of a Pampufa person, if there is one (read only).
+
+    Same rule as the sign-in: the Pampufa ``sub`` first, then the e-mail.
+    """
+    sub, email = _person_keys(person)
     user = None
     if sub:
         user = await s.scalar(select(User).where(User.external_subject == sub))
     if user is None and email:
         user = await s.scalar(select(User).where(User.email == email))
-        if user is not None and sub and not user.external_subject:
-            user.external_subject = sub
-    if user is None:
-        if not email:
-            return None
-        user = User(
-            id=new_id(),
-            email=email,
-            name=str(person.get("nome") or email),
-            password_hash=None,
-            role="viewer",
-            is_active=True,
-            created_at=utcnow(),
-            external_subject=sub,
-        )
-        s.add(user)
-        await s.flush()
     return user
+
+
+async def person_user(s: AsyncSession, person: dict[str, Any] | None) -> User | None:
+    """The Nagare user for a Pampufa person, created without a password if new.
+
+    For writes only (a providência's assignee, a card assigned from the picker): the
+    user gets the id the picker already showed (:func:`person_id`), and an existing
+    user with the same e-mail is linked to the ``sub``.
+    """
+    sub, email = _person_keys(person)
+    if not (sub or email):
+        return None
+    await advisory_lock(s, "person", sub or email)
+    user = await find_person_user(s, person)
+    if user is not None:
+        if sub and not user.external_subject:
+            user.external_subject = sub
+        return user
+    if not email:
+        return None
+    user = User(
+        id=person_id(sub) if sub else new_id(),
+        email=email,
+        name=str((person or {}).get("nome") or email),
+        password_hash=None,
+        role="viewer",
+        is_active=True,
+        created_at=utcnow(),
+        external_subject=sub,
+    )
+    s.add(user)
+    await s.flush()
+    return user
+
+
+async def directory_user(
+    s: AsyncSession, gateway: Any, product_id: str, user_id: str
+) -> User | None:
+    """The user behind an id the assignee picker listed for someone who has none yet.
+
+    Creates it (the picker's id is :func:`person_id` of the person's ``sub``) when the
+    person is still in the product's directory; ``None`` otherwise.
+    """
+    if gateway is None or product_id == PRODUCT_STANDALONE:
+        return None
+    for person in await gateway.people(product_id):
+        sub, _ = _person_keys(person)
+        if sub and person_id(sub) == user_id:
+            return await person_user(s, person)
+    return None
 
 
 #: The product's people, mirrored from the Pampufa for a minute (the assignee picker
@@ -216,8 +260,9 @@ _people_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 async def product_people(s: AsyncSession, gateway: Any, product_id: str) -> list[dict[str, Any]]:
     """Who can take a card in the product: the Pampufa's ``nagare.*`` people (17/10/2026).
 
-    Each person gets (or keeps) a Nagare user, so an assignee can be picked before
-    the person ever opens the Nagare. Returns ``[{id, name, email, sub, roles}]``.
+    Read only: someone who never opened the Nagare is listed under :func:`person_id`,
+    the id their user gets when a card is assigned to them (:func:`directory_user`).
+    Returns ``[{id, name, email, sub, roles}]``.
     """
     import time
 
@@ -226,19 +271,19 @@ async def product_people(s: AsyncSession, gateway: Any, product_id: str) -> list
         return cached[1]
     out: list[dict[str, Any]] = []
     for person in await gateway.people(product_id):
-        user = await person_user(s, person)
-        if user is None or not user.is_active:
-            continue
-        out.append(
-            {
-                "id": user.id,
-                "name": user.name,
-                "email": user.email,
-                "sub": user.external_subject,
-                "roles": list(person.get("papeis") or []),
-            }
-        )
-    await s.commit()
+        user = await find_person_user(s, person)
+        sub, email = _person_keys(person)
+        roles = list(person.get("papeis") or [])
+        if user is not None:
+            if not user.is_active:
+                continue
+            entry = {"id": user.id, "name": user.name, "email": user.email}
+            out.append({**entry, "sub": user.external_subject or sub, "roles": roles})
+        elif sub and email:
+            name = str(person.get("nome") or email)
+            out.append(
+                {"id": person_id(sub), "name": name, "email": email, "sub": sub, "roles": roles}
+            )
     out.sort(key=lambda p: (p["name"].lower(), p["email"]))
     _people_cache[product_id] = (time.monotonic(), out)
     return out

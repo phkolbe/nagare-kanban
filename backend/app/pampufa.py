@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
@@ -27,11 +28,12 @@ from opentelemetry import trace
 from pampufa_sdk.auth.token import Identidade, TokenInvalido, ValidadorDeToken
 from pampufa_sdk.servicos import ClienteDeServico, ErroDeIntegracao
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from . import observability
 from .config import Settings
-from .db import add_days, iso, new_id, parse_iso, utcnow
+from .db import add_days, advisory_lock, iso, new_id, parse_iso, utcnow
 from .errors import Unauthorized
 from .models import User, WebhookOutbox
 
@@ -127,6 +129,20 @@ def is_pampufa_token(token: str) -> bool:
     return header.get("alg") == "EdDSA"
 
 
+#: The namespace of the user ids derived from a Pampufa ``sub`` (see :func:`person_id`).
+_PERSON_NAMESPACE = uuid.UUID("6a2b3c4d-5e6f-4a1b-9c8d-7e6f5a4b3c2d")
+
+
+def person_id(sub: str) -> str:
+    """The Nagare user id of a Pampufa person, the same before and after the row exists.
+
+    The assignee picker lists people who never opened the Nagare under this id without
+    creating anything (a GET does not write); the user is created with it when someone
+    assigns them a card, or when they first sign in.
+    """
+    return str(uuid.uuid5(_PERSON_NAMESPACE, f"pampufa:{sub}"))
+
+
 async def user_for_identity(
     s: AsyncSession, gateway: PampufaGateway, identity: Identidade, token: str
 ) -> User:
@@ -140,7 +156,26 @@ async def user_for_identity(
     user = await s.scalar(select(User).where(User.external_subject == identity.sub))
     if user is not None:
         return user
+    # The screens open with several requests at once: the first creates the user, the
+    # others wait for it here and find it.
+    await advisory_lock(s, "person", identity.sub)
+    user = await s.scalar(select(User).where(User.external_subject == identity.sub))
+    if user is not None:
+        return user
+    try:
+        return await _create_identity_user(s, gateway, identity, token)
+    except IntegrityError:
+        # SQLite has no advisory lock: the other request won the race. Use its row.
+        await s.rollback()
+        user = await s.scalar(select(User).where(User.external_subject == identity.sub))
+        if user is None:
+            raise
+        return user
 
+
+async def _create_identity_user(
+    s: AsyncSession, gateway: PampufaGateway, identity: Identidade, token: str
+) -> User:
     if identity.eh_servico:
         name = identity.sub.split(":", 1)[-1]
         user = User(
@@ -172,7 +207,7 @@ async def user_for_identity(
         # The local role only matters for the local login, which this user does not
         # have; the role inside each product comes from the Pampufa token.
         user = User(
-            id=new_id(),
+            id=person_id(identity.sub),
             email=email,
             name=profile.name,
             password_hash=None,

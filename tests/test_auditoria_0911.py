@@ -364,3 +364,29 @@ def test_cards_created_at_once_never_share_a_key(client, master, scratch) -> Non
         assert statuses == [201] * 8, [r.text for r in responses]
     else:  # one writer: a collision that slips through is a 409, never a 500
         assert set(statuses) <= {201, 409}, [r.text for r in responses]
+
+
+# ---------------------------------------------------------------------------
+# 5. GET não grava
+# ---------------------------------------------------------------------------
+
+
+def test_reading_the_workspace_never_writes_it(client, auth, db: Database) -> None:
+    saved = db.q1("SELECT * FROM workspace WHERE id = 'workspace'")
+    db.ex("DELETE FROM workspace WHERE id = 'workspace'")
+    try:
+        response = client.get(f"{API}/workspace", headers=auth("master"))
+        assert response.status_code == 200, response.text
+        assert response.json()["name"] == "Nagare"
+        assert db.q1("SELECT id FROM workspace WHERE id = 'workspace'") is None
+
+        renamed = client.patch(
+            f"{API}/workspace", json={"name": "Nagare SR"}, headers=auth("master")
+        )
+        assert renamed.status_code == 200, renamed.text
+        assert db.scalar("SELECT name FROM workspace WHERE id = 'workspace'") == "Nagare SR"
+    finally:
+        db.ex("DELETE FROM workspace WHERE id = 'workspace'")
+        columns = ", ".join(saved)
+        marks = ", ".join("?" for _ in saved)
+        db.ex(f"INSERT INTO workspace ({columns}) VALUES ({marks})", *saved.values())

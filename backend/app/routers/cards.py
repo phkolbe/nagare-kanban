@@ -21,7 +21,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import ConfigDict
 from sqlalchemy import Select, String, case, cast, delete, func, or_, select, type_coerce, update
 from sqlalchemy.dialects.postgresql import JSONB
@@ -46,7 +46,7 @@ from ..deps import (
     require_board_write_target,
 )
 from ..errors import BadRequest, Conflict, Forbidden, NotFound
-from ..integration import close_card
+from ..integration import close_card, directory_user
 from ..models import (
     PRODUCT_STANDALONE,
     Blocker,
@@ -909,6 +909,22 @@ async def _user_exists(s: AsyncSession, user_id: str) -> bool:
     return (await s.scalar(select(User.id).where(User.id == user_id))) is not None
 
 
+async def _assignee(s: AsyncSession, request: Request, product_id: str, user_id: str) -> str:
+    """The user id to store for an assignee; 404 ``user_not_found`` when there is none.
+
+    A Nagare user, or a person of the product the picker listed before they had one:
+    the picker does not create users (a GET does not write), so the user of a Pampufa
+    person is created here, when a card is first assigned to them.
+    """
+    if await _user_exists(s, user_id):
+        return user_id
+    gateway = getattr(request.app.state, "pampufa", None)
+    user = await directory_user(s, gateway, product_id, user_id)
+    if user is None:
+        raise NotFound("User", user_id, code="user_not_found")
+    return str(user.id)
+
+
 async def _project_exists(s: AsyncSession, project_id: str) -> bool:
     query = select(Project.id).where(Project.id == project_id, *in_product(Project))
     return (await s.scalar(query)) is not None
@@ -1068,6 +1084,7 @@ async def list_cards(
 )
 async def create_card(
     payload: CardCreate,
+    request: Request,
     s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(get_current_user),
 ) -> dict[str, Any]:
@@ -1126,8 +1143,11 @@ async def create_card(
         project = same_product(as_dict(await s.get(Project, payload.project_id)))
         if project is None:
             raise NotFound("Project", payload.project_id, code="project_not_found")
-    if payload.assignee_id and not await _user_exists(s, payload.assignee_id):
-        raise NotFound("User", payload.assignee_id, code="user_not_found")
+    assignee_id = (
+        await _assignee(s, request, board["product_id"], payload.assignee_id)
+        if payload.assignee_id
+        else None
+    )
     value_area = (
         await check_type(s, board["product_id"], payload.value_area)
         if payload.value_area
@@ -1170,7 +1190,7 @@ async def create_card(
             title=payload.title,
             description=payload.description,
             service_class=payload.service_class,
-            assignee_id=payload.assignee_id,
+            assignee_id=assignee_id,
             requester=payload.requester,
             size=payload.size,
             value_area=value_area,
@@ -1325,6 +1345,7 @@ def _normalised(field: str, value: Any) -> Any:
 async def update_card(
     card_id: str,
     payload: CardUpdate,
+    request: Request,
     s: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(get_current_user),
 ) -> dict[str, Any]:
@@ -1343,8 +1364,10 @@ async def update_card(
 
     if changes.get("project_id") and not await _project_exists(s, changes["project_id"]):
         raise NotFound("Project", changes["project_id"], code="project_not_found")
-    if changes.get("assignee_id") and not await _user_exists(s, changes["assignee_id"]):
-        raise NotFound("User", changes["assignee_id"], code="user_not_found")
+    if changes.get("assignee_id"):
+        changes["assignee_id"] = await _assignee(
+            s, request, row["product_id"], changes["assignee_id"]
+        )
     if "value_area" in changes:
         if changes["value_area"] is None:
             changes.pop("value_area")
