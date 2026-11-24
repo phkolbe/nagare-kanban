@@ -20,6 +20,7 @@ import type { Projeto, Quadro } from '../api/tipos'
 import { melhorLinha, rebalancear } from '../features/simulador/tipos'
 import { eixoRedondo, passoRedondo } from '../graficos/escalas'
 import { rotaDoLinkAntigo } from '../sozinho/linksAntigos'
+import { tokenVencido, vencimentoDoToken } from '../api/sessaoLocal'
 import { temaEfetivo } from '../sozinho/tema'
 import { TRILHO, bloqueioDoItem } from '../sozinho/trilho'
 import { faseDoCartao } from '../features/projetos/fase'
@@ -476,6 +477,19 @@ confere('segundos em passos de 5', [segundosDesde(0, 3_999), segundosDesde(0, 5_
   confere('ao soltar, recarrega uma vez (a ultima pedida)', vezes, ['livre', 'segunda'])
   marcarArrasto(false)
   confere('soltar de novo nao repete', vezes, ['livre', 'segunda'])
+}
+
+{
+  // Sessao local (24/11/2026): a tela le o vencimento do token e vai ao login sozinha.
+  const token = (exp: number) =>
+    `cabeca.${btoa(JSON.stringify({ sub: 'u1', exp })).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}.assinatura`
+  const agora = Date.UTC(2026, 10, 24, 18, 46) // ms
+  confere('vencimento do token em ms', vencimentoDoToken(token(1795000000)), 1795000000 * 1000)
+  confere(
+    'token vencido, valido, sem exp e ilegivel',
+    [tokenVencido(token(agora / 1000 - 1), agora), tokenVencido(token(agora / 1000 + 3600), agora), tokenVencido('a.e30.b', agora), tokenVencido('lixo', agora), tokenVencido(null, agora)],
+    [true, false, false, false, false],
+  )
 }
 
 if (falhas > 0) throw new Error(`${falhas} de ${total} verificacoes falharam.`)

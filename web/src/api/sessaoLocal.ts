@@ -34,6 +34,28 @@ export function quandoPerderSessaoLocal(callback: () => void): void {
   aoPerderSessao = callback
 }
 
+/** Quando o token vence (o `exp` do JWT, em milissegundos), ou `null` se nao der para ler. */
+export function vencimentoDoToken(token: string | null): number | null {
+  const parte = token?.split('.')[1]
+  if (!parte) return null
+  try {
+    const base64 = parte.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(parte.length / 4) * 4, '=')
+    const exp = (JSON.parse(atob(base64)) as { exp?: unknown }).exp
+    return typeof exp === 'number' ? exp * 1000 : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * O token ja venceu (24/11/2026): a tela sabe sozinha que a sessao acabou e vai ao login, sem
+ * depender de o pedido chegar ao servidor (uma falha de rede no meio mostrava "Tente de novo").
+ */
+export function tokenVencido(token: string | null, agora: number = Date.now()): boolean {
+  const vencimento = vencimentoDoToken(token)
+  return vencimento !== null && vencimento <= agora
+}
+
 /** A API no mesmo servidor do Nagare (`/api/v1`, ou `/nagare/api/v1` atras do gateway). */
 export const API_LOCAL = `${BASE_SOZINHO}/api/v1`
 
@@ -55,6 +77,11 @@ export async function requisitarLocal<T>(caminho: string, opcoes: Opcoes = {}): 
   const cabecalhos: Record<string, string> = { Accept: 'application/json', ...opcoes.cabecalhos }
   if (opcoes.corpo !== undefined) cabecalhos['Content-Type'] = 'application/json'
   const token = tokenLocal()
+  if (token && tokenVencido(token)) {
+    guardarToken(null)
+    aoPerderSessao?.()
+    throw new ErroApi({ title: 'Session expired.', status: 401, codigo: 'token_expired' } as ConstructorParameters<typeof ErroApi>[0])
+  }
   if (token) cabecalhos.Authorization = `Bearer ${token}`
   const resposta = await fetch(`${API_LOCAL}${caminho}`, {
     method: opcoes.metodo ?? 'GET',
