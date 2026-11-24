@@ -7,7 +7,7 @@
 
 import { horasEmTexto, minutosDeTexto } from '../features/cartao/horas'
 import { periodoPadrao, textoNoPrazo } from '../features/metricas/PainelPessoas'
-import { baseDoSozinho, exemploDeChave, modoDoCaminho, montarRota } from '../app/contexto'
+import { baseDoSozinho, exemploDeChave, modoDoCaminho, montarRota, rotaDoCartao } from '../app/contexto'
 import { ehSoDoNagare } from '../componentes/Atalhos'
 import type { Cartao, Coluna, SituacaoWip } from '../api/tipos'
 import { travaDoUsuario } from '../features/admin/travas'
@@ -259,6 +259,16 @@ confere('rotas nos dois modos', [montarRota('plataforma', 'sr-adv', 'quadro/1'),
   '/admin/users',
   '/metrics/q1',
 ])
+confere(
+  'endereco do cartao pela chave (24/11/2026)',
+  [
+    rotaDoCartao('sozinho', 'nagare', 'PPLAT-404'),
+    rotaDoCartao('sozinho', 'sr-adv', 'SRADV-101'),
+    rotaDoCartao('plataforma', 'sr-adv', 'SRADV-101'),
+    montarRota('sozinho', 'nagare', 'cartao/PPLAT-404'),
+  ],
+  ['/card/PPLAT-404', '/sr-adv/card/SRADV-101', '/sr-adv/tarefas/cartao/SRADV-101', '/card/PPLAT-404'],
+)
 confere('links da tela antiga', ['#/board/abc', '#/metrics/q1', '#/admin/plans', '#/login', '#/x'].map(rotaDoLinkAntigo), [
   '/board/abc',
   '/metrics/q1',

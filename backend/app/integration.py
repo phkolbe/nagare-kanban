@@ -18,6 +18,7 @@ holds what those calls do, in the caller's transaction:
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import quote
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -75,16 +76,24 @@ TAG_RESOLVED_AT_ORIGIN = "resolvido-na-origem"
 
 
 def card_url(card: dict[str, Any]) -> str:
-    """Where a person opens the card: the product's Tarefas module (N2), or the
-    standalone Nagare's board (N3; ``NAGARE_URL_PUBLICA`` ends in ``/nagare`` since
-    19/10/2026, and the board is ``/board`` there)."""
+    """The card's own page, by its key (decision of 24/11/2026).
+
+    * a platform product's card opens in its Tarefas module (N2):
+      ``.../grupo-sr/sr-adv/tarefas/cartao/SRADV-101``;
+    * otherwise in the standalone Nagare (N3; ``NAGARE_URL_PUBLICA`` ends in ``/nagare``):
+      ``.../nagare/card/PPLAT-404``, with the product in the path when it is one of the
+      Pampufa's (``.../nagare/sr-adv/card/SRADV-101``).
+
+    The key is born with the card and never changes; the API takes it wherever it takes
+    the id. Links sent before (``.../board/<id>?cartao=<id>``) keep opening the drawer.
+    """
     product = card.get("product_id")
-    if settings.screens_url and product and product != PRODUCT_STANDALONE:
-        return (
-            f"{settings.screens_url}/{product}/tarefas/quadro/{card['board_id']}"
-            f"?cartao={card['id']}"
-        )
-    return f"{settings.public_url}/board/{card['board_id']}?cartao={card['id']}"
+    key = quote(str(card.get("key") or card["id"]), safe="")
+    if product and product != PRODUCT_STANDALONE:
+        if settings.screens_url:
+            return f"{settings.screens_url}/{product}/tarefas/cartao/{key}"
+        return f"{settings.public_url}/{product}/card/{key}"
+    return f"{settings.public_url}/card/{key}"
 
 
 # ---------------------------------------------------------------------------

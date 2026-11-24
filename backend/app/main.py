@@ -258,6 +258,8 @@ _OLD_NAMES = {
     "usuarios": "users",
     "papeis": "roles",
     "planos": "plans",
+    # The card's own page (24/11/2026): /cartao/PPLAT-404 is /nagare/card/PPLAT-404.
+    "cartao": "card",
 }
 
 

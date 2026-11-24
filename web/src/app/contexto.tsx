@@ -45,6 +45,8 @@ export interface ContextoNagare {
   nomeProduto: string
   /** Caminho de uma tela do Nagare para o roteador: `quadro/123` -> `/sr-adv/tarefas/quadro/123`. */
   rota: (caminho: string) => string
+  /** O endereco proprio de um cartao, pela chave (24/11/2026): `PPLAT-404` -> `/card/PPLAT-404`. */
+  rotaDoCartao: (chave: string) => string
 }
 
 /**
@@ -63,6 +65,7 @@ export const SEGMENTOS_SOZINHO: Record<string, string> = {
   flags: 'flags',
   planos: 'plans',
   entrar: 'sign-in',
+  cartao: 'card',
 }
 const DO_INGLES: Record<string, string> = Object.fromEntries(Object.entries(SEGMENTOS_SOZINHO).map(([pt, en]) => [en, pt]))
 
@@ -86,6 +89,20 @@ export function montarRota(modo: Modo, produto: string, caminho: string): string
   return `/${caminhoEmIngles(limpo)}`.replace(/\/$/, '') || '/'
 }
 
+/**
+ * O endereco proprio do cartao, pela chave (decisao de 24/11/2026; a chave e unica no produto):
+ * - Nagare sozinho: `/card/PPLAT-404` (sob `/nagare`);
+ * - produto da Pampufa aberto pelo Nagare sozinho: `/sr-adv/card/SRADV-101` (o produto vai junto,
+ *   para o link abrir no produto certo mesmo com outro escolhido no seletor);
+ * - dentro da Pampufa: `/sr-adv/tarefas/cartao/SRADV-101` (sob `/grupo-sr`).
+ * O mesmo formato do `card_url` do backend (`backend/app/integration.py`).
+ */
+export function rotaDoCartao(modo: Modo, produto: string, chave: string): string {
+  const parte = encodeURIComponent(chave)
+  if (modo === 'plataforma') return `/${produto}/tarefas/cartao/${parte}`
+  return produto === PRODUTO_SOZINHO ? `/card/${parte}` : `/${produto}/card/${parte}`
+}
+
 const Contexto = createContext<ContextoNagare | null>(null)
 
 export function ProvedorNagare({
@@ -99,7 +116,13 @@ export function ProvedorNagare({
   nomeProduto: string
   children: ReactNode
 }) {
-  const valor: ContextoNagare = { modo, produto, nomeProduto, rota: (c) => montarRota(modo, produto, c) }
+  const valor: ContextoNagare = {
+    modo,
+    produto,
+    nomeProduto,
+    rota: (c) => montarRota(modo, produto, c),
+    rotaDoCartao: (chave) => rotaDoCartao(modo, produto, chave),
+  }
   return <Contexto.Provider value={valor}>{children}</Contexto.Provider>
 }
 

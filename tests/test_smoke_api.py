@@ -434,6 +434,11 @@ def test_the_standalone_screens_live_under_nagare(client) -> None:
     assert admin.headers["location"] == "/nagare/admin/users"
     screen = client.get("/nagare/board/b1", follow_redirects=False)
     assert screen.status_code == 200
+    # 24/11/2026: the card's own page, alone or with the Pampufa product in front.
+    for page in ("/nagare/card/PPLAT-404", "/nagare/sr-adv/card/SRADV-101"):
+        assert client.get(page, follow_redirects=False).status_code == 200, page
+    old_card = client.get("/cartao/PPLAT-404", follow_redirects=False)
+    assert old_card.headers["location"] == "/nagare/card/PPLAT-404"
     api = client.get("/nagare/api/v1/auth/me", follow_redirects=False)
     assert api.status_code == 401, "the API answers under /nagare too"
     proxied = client.get(

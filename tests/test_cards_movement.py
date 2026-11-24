@@ -130,6 +130,17 @@ def test_card_creation_writes_a_movement_with_null_from_column(
     assert event is not None
 
 
+def test_the_card_page_opens_by_key_inside_its_product_only(client, master, flow_board) -> None:
+    """24/11/2026: the card's own page (/nagare/card/PPLAT-404) asks the API by key."""
+    card = make_card(client, master, flow_board["id"], col_id(flow_board, "Backlog"))
+    by_key = client.get(f"{API}/cards/{card['key']}", headers=master)
+    assert by_key.status_code == 200, by_key.text
+    assert by_key.json()["id"] == card["id"]
+    assert by_key.json()["board_id"] == flow_board["id"], "the page shows the card's board"
+    other = client.get(f"{API}/cards/{card['key']}", headers={**master, "X-Produto": "sr-adv"})
+    assert other.status_code == 404, "a key is unique per product: no leak across products"
+
+
 # ---------------------------------------------------------------------------
 # forward-only enforcement (SPEC §6.1/§6.2)
 # ---------------------------------------------------------------------------
