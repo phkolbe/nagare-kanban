@@ -249,7 +249,12 @@ def _backoff(attempts: int) -> timedelta:
 async def deliver_pending(
     sessions: async_sessionmaker[AsyncSession], gateway: PampufaGateway, limit: int = 50
 ) -> int:
-    """Post every due notification once; returns how many the Pampufa accepted."""
+    """Post every due notification once; returns how many the Pampufa accepted.
+
+    The rows are locked for the round and rows another worker already holds are
+    skipped (``FOR UPDATE SKIP LOCKED`` on PostgreSQL; SQLite has a single process),
+    so two workers never send the same notification.
+    """
     now = utcnow()
     delivered = 0
     async with sessions() as s:
@@ -259,6 +264,7 @@ async def deliver_pending(
                 .where(WebhookOutbox.delivered_at.is_(None), WebhookOutbox.next_attempt_at <= now)
                 .order_by(WebhookOutbox.created_at, WebhookOutbox.id)
                 .limit(limit)
+                .with_for_update(skip_locked=True)
             )
         ).all()
         for row in rows:
@@ -293,7 +299,12 @@ async def _deliver_one(gateway: PampufaGateway, row: WebhookOutbox, now: str) ->
     ) as span:
         try:
             await gateway.post_event(row.event, {"product_id": row.product_id, **row.payload})
-        except (ErroDeIntegracao, httpx.HTTPError, TokenInvalido) as error:
+        except Exception as error:
+            # Any failure is this row's, retried later with backoff: an unexpected one
+            # must not abort the round (the rows already sent would be sent again) nor
+            # put the same row first in every round.
+            if not isinstance(error, ErroDeIntegracao | httpx.HTTPError | TokenInvalido):
+                log.exception("pampufa.webhook_unexpected_error", extra={"event": row.event})
             span.record_exception(error)
             span.set_status(trace.Status(trace.StatusCode.ERROR, str(error)[:200]))
             observability.WEBHOOKS.labels(row.event, "failed").inc()

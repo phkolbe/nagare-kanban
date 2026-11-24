@@ -1253,3 +1253,86 @@ def test_the_first_requests_of_a_new_person_create_one_user(client, pampufa, db:
     assert [r.status_code for r in responses] == [200] * 6, [r.text for r in responses]
     sub = jwt.decode(token, options={"verify_signature": False})["sub"]
     assert db.scalar("SELECT count(*) FROM users WHERE external_subject = ?", sub) == 1
+
+
+def _outbox_rows(db: Database, *events: str) -> list[str]:
+    """Pending notifications written straight into the outbox, due now."""
+    ids = []
+    for event in events:
+        row_id = str(uuid.uuid4())
+        db.ex(
+            "INSERT INTO webhook_outbox (id, event, product_id, payload, created_at, attempts, "
+            "next_attempt_at) VALUES (?, ?, ?, ?, ?, 0, ?)",
+            row_id,
+            event,
+            PRODUCT,
+            json.dumps({"marca": row_id}),
+            "2020-01-01T00:00:00Z",
+            "2020-01-01T00:00:00Z",
+        )
+        ids.append(row_id)
+    return ids
+
+
+def _deliver_with(app, gateway, rounds: int = 1) -> list[int]:
+    """``rounds`` delivery rounds at once, each on its own session, with ``gateway``."""
+    from backend.app.db import Database as AppDatabase
+
+    async def run() -> list[int]:
+        database = AppDatabase(app.state.database.url)
+        try:
+            return list(
+                await asyncio.gather(
+                    *(deliver_pending(database.sessions, gateway) for _ in range(rounds))
+                )
+            )
+        finally:
+            await database.dispose()
+
+    return asyncio.run(run())
+
+
+def test_an_unexpected_webhook_error_fails_only_its_row(client, app, pampufa, db) -> None:
+    deliver(app)  # nothing else pending
+    broken, fine = _outbox_rows(db, "teste.quebra", "teste.ok")
+
+    class Gateway:
+        def __init__(self) -> None:
+            self.sent: list[str] = []
+
+        async def post_event(self, event: str, payload: dict[str, Any]) -> None:
+            if event == "teste.quebra":
+                raise RuntimeError("bug no cliente")
+            self.sent.append(payload["marca"])
+
+    gateway = Gateway()
+    assert _deliver_with(app, gateway) == [1]
+    assert gateway.sent == [fine]
+    row = db.q1(
+        "SELECT attempts, last_error, next_attempt_at FROM webhook_outbox WHERE id = ?", broken
+    )
+    assert row["attempts"] == 1 and "bug no cliente" in row["last_error"]
+    assert str(row["next_attempt_at"]) > "2026", "backed off, not first in line again"
+    assert db.scalar("SELECT delivered_at FROM webhook_outbox WHERE id = ?", fine) is not None
+    db.ex("DELETE FROM webhook_outbox WHERE id IN (?, ?)", broken, fine)
+
+
+def test_two_delivery_workers_never_send_the_same_notification(client, app, pampufa, db) -> None:
+    if not _postgres(client):
+        pytest.skip("SQLite: one process, one writer; the row lock is PostgreSQL's")
+    deliver(app)
+    ids = _outbox_rows(db, *(f"teste.paralelo.{n}" for n in range(6)))
+
+    class SlowGateway:
+        def __init__(self) -> None:
+            self.sent: list[str] = []
+
+        async def post_event(self, event: str, payload: dict[str, Any]) -> None:
+            await asyncio.sleep(0.05)
+            self.sent.append(payload["marca"])
+
+    gateway = SlowGateway()
+    counts = _deliver_with(app, gateway, rounds=3)
+    assert sum(counts) == 6
+    assert sorted(gateway.sent) == sorted(ids), "each one exactly once"
+    db.ex(f"DELETE FROM webhook_outbox WHERE id IN ({', '.join('?' * len(ids))})", *ids)
