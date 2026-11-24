@@ -1,8 +1,16 @@
-/** O cartao no quadro: classe, chave, prazo, titulo, projeto, tarefas, idade e responsavel. */
+/**
+ * O cartao no quadro: classe, chave, prazo, titulo, projeto, tarefas, idade e responsavel.
+ *
+ * E um link de verdade para a pagina do cartao (24/11/2026): o clique normal abre a gaveta, mas
+ * Ctrl+clique (ou Cmd, Shift) e o clique do meio abrem a pagina em outra aba, e o menu do botao
+ * direito do navegador oferece "Copiar endereco do link".
+ */
 
 import { useDraggable } from '@dnd-kit/core'
-import type { KeyboardEvent } from 'react'
+import type { KeyboardEvent, MouseEvent } from 'react'
+import { useHref } from 'react-router-dom'
 
+import { useNagare } from '../../app/contexto'
 import type { Cartao } from '../../api/tipos'
 import { useT } from '../../i18n'
 import { envelhecimento, providenciaDo, situacaoDoPrazo } from './regras'
@@ -63,6 +71,8 @@ export function CartaoMini({
   menuMover: () => void
 }) {
   const { t, data, numero } = useT()
+  const { rotaDoCartao } = useNagare()
+  const endereco = useHref(rotaDoCartao(cartao.key))
   const lacrado = cartao.envelope_state === 'sealed'
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: cartao.id,
@@ -77,6 +87,8 @@ export function CartaoMini({
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
       if (focarVizinho(e.currentTarget, e.key)) e.preventDefault()
     } else if (e.key === 'Enter') {
+      // Ctrl+Enter (ou Cmd, Shift) segue o link: a pagina do cartao em outra aba ou janela.
+      if (e.ctrlKey || e.metaKey || e.shiftKey) return
       e.preventDefault()
       abrir()
     } else if (e.key === 'm' && podeArrastar && !lacrado) {
@@ -85,17 +97,28 @@ export function CartaoMini({
     }
   }
 
+  // O clique simples abre a gaveta; com modificador o navegador segue o link (outra aba). O clique
+  // do meio nem chega aqui (vira `auxclick`) e o navegador ja abre o link em outra aba.
+  const clicar = (e: MouseEvent<HTMLAnchorElement>) => {
+    if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return
+    e.preventDefault()
+    abrir()
+  }
+
   return (
-    <article
+    <a
       ref={setNodeRef}
+      href={endereco}
+      draggable={false}
       className={`ng-cartao classe-${cartao.service_class}${isDragging ? ' arrastando' : ''}${lacrado ? ' lacrado' : ''}${compacto ? ' compacto' : ''}`}
       title={compacto && !lacrado ? cartao.title : undefined}
       {...attributes}
       {...listeners}
-      role="button"
+      // Sem o `role="button"` do dnd-kit: e um link (o leitor de tela anuncia e o menu copia).
+      role={undefined}
       tabIndex={0}
       aria-label={t('cartao.rotulo', { chave: cartao.key, titulo: lacrado ? t('cartao.lacrado') : cartao.title })}
-      onClick={abrir}
+      onClick={clicar}
       onKeyDown={tecla}
     >
       {lacrado ? (
@@ -201,6 +224,6 @@ export function CartaoMini({
           )}
         </div>
       )}
-    </article>
+    </a>
   )
 }

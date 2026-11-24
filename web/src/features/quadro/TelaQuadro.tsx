@@ -448,7 +448,8 @@ function QuadroDoProduto({ quadroId }: { quadroId: string }) {
   )
 }
 
-function ConfirmarMovimento({
+/** Confirma o movimento quando o quadro pede (`confirm_moves`); tambem na pagina do cartao. */
+export function ConfirmarMovimento({
   cartao,
   destino,
   fechar,

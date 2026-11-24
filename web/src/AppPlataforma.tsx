@@ -8,6 +8,7 @@ import { AjudaDeAtalhos, useAtalhos } from './componentes/Atalhos'
 import { ProvedorAvisos } from './componentes/Avisos'
 import { DicaDeSiglas } from './componentes/DicaDeSiglas'
 import { NaoEncontrada } from './componentes/NaoEncontrada'
+import { PaginaCartao } from './features/cartao/PaginaCartao'
 import { TelaConsolidado } from './features/consolidado/TelaConsolidado'
 import { TelaProjeto } from './features/projetos/TelaProjeto'
 import { TelaProjetos } from './features/projetos/TelaProjetos'
@@ -37,6 +38,8 @@ export function AppPlataforma() {
           <Route path="tarefas/metricas" element={<TelaMetricas />} />
           <Route path="tarefas/metricas/:quadroId" element={<TelaMetricas />} />
           <Route path="tarefas/regras" element={<TelaRegras />} />
+          {/* A pagina do cartao pela chave (24/11/2026): /grupo-sr/sr-adv/tarefas/cartao/SRADV-101. */}
+          <Route path="tarefas/cartao/:chave" element={<PaginaCartao />} />
           <Route path="tarefas/*" element={<NaoEncontrada />} />
           <Route path="*" element={<EmConstrucao />} />
         </Route>

@@ -13,6 +13,7 @@ import { TelaAdmin, TelaMetricas, TelaSimulador } from '../app/telasSobDemanda'
 import { ProvedorAvisos } from '../componentes/Avisos'
 import { DicaDeSiglas } from '../componentes/DicaDeSiglas'
 import { NaoEncontrada } from '../componentes/NaoEncontrada'
+import { PaginaCartao, PaginaCartaoDoProduto } from '../features/cartao/PaginaCartao'
 import { TelaProjeto } from '../features/projetos/TelaProjeto'
 import { TelaProjetos } from '../features/projetos/TelaProjetos'
 import { TelaQuadro } from '../features/quadro/TelaQuadro'
@@ -85,8 +86,11 @@ function Rotas() {
             <Route path="simulator/:quadroId" element={<TelaSimulador />} />
             <Route path="admin" element={<Navigate to="users" replace />} />
             <Route path="admin/:aba" element={<TelaAdmin />} />
+            {/* A pagina do cartao pela chave (24/11/2026); com o produto da Pampufa na frente. */}
+            <Route path="card/:chave" element={<PaginaCartao />} />
+            <Route path=":produto/card/:chave" element={<CartaoDoProduto />} />
             {/* Os nomes em portugues de antes de 19/10/2026 levam ao nome novo. */}
-            {['quadro', 'projetos', 'metricas', 'simulador', 'entrar'].map((antigo) => (
+            {['quadro', 'projetos', 'metricas', 'simulador', 'entrar', 'cartao'].map((antigo) => (
               <Route key={antigo} path={`${antigo}/*`} element={<RotaAntiga />} />
             ))}
             <Route path="*" element={<NaoEncontrada />} />
@@ -96,6 +100,12 @@ function Rotas() {
       </ProvedorAvisos>
     </ProvedorIdioma>
   )
+}
+
+/** `/nagare/sr-adv/card/SRADV-101`: abre o cartao no produto do endereco. */
+function CartaoDoProduto() {
+  const { produto, trocar } = useProdutoSozinho()
+  return <PaginaCartaoDoProduto produtoAtual={produto} trocar={trocar} />
 }
 
 /** Um endereco com o nome antigo (`/nagare/quadro/1`) vai para o novo (`/nagare/board/1`). */

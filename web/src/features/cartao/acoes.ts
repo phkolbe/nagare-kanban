@@ -9,11 +9,17 @@ import { useAvisos } from '../../componentes/Avisos'
 import { mensagemDeErro, useT, type Chave } from '../../i18n'
 import { useRecarregarQuadro } from '../quadro/consultas'
 
-export function useCartao(id: string) {
+/**
+ * O cartao pelo id ou pela chave (a API aceita os dois). A pagina do cartao busca pela chave e
+ * depois segue pelo id, com o que ja veio como dado inicial: as acoes refazem o cartao pelo id.
+ */
+export function useCartao(id: string, inicial?: CartaoDetalhe) {
   const produto = useNagare().produto
   return useQuery({
     queryKey: chaves.cartao(produto, id),
     queryFn: () => nagare<CartaoDetalhe>(produto, `/cards/${encodeURIComponent(id)}`),
+    initialData: inicial,
+    retry: (tentativas, erro) => (erro as { status?: number }).status !== 404 && tentativas < 2,
   })
 }
 

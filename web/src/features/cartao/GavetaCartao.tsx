@@ -2,15 +2,20 @@
  * O cartao na gaveta lateral: detalhes (edicao no lugar), tarefas, historico, bloqueios e
  * comentarios, mais mover, abrir envelope e arquivar. Cartao de providencia mostra onde
  * resolver; arquivar descarta a providencia (decisao de 16/10/2026).
+ *
+ * O conteudo (`ConteudoDoCartao`) e o mesmo da pagina propria do cartao (24/11/2026); a gaveta
+ * ganha "Abrir em pagina" e "Copiar link", pelo endereco da chave.
  */
 
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
+import { Link, useHref, useLocation } from 'react-router-dom'
 import { Aviso, Carregando, ErroDeApi, Tag } from '@pampufa/ui'
 
 import { useNagare } from '../../app/contexto'
 import { chaves } from '../../api/nagare'
 import type { Cartao, CartaoDetalhe, Coluna, Quadro, SituacaoWip } from '../../api/tipos'
+import { useAvisos } from '../../componentes/Avisos'
 import { Gaveta, Janela } from '../../componentes/Sobreposicao'
 import { useT } from '../../i18n'
 import { destinosAFrente, providenciaDo, validarDestino } from '../quadro/regras'
@@ -41,11 +46,8 @@ export function GavetaCartao({
   fechar: () => void
   mover: (cartao: Cartao, destino: string) => void
 }) {
-  const { t, eu, dataHora } = useT()
+  const { t } = useT()
   const cartao = useCartao(cartaoId)
-  const [aba, setAba] = useState<Aba>('detalhes')
-  const [menu, setMenu] = useState(false)
-  const [arquivar, setArquivar] = useState(false)
 
   if (cartao.isPending) {
     return (
@@ -62,6 +64,53 @@ export function GavetaCartao({
     )
   }
   const c = cartao.data
+  return (
+    <Gaveta titulo={`${c.key} · ${c.title}`} fechar={fechar}>
+      <ConteudoDoCartao
+        cartao={c}
+        quadro={quadro}
+        colunas={colunas}
+        wip={wip}
+        podeEditar={podeEditar}
+        mover={mover}
+        arquivado={fechar}
+        links={<LinksDoCartao cartao={c} />}
+      />
+    </Gaveta>
+  )
+}
+
+/**
+ * O cartao por inteiro, na gaveta e na pagina propria (24/11/2026): cabecalho com os sinais, as
+ * acoes (mover, envelope, arquivar), a providencia e as abas.
+ */
+export function ConteudoDoCartao({
+  cartao: c,
+  quadro,
+  colunas,
+  wip,
+  podeEditar,
+  mover,
+  arquivado,
+  links,
+  naPagina = false,
+}: {
+  cartao: CartaoDetalhe
+  quadro: Quadro
+  colunas: Coluna[]
+  wip: SituacaoWip
+  podeEditar: boolean
+  mover: (cartao: Cartao, destino: string) => void
+  /** Depois de arquivar: a gaveta fecha, a pagina volta ao quadro. */
+  arquivado: () => void
+  /** "Abrir em pagina" e "Copiar link" (na gaveta) ou so o "Copiar link" (na pagina). */
+  links?: ReactNode
+  naPagina?: boolean
+}) {
+  const { t, eu, dataHora } = useT()
+  const [aba, setAba] = useState<Aba>('detalhes')
+  const [menu, setMenu] = useState(false)
+  const [arquivar, setArquivar] = useState(false)
   const lacrado = c.envelope_state === 'sealed'
   const providencia = providenciaDo(c)
   const editavel = podeEditar && !c.archived
@@ -76,8 +125,8 @@ export function GavetaCartao({
   const bloqueio = c.blockers.find((b) => !b.ended_at)
 
   return (
-    <Gaveta titulo={`${c.key} · ${c.title}`} fechar={fechar}>
-      <header className="ng-gaveta-topo">
+    <>
+      <header className={naPagina ? 'ng-gaveta-topo ng-pagina-cartao-topo' : 'ng-gaveta-topo'}>
         <div className="ng-gaveta-chips">
           <span className="ng-chave">{c.key}</span>
           {eu?.flags.service_classes !== false && <span className={`ng-classe classe-${c.service_class}`}>{t(`classe.${c.service_class}`)}</span>}
@@ -87,23 +136,31 @@ export function GavetaCartao({
           {bloqueio && <Tag cor="vermelho">{t('cartao.bloqueado')}</Tag>}
           {c.archived && <Tag>{t('cartao.arquivado')}</Tag>}
         </div>
-        <h2 className="ng-gaveta-titulo">{lacrado ? t('cartao.lacrado') : c.title}</h2>
+        {naPagina ? (
+          <h1 className="ng-gaveta-titulo ng-pagina-cartao-titulo">{lacrado ? t('cartao.lacrado') : c.title}</h1>
+        ) : (
+          <h2 className="ng-gaveta-titulo">{lacrado ? t('cartao.lacrado') : c.title}</h2>
+        )}
         <p className="mini">
           {t('cartao.criado_em', { quando: dataHora(c.created_at) })}
           {c.committed_at && ` · ${t('cartao.compromissado_em', { quando: dataHora(c.committed_at) })}`}
           {c.delivered_at && ` · ${t('cartao.entregue_em', { quando: dataHora(c.delivered_at) })}`}
         </p>
-        {editavel && (
+        {(editavel || links) && (
           <div className="acoes">
-            {!lacrado && !c.delivered_at && (
+            {editavel && !lacrado && !c.delivered_at && (
               <button type="button" className="btn sm" onClick={() => setMenu(true)}>
                 {t('cartao.mover')}
               </button>
             )}
-            {lacrado && eu?.flags.envelope !== false && <AbrirEnvelope cartao={c} />}
-            <button type="button" className="btn sm ghost" onClick={() => setArquivar(true)}>
-              {t('cartao.arquivar')}
-            </button>
+            {editavel && lacrado && eu?.flags.envelope !== false && <AbrirEnvelope cartao={c} />}
+            {editavel && (
+              <button type="button" className="btn sm ghost" onClick={() => setArquivar(true)}>
+                {t('cartao.arquivar')}
+              </button>
+            )}
+            {links && <span className="ng-espaco" />}
+            {links}
           </div>
         )}
       </header>
@@ -165,8 +222,82 @@ export function GavetaCartao({
           </ul>
         </Janela>
       )}
-      {arquivar && <ConfirmarArquivar cartao={c} comProvidencia={Boolean(providencia)} fechar={() => setArquivar(false)} feito={fechar} />}
-    </Gaveta>
+      {arquivar && <ConfirmarArquivar cartao={c} comProvidencia={Boolean(providencia)} fechar={() => setArquivar(false)} feito={arquivado} />}
+    </>
+  )
+}
+
+/** Copia um texto: a API da area de transferencia e, sem ela (pagina sem HTTPS), o jeito antigo. */
+async function copiar(texto: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(texto)
+      return true
+    }
+  } catch {
+    /* tenta o jeito antigo */
+  }
+  const campo = document.createElement('textarea')
+  campo.value = texto
+  campo.setAttribute('readonly', '')
+  campo.style.position = 'fixed'
+  campo.style.opacity = '0'
+  document.body.appendChild(campo)
+  campo.select()
+  try {
+    return document.execCommand('copy')
+  } catch {
+    return false
+  } finally {
+    campo.remove()
+  }
+}
+
+/** O endereco do cartao: o caminho do roteador e o completo (com o servidor), para colar num chat. */
+export function useEnderecoDoCartao(chave: string): { caminho: string; completo: string } {
+  const { rotaDoCartao } = useNagare()
+  const caminho = rotaDoCartao(chave)
+  const href = useHref(caminho)
+  return { caminho, completo: `${window.location.origin}${href}` }
+}
+
+export function CopiarLink({ chave }: { chave: string }) {
+  const { t } = useT()
+  const avisar = useAvisos()
+  const { completo } = useEnderecoDoCartao(chave)
+  return (
+    <button
+      type="button"
+      className="btn sm sec"
+      title={t('cartao.copiar_link_dica')}
+      onClick={() =>
+        void copiar(completo).then((ok) =>
+          avisar(t(ok ? 'cartao.link_copiado' : 'cartao.link_nao_copiado', { url: completo }), ok ? 'ok' : 'info'),
+        )
+      }
+    >
+      <span aria-hidden="true">🔗</span> {t('cartao.copiar_link')}
+    </button>
+  )
+}
+
+/** Na gaveta: abrir a pagina do cartao (a volta leva ao quadro como estava) e copiar o link. */
+function LinksDoCartao({ cartao }: { cartao: CartaoDetalhe }) {
+  const { t } = useT()
+  const local = useLocation()
+  const { caminho } = useEnderecoDoCartao(cartao.key)
+  // A volta da pagina leva ao quadro com os filtros de agora, sem a gaveta aberta.
+  const busca = new URLSearchParams(local.search)
+  busca.delete('cartao')
+  const sufixo = busca.toString()
+  const de = `${local.pathname}${sufixo ? `?${sufixo}` : ''}`
+  return (
+    <>
+      <Link className="btn sm sec" to={caminho} state={{ de }} title={t('cartao.abrir_pagina_dica')}>
+        <span aria-hidden="true">↗</span> {t('cartao.abrir_pagina')}
+      </Link>
+      <CopiarLink chave={cartao.key} />
+    </>
   )
 }
 

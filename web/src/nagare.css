@@ -469,6 +469,13 @@ button.ng-pilula {
   color: inherit;
   text-decoration: none;
   touch-action: none;
+  /* O cartao e um link (24/11/2026): a barra do tempo fica presa na base, dentro do arredondado. */
+  position: relative;
+  overflow: hidden;
+  -webkit-user-drag: none;
+}
+.ng-cartao:hover {
+  text-decoration: none;
 }
 .ng-cartao:focus-visible {
   outline: 2px solid var(--navy);
@@ -732,6 +739,37 @@ button.ng-pilula {
 }
 .ng-gaveta-aba {
   padding-top: 10px;
+}
+
+/* A pagina propria do cartao (24/11/2026): o mesmo conteudo da gaveta, numa coluna central. */
+.ng-pagina-cartao {
+  max-width: 980px;
+  margin: 0 auto;
+}
+.ng-pagina-cartao-trilha {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.ng-pagina-cartao-corpo {
+  padding: 20px 26px 28px;
+}
+.ng-pagina-cartao-topo {
+  padding-right: 0;
+}
+.ng-pagina-cartao-titulo {
+  font-size: 26px;
+  line-height: 1.25;
+}
+.ng-gaveta-topo .acoes {
+  flex-wrap: wrap;
+}
+@media (max-width: 640px) {
+  .ng-pagina-cartao-corpo {
+    padding: 14px 16px 20px;
+  }
 }
 .ng-subtitulo {
   margin: 14px 0 8px;

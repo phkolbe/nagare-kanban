@@ -28,6 +28,17 @@ import { EditorWip, SeloWip } from './EditorWip'
 import { MiniMapa, SetasDaGrade, useGradeNaTela, usePanoramica } from './Navegacao'
 import { faixasDeGrupo, ordenarColunas, validarDestino, type Destino } from './regras'
 
+/**
+ * O cartao e um link de verdade (24/11/2026). Ao soltar um arrasto o navegador ainda dispara o
+ * clique no link; o dnd-kit so para a propagacao (a gaveta nao abre), mas o link navegaria.
+ * Este ouvinte na janela, que roda antes do dnd-kit, cancela a navegacao desse clique.
+ */
+function engolirCliqueDoArrasto(): void {
+  const engolir = (e: MouseEvent) => e.preventDefault()
+  window.addEventListener('click', engolir, { capture: true, once: true })
+  window.setTimeout(() => window.removeEventListener('click', engolir, { capture: true }), 0)
+}
+
 export interface AcoesDaGrade {
   abrirCartao: (cartao: Cartao) => void
   menuMover: (cartao: Cartao) => void
@@ -112,6 +123,7 @@ export function Grade({
     setSobre(null)
     acabouDeArrastar.current = true
     window.setTimeout(() => (acabouDeArrastar.current = false), 0)
+    engolirCliqueDoArrasto()
     if (cartao && colunaId && colunaId !== cartao.column_id) acoes.mover(cartao, colunaId)
     marcarArrasto(false)
   }
@@ -129,6 +141,7 @@ export function Grade({
       onDragCancel={() => {
         setArrastado(null)
         setSobre(null)
+        engolirCliqueDoArrasto()
         marcarArrasto(false)
       }}
     >

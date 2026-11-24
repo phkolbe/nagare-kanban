@@ -399,6 +399,19 @@ export const ptN3 = {
   'atalhos.ferramentas': 'Mostrar ou esconder as ferramentas do quadro',
   'menu.recolher': 'Recolher menu',
   'menu.expandir': 'Expandir o menu',
+
+  // ------------------------------------------- pagina do cartao (24/11/2026)
+  'cartao.abrir_pagina': 'Abrir em página',
+  'cartao.abrir_pagina_dica': 'Abrir o cartão numa tela inteira, com endereço próprio (Ctrl+clique abre em outra aba)',
+  'cartao.copiar_link': 'Copiar link',
+  'cartao.copiar_link_dica': 'Copiar o endereço deste cartão para mandar a alguém',
+  'cartao.link_copiado': 'Link copiado: {url}',
+  'cartao.link_nao_copiado': 'O navegador não deixou copiar. O endereço é {url}',
+  'cartao.pagina_kicker': 'Cartão',
+  'cartao.voltar_quadro': 'Voltar ao quadro {quadro}',
+  'cartao.no_quadro': 'No quadro {quadro}',
+  'cartao.nao_encontrado': 'O cartão {chave} não existe neste produto, ou você não tem acesso a ele.',
+  'cartao.produto_sem_acesso': 'Você não abre o produto {produto} pelo Nagare, então não dá para ver o cartão {chave}.',
 } as const
 
 export type ChaveN3 = keyof typeof ptN3
@@ -793,4 +806,16 @@ export const enN3: Record<ChaveN3, string> = {
   'atalhos.ferramentas': 'Show or hide the board tools',
   'menu.recolher': 'Collapse menu',
   'menu.expandir': 'Expand menu',
+
+  'cartao.abrir_pagina': 'Open as page',
+  'cartao.abrir_pagina_dica': 'Open the card on a full page, with its own address (Ctrl+click opens another tab)',
+  'cartao.copiar_link': 'Copy link',
+  'cartao.copiar_link_dica': "Copy this card's address to send to someone",
+  'cartao.link_copiado': 'Link copied: {url}',
+  'cartao.link_nao_copiado': 'The browser did not allow copying. The address is {url}',
+  'cartao.pagina_kicker': 'Card',
+  'cartao.voltar_quadro': 'Back to the {quadro} board',
+  'cartao.no_quadro': 'On the {quadro} board',
+  'cartao.nao_encontrado': 'Card {chave} does not exist in this product, or you have no access to it.',
+  'cartao.produto_sem_acesso': 'You do not open the {produto} product in the Nagare, so card {chave} cannot be shown.',
 }
