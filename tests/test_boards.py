@@ -318,6 +318,16 @@ def test_wip_status_covers_every_state_at_every_scope(client, master, new_board)
         )
         assert response.status_code == 201, response.text
 
+    def overload(column_id: str, *scopes: tuple[str, int]) -> None:
+        """POST /cards respects every WIP limit (auditoria de 09/11/2026): to load a
+        scope past its maximum, lift its limit, add the card and put the limit back."""
+        for path, _ in scopes:
+            lifted = client.patch(f"{API}/{path}", json={"wip_max": None}, headers=master)
+            assert lifted.status_code == 200, lifted.text
+        make_card(column_id)
+        for path, maximum in scopes:
+            client.patch(f"{API}/{path}", json={"wip_max": maximum}, headers=master)
+
     def wip() -> dict[str, Any]:
         response = client.get(f"{API}/boards/{board['id']}/wip", headers=master)
         assert response.status_code == 200, response.text
@@ -346,15 +356,15 @@ def test_wip_status_covers_every_state_at_every_scope(client, master, new_board)
     # already committed-and-not-delivered: the flow cell counts all 3.
     assert status["flow"] == {"count": 3, "min": 2, "max": 3, "state": "at_limit", "label": "3/3"}
 
-    make_card(doing["id"])
+    overload(doing["id"], (f"columns/{doing['id']}", 2), (f"boards/{board['id']}", 3))
     status = wip()
     assert status["columns"][doing["id"]]["state"] == "over"
     assert status["columns"][doing["id"]]["count"] == 3
     assert status["flow"]["state"] == "over"
     assert status["flow"]["count"] == 4
 
-    make_card(waiting["id"])
-    make_card(waiting["id"])
+    for _ in range(2):
+        overload(waiting["id"], (f"groups/{group_id}", 4), (f"boards/{board['id']}", 3))
     status = wip()
     assert status["columns"][waiting["id"]]["count"] == 2
     assert status["columns"][waiting["id"]]["state"] == "ok"

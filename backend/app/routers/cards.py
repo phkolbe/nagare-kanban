@@ -494,6 +494,146 @@ async def flow_count(s: AsyncSession, board_id: str) -> int:
     )
 
 
+async def lock_board(s: AsyncSession, board_id: str) -> None:
+    """Serialise WIP-checked writes on one board for the rest of the transaction.
+
+    The WIP check and the insert have to see the same snapshot, otherwise two
+    writes can both find room for the last slot in a column. SQLite's writer lock
+    already gives that; on PostgreSQL a row lock on the board does.
+    """
+    if s.get_bind().dialect.name == "postgresql":
+        await s.execute(select(Board.id).where(Board.id == board_id).with_for_update())
+
+
+def _breaches(current: int, projected: int, maximum: int | None) -> bool:
+    """Would this write push a scope past its maximum?
+
+    A write that does not increase the count in a scope never breaches it: a card
+    shuffled inside a group that is already over its limit is not making things
+    worse, and blocking it would trap work in an over-loaded group forever.
+    """
+    return maximum is not None and projected > maximum and projected > current
+
+
+async def _column_count(s: AsyncSession, column_id: str) -> int:
+    return int(
+        await s.scalar(
+            select(func.count()).where(Card.column_id == column_id, Card.archived.is_(False))
+        )
+        or 0
+    )
+
+
+async def _group_count(s: AsyncSession, board_id: str, group_id: str) -> int:
+    return int(
+        await s.scalar(
+            select(func.count())
+            .select_from(Card)
+            .join(BoardColumn, BoardColumn.id == Card.column_id)
+            .where(
+                BoardColumn.board_id == board_id,
+                BoardColumn.group_id == group_id,
+                Card.archived.is_(False),
+            )
+        )
+        or 0
+    )
+
+
+def _wip_quote(value: Any) -> str:
+    return "—" if value in (None, "") else f"“{value}”"
+
+
+def _wip_conflict(
+    policy: str, name: str, current: int, maximum: int, extra: dict[str, Any]
+) -> Conflict:
+    return Conflict(
+        "wip_limit_exceeded",
+        f"The {policy} WIP limit on {_wip_quote(name)} is full: {current} of {maximum} "
+        f"— finish something before starting something.",
+        {
+            "policy": policy,
+            "name": name,
+            "current": current,
+            "max": maximum,
+            "projected": current + 1,
+            **extra,
+        },
+    )
+
+
+async def assert_wip_room(
+    s: AsyncSession,
+    board: dict[str, Any],
+    target: dict[str, Any],
+    *,
+    service_class: str | None,
+    origin_group_id: str | None = None,
+    was_in_flight: bool = False,
+    will_be_in_flight: bool = False,
+) -> tuple[bool, list[str]]:
+    """SPEC §6.6: may one more card enter ``target``? Raises 409 ``wip_limit_exceeded``.
+
+    The one WIP rule for every way a card lands in a column — a move, a new card, a
+    demand, an opened envelope, a card restored from the archive. Call it after
+    :func:`lock_board`. ``expedite`` bypasses the column maximum only (the override
+    and its warning are returned); the group and the whole flow always hold.
+    ``origin_group_id`` is the group the card leaves (none for a new card), and the
+    two ``in_flight`` flags say whether the card counts in the flow WIP (committed,
+    not delivered) before and after.
+    """
+    wip_override = False
+    warnings: list[str] = []
+
+    # -- column policy (expedite may bypass this one only) --------------
+    column_current = await _column_count(s, target["id"])
+    if _breaches(column_current, column_current + 1, target.get("wip_max")):
+        if service_class != "expedite":
+            raise _wip_conflict(
+                "column",
+                target["name"],
+                column_current,
+                int(target["wip_max"]),
+                {"column_id": target["id"], "service_class": service_class},
+            )
+        wip_override = True
+        warnings.append(
+            f"Expedite override: {_wip_quote(target['name'])} is at its WIP maximum "
+            f"({column_current}/{target['wip_max']}) and now holds "
+            f"{column_current + 1}."
+        )
+
+    # -- group policy ---------------------------------------------------
+    group_id = target.get("group_id")
+    if group_id:
+        group = as_dict(await s.get(ColumnGroup, group_id))
+        if group is not None and group.get("wip_max") is not None:
+            group_current = await _group_count(s, board["id"], group_id)
+            projected = group_current + (0 if origin_group_id == group_id else 1)
+            if _breaches(group_current, projected, group.get("wip_max")):
+                raise _wip_conflict(
+                    "group",
+                    group["name"],
+                    group_current,
+                    int(group["wip_max"]),
+                    {"group_id": group_id, "column_id": target["id"]},
+                )
+
+    # -- whole-flow policy ----------------------------------------------
+    if board.get("wip_max") is not None:
+        flow_current = await flow_count(s, board["id"])
+        projected = flow_current + (int(will_be_in_flight) - int(was_in_flight))
+        if _breaches(flow_current, projected, board.get("wip_max")):
+            raise _wip_conflict(
+                "flow",
+                board["name"],
+                flow_current,
+                int(board["wip_max"]),
+                {"board_id": board["id"], "column_id": target["id"]},
+            )
+    return wip_override, warnings
+
+
 async def wip_status(
     s: AsyncSession, board: dict[str, Any], columns: list[dict[str, Any]] | None = None
 ) -> dict[str, Any]:
@@ -1022,6 +1162,16 @@ async def create_card(
     delivered_at = now if delivery is not None and target["id"] == delivery["id"] else None
     opened_at = None if payload.envelope_state == "sealed" else now
 
+    # A new card enters its column like a move does: same WIP policies, same lock.
+    await lock_board(s, board["id"])
+    await assert_wip_room(
+        s,
+        board,
+        target,
+        service_class=payload.service_class,
+        will_be_in_flight=committed_at is not None and delivered_at is None,
+    )
+
     card_id = new_id()
     prefix = await _key_prefix(s, project, board)
     position = await next_position(s, target["id"])
@@ -1274,6 +1424,20 @@ async def update_card(
             )
             applied.append({"field": "case", "old": old_case, "new": new_case})
 
+    if values.get("archived") is False:
+        # Restoring a card puts it back in its column: it has to fit there.
+        column = next(
+            (c for c in await board_columns(s, board["id"]) if c["id"] == row["column_id"]), None
+        )
+        if column is not None:
+            await lock_board(s, board["id"])
+            await assert_wip_room(
+                s,
+                board,
+                column,
+                service_class=values.get("service_class", row.get("service_class")),
+                will_be_in_flight=bool(row.get("committed_at")) and not row.get("delivered_at"),
+            )
     if values:
         await s.execute(update(Card).where(Card.id == row["id"]).values(**values))
     if values.get("archived") is True:

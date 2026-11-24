@@ -255,3 +255,80 @@ def test_hours_on_a_live_card_are_still_logged(client, auth, flow_board, master)
     card = make_card(client, master, flow_board["id"]).json()
     response = client.post(f"{API}/cards/{card['id']}/time", json=HOURS, headers=auth("editor"))
     assert response.status_code == 201, response.text
+
+
+# ---------------------------------------------------------------------------
+# 3. O WIP vale para todo jeito de um cartão entrar numa coluna
+# ---------------------------------------------------------------------------
+
+
+def _limit(client, master, path: str, wip_max: int) -> None:
+    body = (
+        {"wip_max": wip_max} if path.startswith("boards/") else {"wip_min": 0, "wip_max": wip_max}
+    )
+    response = client.patch(f"{API}/{path}", json=body, headers=master)
+    assert response.status_code == 200, response.text
+
+
+def test_a_new_card_respects_the_column_wip(client, master, flow_board) -> None:
+    doing = col_id(flow_board, "In Progress")
+    _limit(client, master, f"columns/{doing}", 1)
+    assert make_card(client, master, flow_board["id"], doing).status_code == 201
+    refused = make_card(client, master, flow_board["id"], doing)
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["error"]["code"] == "wip_limit_exceeded"
+    assert refused.json()["error"]["details"]["policy"] == "column"
+    expedite = make_card(client, master, flow_board["id"], doing, service_class="expedite")
+    assert expedite.status_code == 201, "expedite bypasses the column limit only"
+
+
+def test_a_new_card_respects_the_group_and_flow_wip(client, master, flow_board) -> None:
+    doing = col_id(flow_board, "In Progress")
+    group_id = next(c["group_id"] for c in flow_board["columns"] if c["id"] == doing)
+    _limit(client, master, f"groups/{group_id}", 1)
+    assert make_card(client, master, flow_board["id"], doing).status_code == 201
+    refused = make_card(client, master, flow_board["id"], doing, service_class="expedite")
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["error"]["details"]["policy"] == "group"
+
+    _limit(client, master, f"groups/{group_id}", 10)
+    _limit(client, master, f"boards/{flow_board['id']}", 1)
+    refused = make_card(client, master, flow_board["id"], doing)
+    assert refused.json()["error"]["details"]["policy"] == "flow"
+    # The backlog is before the commitment point: not in flight, no flow limit.
+    backlog = col_id(flow_board, "Backlog")
+    assert make_card(client, master, flow_board["id"], backlog).status_code == 201
+
+
+def test_a_card_is_not_restored_into_a_full_column(client, master, flow_board, db) -> None:
+    doing = col_id(flow_board, "In Progress")
+    first = make_card(client, master, flow_board["id"], doing).json()
+    client.patch(f"{API}/cards/{first['id']}", json={"archived": True}, headers=master)
+    _limit(client, master, f"columns/{doing}", 1)
+    assert make_card(client, master, flow_board["id"], doing).status_code == 201
+
+    restored = client.patch(f"{API}/cards/{first['id']}", json={"archived": False}, headers=master)
+    assert restored.status_code == 409, restored.text
+    assert restored.json()["error"]["code"] == "wip_limit_exceeded"
+    row = db.q1("SELECT archived FROM cards WHERE id = ?", first["id"])
+    assert bool(row["archived"]) is True
+
+
+def test_an_open_demand_respects_the_wip_of_its_column(client, master, scratch) -> None:
+    board = scratch["board"](template="upstream_downstream")
+    project = scratch["project"]()
+    ideas = col_id(board, "Ideas")
+    _limit(client, master, f"columns/{ideas}", 1)
+    url = f"{API}/projects/{project['id']}/demands"
+    body = {"title": "Demanda", "board_id": board["id"], "sealed": False}
+    assert client.post(url, json=body, headers=master).status_code == 201
+    refused = client.post(url, json=body, headers=master)
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["error"]["code"] == "wip_limit_exceeded"
+    # A sealed demand waits in the envelope, outside the flow: still accepted.
+    sealed = client.post(url, json=body | {"sealed": True}, headers=master)
+    assert sealed.status_code == 201, sealed.text
+
+    opened = client.post(f"{API}/cards/{sealed.json()['id']}/open-envelope", headers=master)
+    assert opened.status_code == 409, opened.text
+    assert opened.json()["error"]["code"] == "wip_limit_exceeded"

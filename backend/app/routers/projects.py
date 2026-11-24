@@ -25,9 +25,9 @@ from ..db import new_id, seconds_between, utcnow
 from ..deps import (
     CurrentUser,
     assert_board_writable,
-    require_board_write,
     get_board_or_404,
     get_session,
+    require_board_write,
     require_capability,
     require_flag,
 )
@@ -59,8 +59,8 @@ from .boards import (
     canonical_columns,
     next_card_key,
     select_cards,
-    wip_state,
 )
+from .cards import assert_wip_room, lock_board
 
 router = APIRouter(tags=["projects"])
 
@@ -186,31 +186,6 @@ async def _occupancy(s: AsyncSession, column_id: str) -> int:
             select(func.count()).where(Card.column_id == column_id, Card.archived.is_(False))
         )
         or 0
-    )
-
-
-async def _assert_column_capacity(
-    s: AsyncSession, column: dict[str, Any], service_class: str
-) -> bool:
-    """SPEC §6.6: a column WIP max blocks the move; ``expedite`` overrides it."""
-    if column["wip_max"] is None:
-        return False
-    count = await _occupancy(s, column["id"])
-    if count < int(column["wip_max"]):
-        return False
-    if service_class == "expedite":
-        return True
-    raise Conflict(
-        "wip_limit_exceeded",
-        f"“{column['name']}” is at its WIP limit.",
-        {
-            "policy": "column",
-            "column_id": column["id"],
-            "column_name": column["name"],
-            "current": count,
-            "max": int(column["wip_max"]),
-            "state": wip_state(count + 1, column["wip_min"], column["wip_max"]),
-        },
     )
 
 
@@ -474,6 +449,10 @@ async def create_demand(
         if payload.value_area
         else await default_type(s, board["product_id"])
     )
+    await lock_board(s, board["id"])
+    if not sealed:
+        # Opened at once, the demand lands in a real column: the WIP policies hold.
+        await assert_wip_room(s, board, column, service_class=payload.service_class)
     now = utcnow()
     card_id = new_id()
     s.add(
@@ -607,7 +586,25 @@ async def open_envelope(
             {"card_id": card["id"], "column_id": card["column_id"]},
         )
 
-    wip_override = await _assert_column_capacity(s, target, card["service_class"])
+    await lock_board(s, board["id"])
+    fresh = as_dict(await s.get(Card, card["id"], populate_existing=True)) or {}
+    if fresh.get("envelope_state") != "sealed":
+        raise Conflict(
+            "envelope_already_opened",
+            "This demand has already been opened.",
+            {"card_id": card["id"], "opened_at": fresh.get("opened_at")},
+        )
+    in_flight = bool(card["committed_at"]) and not card["delivered_at"]
+    wip_override, _ = await assert_wip_room(
+        s,
+        board,
+        target,
+        service_class=card["service_class"],
+        origin_group_id=source.get("group_id") if source else None,
+        was_in_flight=in_flight,
+        will_be_in_flight=bool(card["committed_at"] or target["is_commitment_point"])
+        and not card["delivered_at"],
+    )
     now = utcnow()
     previous = await s.scalar(
         select(CardMovement.moved_at)

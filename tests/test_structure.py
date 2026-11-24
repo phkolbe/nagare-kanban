@@ -874,7 +874,11 @@ def test_wip_limits_are_editable_at_column_group_and_flow_scope(client, master, 
 
     # A column edit can flip the *group* without touching the group's policy:
     # this is exactly why the UI re-fetches /wip after every change.
+    # POST /cards respects the group limit (auditoria de 09/11/2026): lift it to add one.
+    current_max = get_wip(client, master, board_id)["groups"][group_id]["max"]
+    patch_group(wip_max=None)
     make_card(client, master, board_id, review, "In review")
+    patch_group(wip_max=current_max)
     assert get_wip(client, master, board_id)["groups"][group_id]["count"] == 3
 
     # -- whole-flow scope ----------------------------------------------------

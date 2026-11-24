@@ -39,12 +39,12 @@ from ..models import (
     CardEvent,
     CardMovement,
     CardTask,
-    ColumnGroup,
     User,
     as_dict,
 )
 from ..schemas import MovementSource, MoveRequest, MoveResult, OpenSchema
 from .cards import (
+    assert_wip_room,
     board_columns,
     card_payload,
     column_order,
@@ -52,9 +52,9 @@ from .cards import (
     delivery_column,
     dwell_intervals,
     fetch_card,
-    flow_count,
     flow_totals,
     load_board,
+    lock_board,
     movement_row,
     movement_select,
     next_position,
@@ -122,72 +122,6 @@ def _quote(value: Any) -> str:
 # ---------------------------------------------------------------------------
 # WIP policy evaluation for one move
 # ---------------------------------------------------------------------------
-
-
-def _breaches(current: int, projected: int, maximum: int | None) -> bool:
-    """Would this move push a scope past its maximum?
-
-    A move that does not increase the count in a scope never breaches it: a card
-    shuffled inside a group that is already over its limit is not making things
-    worse, and blocking it would trap work in an over-loaded group forever.
-    """
-    return maximum is not None and projected > maximum and projected > current
-
-
-async def _column_count(s: AsyncSession, column_id: str) -> int:
-    return int(
-        await s.scalar(
-            select(func.count()).where(Card.column_id == column_id, Card.archived.is_(False))
-        )
-        or 0
-    )
-
-
-async def _group_count(s: AsyncSession, board_id: str, group_id: str) -> int:
-    return int(
-        await s.scalar(
-            select(func.count())
-            .select_from(Card)
-            .join(BoardColumn, BoardColumn.id == Card.column_id)
-            .where(
-                BoardColumn.board_id == board_id,
-                BoardColumn.group_id == group_id,
-                Card.archived.is_(False),
-            )
-        )
-        or 0
-    )
-
-
-async def _lock_board_for_move(s: AsyncSession, board_id: str) -> None:
-    """Serialise moves on one board for the rest of the transaction.
-
-    The WIP check and the insert have to see the same snapshot, otherwise two
-    moves can both find room for the last slot in a column. SQLite's writer lock
-    already gives that; on PostgreSQL a row lock on the board does.
-    """
-    if s.get_bind().dialect.name == "postgresql":
-        from ..models import Board
-
-        await s.execute(select(Board.id).where(Board.id == board_id).with_for_update())
-
-
-def _wip_conflict(
-    policy: str, name: str, current: int, maximum: int, extra: dict[str, Any]
-) -> Conflict:
-    return Conflict(
-        "wip_limit_exceeded",
-        f"The {policy} WIP limit on {_quote(name)} is full: {current} of {maximum} "
-        f"— finish something before starting something.",
-        {
-            "policy": policy,
-            "name": name,
-            "current": current,
-            "max": maximum,
-            "projected": current + 1,
-            **extra,
-        },
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -291,14 +225,10 @@ async def move_card(
         not card.get("delivered_at") and delivery is not None and target["id"] == delivery["id"]
     )
 
-    expedite = card.get("service_class") == "expedite"
-    wip_override = False
-    warnings: list[str] = []
-
     # Re-read inside the write transaction: the WIP check and the insert
     # have to see the same snapshot, otherwise two moves can both find room
     # for the last slot in a column.
-    await _lock_board_for_move(s, board["id"])
+    await lock_board(s, board["id"])
     fresh = as_dict(await s.get(Card, card["id"], populate_existing=True))
     if fresh is None:  # pragma: no cover - deleted between the reads
         raise NotFound("Card", card["id"], code="card_not_found")
@@ -309,56 +239,17 @@ async def move_card(
             {"card_id": card["id"], "column_id": fresh["column_id"]},
         )
 
-    # -- column policy (expedite may bypass this one only) --------------
-    column_current = await _column_count(s, target["id"])
-    if _breaches(column_current, column_current + 1, target.get("wip_max")):
-        if not expedite:
-            raise _wip_conflict(
-                "column",
-                target["name"],
-                column_current,
-                int(target["wip_max"]),
-                {"column_id": target["id"], "service_class": card.get("service_class")},
-            )
-        wip_override = True
-        warnings.append(
-            f"Expedite override: {_quote(target['name'])} is at its WIP maximum "
-            f"({column_current}/{target['wip_max']}) and now holds "
-            f"{column_current + 1}."
-        )
-
-    # -- group policy ---------------------------------------------------
-    group_id = target.get("group_id")
-    if group_id:
-        group = as_dict(await s.get(ColumnGroup, group_id))
-        if group is not None and group.get("wip_max") is not None:
-            group_current = await _group_count(s, board["id"], group_id)
-            projected = group_current + (0 if origin.get("group_id") == group_id else 1)
-            if _breaches(group_current, projected, group.get("wip_max")):
-                raise _wip_conflict(
-                    "group",
-                    group["name"],
-                    group_current,
-                    int(group["wip_max"]),
-                    {"group_id": group_id, "column_id": target["id"]},
-                )
-
-    # -- whole-flow policy ----------------------------------------------
-    if board.get("wip_max") is not None:
-        was_in_flight = bool(fresh["committed_at"]) and not fresh["delivered_at"]
-        will_be_in_flight = bool(fresh["committed_at"] or will_commit) and not (
-            fresh["delivered_at"] or will_deliver
-        )
-        flow_current = await flow_count(s, board["id"])
-        projected = flow_current + (int(will_be_in_flight) - int(was_in_flight))
-        if _breaches(flow_current, projected, board.get("wip_max")):
-            raise _wip_conflict(
-                "flow",
-                board["name"],
-                flow_current,
-                int(board["wip_max"]),
-                {"board_id": board["id"], "column_id": target["id"]},
-            )
+    # -- column, group and whole-flow policies (expedite bypasses the column only)
+    wip_override, warnings = await assert_wip_room(
+        s,
+        board,
+        target,
+        service_class=card.get("service_class"),
+        origin_group_id=origin.get("group_id"),
+        was_in_flight=bool(fresh["committed_at"]) and not fresh["delivered_at"],
+        will_be_in_flight=bool(fresh["committed_at"] or will_commit)
+        and not (fresh["delivered_at"] or will_deliver),
+    )
 
     # -- measure the interval that is closing now ------------------------
     previous = await s.scalar(
