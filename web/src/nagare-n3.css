@@ -865,3 +865,53 @@ kbd {
 .shell.recolhido .side .foot .tag {
   display: none;
 }
+
+/* ------------------------------------------------------------------ tema claro do Nagare sozinho
+   Decisao de 24/11/2026: o claro so com os tokens da plataforma ficava claro demais (fundo, coluna
+   e cartao quase do mesmo branco). Aqui o fundo da pagina e das colunas fica cinza-azulado medio,
+   como um quadro fisico; os cartoes seguem brancos, com borda e sombra mais marcadas, e os textos
+   secundarios ficam mais escuros. So no Nagare sozinho (`html[data-theme='light']`, tambem no modo
+   sistema): dentro da Pampufa nao ha `data-theme` e vale o visual claro da plataforma (N3-f). */
+html[data-theme='light'] {
+  --bg: #d5dde6;
+  --line: #b9c5d2;
+  --line-soft: #e8edf2;
+  --muted: #45525f;
+  --ng-coluna-fundo: #c6d0db;
+}
+html[data-theme='light'] body {
+  background: var(--bg);
+}
+html[data-theme='light'] .ng-celula {
+  background: var(--ng-coluna-fundo);
+  border-color: #b0bccb;
+}
+html[data-theme='light'] .ng-cabecalho {
+  border-color: #b0bccb;
+}
+html[data-theme='light'] .ng-cartao {
+  border-color: #aab7c5;
+  box-shadow:
+    0 1px 2px rgba(15, 40, 64, 0.14),
+    0 2px 6px rgba(15, 40, 64, 0.1);
+}
+html[data-theme='light'] .ng-cartao:hover {
+  box-shadow:
+    0 1px 2px rgba(15, 40, 64, 0.18),
+    0 4px 12px rgba(15, 40, 64, 0.16);
+}
+html[data-theme='light'] .ng-cartao.lacrado {
+  box-shadow: none;
+}
+html[data-theme='light'] .card {
+  border-color: #c3ced9;
+  box-shadow: 0 1px 3px rgba(15, 40, 64, 0.08);
+}
+html[data-theme='light'] .ng-novo {
+  border-color: #9aa8b8;
+  color: var(--muted);
+}
+html[data-theme='light'] .ng-novo:hover {
+  border-color: var(--muted);
+  background: rgba(255, 255, 255, 0.35);
+}
