@@ -1,5 +1,5 @@
 /**
- * O cartao no quadro: classe, chave, prazo, titulo, projeto, tarefas, idade e responsavel.
+ * O cartao no quadro: classe, chave, prazo, titulo, projeto, tarefas, tempo e responsavel.
  *
  * E um link de verdade para a pagina do cartao (24/11/2026): o clique normal abre a gaveta, mas
  * Ctrl+clique (ou Cmd, Shift) e o clique do meio abrem a pagina em outra aba, e o menu do botao
@@ -13,7 +13,8 @@ import { useHref } from 'react-router-dom'
 import { useNagare } from '../../app/contexto'
 import type { Cartao } from '../../api/tipos'
 import { useT } from '../../i18n'
-import { envelhecimento, providenciaDo, situacaoDoPrazo } from './regras'
+import { providenciaDo, situacaoDoPrazo } from './regras'
+import { BarraDoTempo, SeloDoTempo, useTempoDoCartao } from './TempoDoCartao'
 
 /** Iniciais so com letras: "Admin (demo)" vira "AD", nao "A(". */
 export function iniciaisDe(nome: string): string {
@@ -70,7 +71,7 @@ export function CartaoMini({
   /** Abre o menu de mover pelo teclado (tecla `m`). */
   menuMover: () => void
 }) {
-  const { t, data, numero } = useT()
+  const { t, data } = useT()
   const { rotaDoCartao } = useNagare()
   const endereco = useHref(rotaDoCartao(cartao.key))
   const lacrado = cartao.envelope_state === 'sealed'
@@ -80,7 +81,7 @@ export function CartaoMini({
     disabled: !podeArrastar || lacrado,
   })
   const prazo = cartao.service_class === 'fixed_date' ? situacaoDoPrazo(cartao.due_date, hoje) : null
-  const idade = envelhecimento(cartao.age_days, sleDias)
+  const tempo = useTempoDoCartao(cartao.age_days, sleDias)
   const providencia = providenciaDo(cartao)
 
   const tecla = (e: KeyboardEvent<HTMLElement>) => {
@@ -168,9 +169,7 @@ export function CartaoMini({
               {data(cartao.due_date)}
             </span>
           )}
-          {idade && cartao.age_days != null && (
-            <span className={`ng-idade ${idade}`} title={t('cartao.idade', { dias: numero(cartao.age_days, 0), sle: sleDias ?? 0 })} />
-          )}
+          {tempo && <SeloDoTempo {...tempo} />}
           {cartao.assignee_name && (
             <span className="ng-avatar" title={cartao.assignee_name}>
               {iniciaisDe(cartao.assignee_name)}
@@ -211,12 +210,7 @@ export function CartaoMini({
             </span>
           ) : null}
           <span className="ng-espaco" />
-          {idade && cartao.age_days != null && (
-            <span
-              className={`ng-idade ${idade}`}
-              title={t('cartao.idade', { dias: numero(cartao.age_days, 0), sle: sleDias ?? 0 })}
-            />
-          )}
+          {tempo && <SeloDoTempo {...tempo} />}
           {cartao.assignee_name && (
             <span className="ng-avatar" title={cartao.assignee_name}>
               {iniciaisDe(cartao.assignee_name)}
@@ -224,6 +218,7 @@ export function CartaoMini({
           )}
         </div>
       )}
+      {!lacrado && tempo && <BarraDoTempo tempo={tempo.tempo} />}
     </a>
   )
 }

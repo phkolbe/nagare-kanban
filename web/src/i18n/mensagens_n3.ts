@@ -400,7 +400,7 @@ export const ptN3 = {
   'menu.recolher': 'Recolher menu',
   'menu.expandir': 'Expandir o menu',
 
-  // ------------------------------------------- pagina do cartao (24/11/2026)
+  // ------------------------------------------- pagina do cartao e tempo do cartao (24/11/2026)
   'cartao.abrir_pagina': 'Abrir em página',
   'cartao.abrir_pagina_dica': 'Abrir o cartão numa tela inteira, com endereço próprio (Ctrl+clique abre em outra aba)',
   'cartao.copiar_link': 'Copiar link',
@@ -412,6 +412,11 @@ export const ptN3 = {
   'cartao.no_quadro': 'No quadro {quadro}',
   'cartao.nao_encontrado': 'O cartão {chave} não existe neste produto, ou você não tem acesso a ele.',
   'cartao.produto_sem_acesso': 'Você não abre o produto {produto} pelo Nagare, então não dá para ver o cartão {chave}.',
+  'cartao.tempo_selo': '{dias} d',
+  'cartao.tempo_dica': '{dias} dias de {sle} do SLE ({pct}%)',
+  'cartao.tempo_dica_um': '1 dia de {sle} do SLE ({pct}%)',
+  'cartao.tempo_sem_sle': '{dias} dias no fluxo (o quadro não tem SLE)',
+  'cartao.tempo_sem_sle_um': '1 dia no fluxo (o quadro não tem SLE)',
 } as const
 
 export type ChaveN3 = keyof typeof ptN3
@@ -818,4 +823,9 @@ export const enN3: Record<ChaveN3, string> = {
   'cartao.no_quadro': 'On the {quadro} board',
   'cartao.nao_encontrado': 'Card {chave} does not exist in this product, or you have no access to it.',
   'cartao.produto_sem_acesso': 'You do not open the {produto} product in the Nagare, so card {chave} cannot be shown.',
+  'cartao.tempo_selo': '{dias} d',
+  'cartao.tempo_dica': '{dias} days of the {sle}-day SLE ({pct}%)',
+  'cartao.tempo_dica_um': '1 day of the {sle}-day SLE ({pct}%)',
+  'cartao.tempo_sem_sle': '{dias} days in the flow (the board has no SLE)',
+  'cartao.tempo_sem_sle_um': '1 day in the flow (the board has no SLE)',
 }

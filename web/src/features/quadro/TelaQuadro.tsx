@@ -442,6 +442,7 @@ function QuadroDoProduto({ quadroId }: { quadroId: string }) {
           podeEditar={podeMover}
           fechar={fecharCartao}
           mover={(cartao, destino) => pedirMovimento(cartao, destino)}
+          idadeDias={v.cards.find((c) => c.id === cartaoAberto || c.key === cartaoAberto)?.age_days}
         />
       )}
     </>

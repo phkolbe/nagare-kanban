@@ -26,7 +26,6 @@ import { faseDoCartao } from '../features/projetos/fase'
 import {
   contarFiltros,
   destinosAFrente,
-  envelhecimento,
   faixasDeGrupo,
   filtrarNaTela,
   FILTROS_VAZIOS,
@@ -36,6 +35,7 @@ import {
   parametrosDaVisao,
   providenciaDo,
   situacaoDoPrazo,
+  tempoDoCartao,
   validarDestino,
 } from '../features/quadro/regras'
 import { CATALOGOS, pt, type Chave } from '../i18n/mensagens'
@@ -178,11 +178,14 @@ confere(
 )
 
 // ----------------------------------------------------------------- sinais do cartao
-confere('idade sem SLE', envelhecimento(10, null), null)
+// Selo "12 d" e barra (24/11/2026): verde ate 70% do SLE, ambar ate o SLE, vermelho alem.
+confere('tempo sem idade', tempoDoCartao(null, 25), null)
+confere('tempo sem SLE: selo neutro', tempoDoCartao(10.4, null), { dias: 10, situacao: 'neutro', fracao: null, pct: null })
+confere('tempo: 12 de 25 dias e 48%', tempoDoCartao(12, 25)?.pct, 48)
 confere(
-  'idade: ok, atencao, risco',
-  [envelhecimento(4, 14), envelhecimento(7, 14), envelhecimento(12, 14)],
-  ['ok', 'atencao', 'risco'],
+  'tempo: ok, atencao (70% e no SLE), risco (alem)',
+  [tempoDoCartao(17, 25), tempoDoCartao(17.5, 25), tempoDoCartao(25, 25), tempoDoCartao(25.4, 25)].map((x) => x?.situacao),
+  ['ok', 'atencao', 'atencao', 'risco'],
 )
 confere(
   'prazo vencido, proximo, em dia',

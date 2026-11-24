@@ -19,6 +19,7 @@ import { useAvisos } from '../../componentes/Avisos'
 import { Gaveta, Janela } from '../../componentes/Sobreposicao'
 import { useT } from '../../i18n'
 import { destinosAFrente, providenciaDo, validarDestino } from '../quadro/regras'
+import { BarraDoTempo, SeloDoTempo, useTempoDoCartao } from '../quadro/TempoDoCartao'
 import { AbaBloqueios } from './AbaBloqueios'
 import { useAcaoNoCartao, useCartao } from './acoes'
 import { AbaComentarios } from './AbaComentarios'
@@ -37,6 +38,7 @@ export function GavetaCartao({
   podeEditar,
   fechar,
   mover,
+  idadeDias,
 }: {
   cartaoId: string
   quadro: Quadro
@@ -45,6 +47,8 @@ export function GavetaCartao({
   podeEditar: boolean
   fechar: () => void
   mover: (cartao: Cartao, destino: string) => void
+  /** A idade do cartao como o quadro mostra (desde o compromisso); sem ela, a do cartao. */
+  idadeDias?: number | null
 }) {
   const { t } = useT()
   const cartao = useCartao(cartaoId)
@@ -73,6 +77,7 @@ export function GavetaCartao({
         wip={wip}
         podeEditar={podeEditar}
         mover={mover}
+        idadeDias={idadeDias}
         arquivado={fechar}
         links={<LinksDoCartao cartao={c} />}
       />
@@ -81,8 +86,8 @@ export function GavetaCartao({
 }
 
 /**
- * O cartao por inteiro, na gaveta e na pagina propria (24/11/2026): cabecalho com os sinais, as
- * acoes (mover, envelope, arquivar), a providencia e as abas.
+ * O cartao por inteiro, na gaveta e na pagina propria (24/11/2026): cabecalho com os sinais e o
+ * tempo frente ao SLE, as acoes (mover, envelope, arquivar), a providencia e as abas.
  */
 export function ConteudoDoCartao({
   cartao: c,
@@ -91,6 +96,7 @@ export function ConteudoDoCartao({
   wip,
   podeEditar,
   mover,
+  idadeDias,
   arquivado,
   links,
   naPagina = false,
@@ -101,6 +107,11 @@ export function ConteudoDoCartao({
   wip: SituacaoWip
   podeEditar: boolean
   mover: (cartao: Cartao, destino: string) => void
+  /**
+   * A idade do selo e da barra, a mesma do cartao no quadro (`GET /boards/{id}/view`: desde o
+   * compromisso, ou desde a entrada antes dele). O detalhe do cartao conta desde a criacao.
+   */
+  idadeDias?: number | null
   /** Depois de arquivar: a gaveta fecha, a pagina volta ao quadro. */
   arquivado: () => void
   /** "Abrir em pagina" e "Copiar link" (na gaveta) ou so o "Copiar link" (na pagina). */
@@ -111,6 +122,7 @@ export function ConteudoDoCartao({
   const [aba, setAba] = useState<Aba>('detalhes')
   const [menu, setMenu] = useState(false)
   const [arquivar, setArquivar] = useState(false)
+  const tempo = useTempoDoCartao(idadeDias !== undefined ? idadeDias : c.age_days, quadro.sle_days)
   const lacrado = c.envelope_state === 'sealed'
   const providencia = providenciaDo(c)
   const editavel = podeEditar && !c.archived
@@ -135,7 +147,13 @@ export function ConteudoDoCartao({
           {lacrado && <Tag cor="ouro">{t('cartao.lacrado')}</Tag>}
           {bloqueio && <Tag cor="vermelho">{t('cartao.bloqueado')}</Tag>}
           {c.archived && <Tag>{t('cartao.arquivado')}</Tag>}
+          {tempo && !c.delivered_at && <SeloDoTempo {...tempo} />}
         </div>
+        {tempo && !c.delivered_at && !lacrado && tempo.tempo.fracao != null && (
+          <div className="ng-tempo-linha">
+            <BarraDoTempo tempo={tempo.tempo} />
+          </div>
+        )}
         {naPagina ? (
           <h1 className="ng-gaveta-titulo ng-pagina-cartao-titulo">{lacrado ? t('cartao.lacrado') : c.title}</h1>
         ) : (

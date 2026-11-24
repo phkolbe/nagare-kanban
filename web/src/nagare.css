@@ -572,17 +572,73 @@ button.ng-pilula {
 .ng-tarefas {
   color: var(--muted);
 }
-.ng-idade {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--green);
+/* O tempo do cartao frente ao SLE (24/11/2026): selo "⏱ 12 d" e barra fina na base.
+   Verde ate 70% do SLE, ambar ate o SLE, vermelho alem; sem SLE, selo neutro e sem barra. */
+:root {
+  --ng-tempo-ok: #2a8a5e;
+  --ng-tempo-atencao: #c98a1c;
+  --ng-tempo-risco: #c0392b;
+  --ng-tempo-trilho: rgba(15, 40, 64, 0.1);
 }
-.ng-idade.atencao {
-  background: var(--amber);
+.ng-tempo {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 18px;
+  white-space: nowrap;
+  color: var(--muted);
+  background: var(--line-soft);
 }
-.ng-idade.risco {
-  background: var(--red);
+.ng-tempo.ok {
+  color: var(--green);
+  background: #e3f2ea;
+}
+.ng-tempo.atencao {
+  color: var(--amber);
+  background: #fbf0d9;
+  border-color: color-mix(in srgb, var(--ng-tempo-atencao) 45%, transparent);
+}
+.ng-tempo.risco {
+  color: var(--red);
+  background: #fbe3e0;
+  border-color: color-mix(in srgb, var(--ng-tempo-risco) 55%, transparent);
+  font-weight: 700;
+}
+.ng-tempo-barra {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: var(--ng-tempo-trilho);
+  pointer-events: none;
+}
+.ng-tempo-barra > span {
+  display: block;
+  height: 100%;
+  background: var(--ng-tempo-ok);
+}
+.ng-tempo-barra.atencao > span {
+  background: var(--ng-tempo-atencao);
+}
+.ng-tempo-barra.risco > span {
+  background: var(--ng-tempo-risco);
+}
+/* Na gaveta e na pagina do cartao a barra fica numa linha propria, sob os selos. */
+.ng-tempo-linha {
+  position: relative;
+  height: 4px;
+  margin: 8px 0 2px;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.ng-tempo-linha .ng-tempo-barra {
+  height: 4px;
 }
 .ng-avatar {
   display: inline-grid;

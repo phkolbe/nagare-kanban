@@ -119,6 +119,7 @@ function CartaoNaPagina({ inicial }: { inicial: CartaoDetalhe }) {
           wip={v.wip}
           podeEditar={podeEditar}
           mover={pedirMovimento}
+          idadeDias={v.cards.find((x) => x.id === c.id)?.age_days}
           arquivado={() => navegar(voltar)}
           links={<CopiarLink chave={c.key} />}
           naPagina

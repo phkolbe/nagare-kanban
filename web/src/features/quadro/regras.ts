@@ -158,13 +158,32 @@ export function filtrarNaTela(cartoes: readonly Cartao[], filtros: Filtros): Car
 
 // ------------------------------------------------------------------- sinais do cartao
 
-/** Idade do cartao contra o SLE do quadro: atencao a 50%, risco a 85% (como a tela antiga). */
-export function envelhecimento(idadeDias: number | null, sleDias: number | null): 'ok' | 'atencao' | 'risco' | null {
-  if (idadeDias == null || !sleDias) return null
-  const fracao = idadeDias / sleDias
-  if (fracao >= 0.85) return 'risco'
-  if (fracao >= 0.5) return 'atencao'
-  return 'ok'
+export type SituacaoDoTempo = 'ok' | 'atencao' | 'risco' | 'neutro'
+
+export interface TempoDoCartao {
+  /** Dias no fluxo, arredondados (o selo "12 d"). */
+  dias: number
+  situacao: SituacaoDoTempo
+  /** Quanto do SLE ja foi (0,48 = 48%); sem SLE no quadro, `null`. */
+  fracao: number | null
+  /** A fracao em pontos percentuais, arredondada (a dica "48%"). */
+  pct: number | null
+}
+
+/** A partir daqui o selo e a barra ficam ambar (decisao de 24/11/2026). */
+export const LIMITE_ATENCAO_SLE = 0.7
+
+/**
+ * O tempo do cartao contra o SLE do quadro (decisao de 24/11/2026): verde ate 70% do SLE, ambar
+ * de 70% ate o SLE, vermelho alem dele. Sem SLE, so o selo neutro; sem idade, nada.
+ */
+export function tempoDoCartao(idadeDias: number | null, sleDias: number | null): TempoDoCartao | null {
+  if (idadeDias == null) return null
+  const dias = Math.max(0, Math.round(idadeDias))
+  if (!sleDias || sleDias <= 0) return { dias, situacao: 'neutro', fracao: null, pct: null }
+  const fracao = Math.max(0, idadeDias) / sleDias
+  const situacao: SituacaoDoTempo = fracao > 1 ? 'risco' : fracao >= LIMITE_ATENCAO_SLE ? 'atencao' : 'ok'
+  return { dias, situacao, fracao, pct: Math.round(fracao * 100) }
 }
 
 /** Prazo do cartao: vencido, vence em ate 3 dias, ou em dia. */

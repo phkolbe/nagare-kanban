@@ -240,6 +240,22 @@ html[data-theme='dark'] textarea {
   color: var(--text);
   border-color: var(--line);
 }
+/* O tempo do cartao (24/11/2026): no escuro, fundos escuros tingidos e o texto claro da cor. */
+html[data-theme='dark'] {
+  --ng-tempo-ok: #5cc493;
+  --ng-tempo-atencao: #e8b45a;
+  --ng-tempo-risco: #f08a80;
+  --ng-tempo-trilho: rgba(255, 255, 255, 0.1);
+}
+html[data-theme='dark'] .ng-tempo.ok {
+  background: #183a2c;
+}
+html[data-theme='dark'] .ng-tempo.atencao {
+  background: #3d3018;
+}
+html[data-theme='dark'] .ng-tempo.risco {
+  background: #45201f;
+}
 html[data-theme='dark'] .ng-melhor {
   background: #1d3b2c;
 }
@@ -878,6 +894,7 @@ html[data-theme='light'] {
   --line-soft: #e8edf2;
   --muted: #45525f;
   --ng-coluna-fundo: #c6d0db;
+  --ng-tempo-trilho: rgba(15, 40, 64, 0.14);
 }
 html[data-theme='light'] body {
   background: var(--bg);
