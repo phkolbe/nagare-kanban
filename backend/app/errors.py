@@ -17,6 +17,7 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import IntegrityError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 log = logging.getLogger("nagare.errors")
@@ -200,6 +201,20 @@ def install_error_handlers(app: FastAPI) -> None:
                 "validation_error",
                 "The request body or query string failed validation.",
                 {"fields": fields},
+            ),
+        )
+
+    @app.exception_handler(IntegrityError)
+    async def _integrity_error(request: Request, exc: IntegrityError) -> JSONResponse:
+        # A unique or foreign key the request collided with — usually two requests
+        # racing to create the same thing. The client may retry; it is not a bug.
+        log.warning("Integrity conflict on %s %s: %s", request.method, request.url.path, exc.orig)
+        return _response(
+            409,
+            error_payload(
+                "conflict",
+                "The request conflicts with data that already exists or is still in use. "
+                "Reload and try again.",
             ),
         )
 

@@ -467,6 +467,46 @@ async def _observed_weekly_throughput(
     return forecast.weekly_throughput_from_deliveries(iter(delivered), weeks=weeks)
 
 
+#: Upper bounds of the run parameters. Every kind runs on the event loop, so one
+#: unbounded run (``trials=10**8``) would freeze the whole process, every product included.
+_PARAM_LIMITS: dict[str, tuple[float, float]] = {
+    "trials": (1, 100_000),
+    "backlog_size": (1, 10_000),
+    "days": (1, 3_650),
+    "weeks": (1, 104),
+    "warmup_weeks": (0, 104),
+    "sample_weeks": (1, 520),
+    "arrival_rate": (0.01, 200),
+}
+#: Longest list accepted for the caller's own throughput history.
+_MAX_SAMPLES = 520
+
+
+def _check_limits(kind: str, params: dict[str, Any]) -> None:
+    """Refuse a run whose size parameters are out of range (400, before any work)."""
+    for name, (low, high) in _PARAM_LIMITS.items():
+        value = params.get(name)
+        if value is None:
+            continue
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            number = float("nan")
+        if not low <= number <= high:  # NaN fails too
+            raise BadRequest(
+                f"'{name}' must be between {low:g} and {high:g}.",
+                code="simulation_params_out_of_range",
+                details={"kind": kind, "param": name, "min": low, "max": high},
+            )
+    samples = params.get("throughput_samples")
+    if isinstance(samples, list) and len(samples) > _MAX_SAMPLES:
+        raise BadRequest(
+            f"'throughput_samples' accepts at most {_MAX_SAMPLES} weeks.",
+            code="simulation_params_out_of_range",
+            details={"kind": kind, "param": "throughput_samples", "max": _MAX_SAMPLES},
+        )
+
+
 async def _run_kind(
     s: AsyncSession, board: dict[str, Any], kind: str, params: dict[str, Any]
 ) -> dict[str, Any]:
@@ -580,6 +620,7 @@ async def create_run(
     if payload.kind in _MONTE_CARLO_KINDS:
         await check_flag(s, "monte_carlo")
 
+    _check_limits(payload.kind, payload.params)
     try:
         results = await _run_kind(s, board, payload.kind, payload.params)
     except (KeyError, TypeError) as exc:

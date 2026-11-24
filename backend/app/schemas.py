@@ -638,7 +638,7 @@ class CardCreate(Schema):
     description: str | None = None
     service_class: ServiceClass = "standard"
     assignee_id: str | None = None
-    requester: str | None = None
+    requester: str | None = Field(default=None, max_length=200)
     size: CardSize | None = None
     #: Empty: the product's first card type.
     value_area: ValueArea | None = None
@@ -660,7 +660,7 @@ class CardUpdate(Schema):
     project_id: str | None = None
     service_class: ServiceClass | None = None
     assignee_id: str | None = None
-    requester: str | None = None
+    requester: str | None = Field(default=None, max_length=200)
     size: CardSize | None = None
     value_area: ValueArea | None = None
     demand_type: DemandType | None = None
@@ -674,6 +674,16 @@ class CardUpdate(Schema):
     case_label: str | None = Field(default=None, max_length=200)
     client_id: ExternalId | None = None
     client_name: str | None = Field(default=None, max_length=200)
+
+    @field_validator(
+        "title", "service_class", "demand_type", "position", "tags", "custom_fields", "archived"
+    )
+    @classmethod
+    def _not_null(cls, value: Any) -> Any:
+        # These columns are NOT NULL: an explicit null is a client error (422), not a 500.
+        if value is None:
+            raise ValueError("This field cannot be null; leave it out to keep its value.")
+        return value
 
 
 class TaskOut(Schema):
@@ -890,7 +900,7 @@ class DemandCreate(Schema):
     title: NonEmptyStr
     board_id: str | None = None
     description: str | None = None
-    requester: str | None = None
+    requester: str | None = Field(default=None, max_length=200)
     service_class: ServiceClass = "standard"
     #: Empty: the product's first card type.
     value_area: ValueArea | None = None
