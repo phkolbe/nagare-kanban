@@ -159,6 +159,16 @@ def _dummy_hash() -> str:
     return _dummy_hash_cache
 
 
+def throttle_key(email: str, client_ip: str | None) -> str:
+    """Failures count per address *and* client: someone typing the master's e-mail from
+    elsewhere cannot lock the master out of their own machine (auditoria 09/11/2026).
+
+    Behind a proxy that hides the client (every request from one IP), it degrades to
+    the old per-address lockout.
+    """
+    return f"{email}|{client_ip or '-'}"
+
+
 def _prune(now: float) -> None:
     """Drop records whose window has elapsed (called under the lock)."""
     stale = [
@@ -171,7 +181,7 @@ def _prune(now: float) -> None:
 
 
 def _assert_not_locked(email: str) -> None:
-    """Raise 429 while ``email`` is inside a lockout window."""
+    """Raise 429 while ``email`` (a :func:`throttle_key`) is inside a lockout window."""
     now = time.monotonic()
     with _attempts_lock:
         _prune(now)
@@ -218,14 +228,18 @@ def reset_login_throttle(email: str | None = None) -> None:
         if email is None:
             _attempts.clear()
         else:
-            _attempts.pop(email.strip().lower(), None)
+            prefix = f"{email.strip().lower()}|"
+            for key in [key for key in _attempts if key.startswith(prefix)]:
+                del _attempts[key]
 
 
 def login_throttle_state(email: str) -> dict[str, Any]:
-    """Introspect the throttle for one address (diagnostics and tests)."""
+    """Introspect the throttle for one address, worst client first (diagnostics, tests)."""
     now = time.monotonic()
+    prefix = f"{email.strip().lower()}|"
     with _attempts_lock:
-        record = _attempts.get(email.strip().lower())
+        records = [record for key, record in _attempts.items() if key.startswith(prefix)]
+        record = max(records, key=lambda r: (r.locked_until, r.failures), default=None)
         if record is None:
             return {"failures": 0, "locked": False, "retry_after_seconds": 0}
         return {
@@ -308,12 +322,15 @@ async def login(
 ) -> dict[str, Any]:
     """Authenticate a human user and return a bearer token plus their profile."""
     email = payload.email.strip().lower()
-    _assert_not_locked(email)
+    key = throttle_key(email, request.client.host if request.client else None)
+    _assert_not_locked(key)
 
     row = as_dict(await s.scalar(select(User).where(func.lower(User.email) == email)))
-    stored = row["password_hash"] if row else _dummy_hash()
-    if not verify_password(payload.password, stored) or row is None:
-        _register_failure(email)
+    hashed = row["password_hash"] if row else None
+    # An unknown e-mail and an account that only signs in through the Pampufa (no
+    # hash) burn the same PBKDF2 as a real check, so the answer time tells nothing.
+    if not verify_password(payload.password, hashed or _dummy_hash()) or not hashed:
+        _register_failure(key)
         raise Unauthorized(
             "Email or password is incorrect.",
             code="invalid_credentials",
@@ -321,7 +338,7 @@ async def login(
         )
 
     # The credentials are good; from here on failures describe account state.
-    _clear_failures(email)
+    _clear_failures(key)
     _assert_interactive(row)
 
     # Opportunistic upgrade: raising `pbkdf2_iterations` re-hashes on next login

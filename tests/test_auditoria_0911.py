@@ -390,3 +390,101 @@ def test_reading_the_workspace_never_writes_it(client, auth, db: Database) -> No
         columns = ", ".join(saved)
         marks = ", ".join("?" for _ in saved)
         db.ex(f"INSERT INTO workspace ({columns}) VALUES ({marks})", *saved.values())
+
+
+# ---------------------------------------------------------------------------
+# 7. Login, boot e o 404 de horas
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def throttle() -> Iterator[None]:
+    from backend.app.routers.auth import reset_login_throttle
+
+    reset_login_throttle()
+    yield
+    reset_login_throttle()
+
+
+def test_a_pampufa_only_account_answers_like_an_unknown_email(
+    client, db: Database, monkeypatch, throttle
+) -> None:
+    from backend.app.routers import auth as auth_router
+
+    email = f"so-pampufa-{uuid.uuid4().hex[:8]}@grupo-sr.test"
+    user_id = str(uuid.uuid4())
+    db.ex(
+        "INSERT INTO users (id, email, name, password_hash, role, is_active, created_at) "
+        "VALUES (?, ?, ?, NULL, 'viewer', ?, ?)",
+        user_id,
+        email,
+        "Só Pampufa",
+        True,
+        "2026-11-24T00:00:00Z",
+    )
+    checked: list[str | None] = []
+    real = auth_router.verify_password
+
+    def spy(password: str, stored: str | None) -> bool:
+        checked.append(stored)
+        return real(password, stored)
+
+    monkeypatch.setattr(auth_router, "verify_password", spy)
+    try:
+        for password in ("qualquer", auth_router._DUMMY_PASSWORD):
+            response = client.post(f"{API}/auth/login", json={"email": email, "password": password})
+            assert response.status_code == 401, response.text
+            assert response.json()["error"]["code"] == "invalid_credentials"
+        assert checked == [auth_router._dummy_hash()] * 2, "the same PBKDF2 as an unknown e-mail"
+    finally:
+        db.ex("DELETE FROM users WHERE id = ?", user_id)
+
+
+def test_failures_from_another_client_do_not_lock_the_master_out(client, throttle) -> None:
+    from backend.app.config import settings
+    from backend.app.errors import ApiError
+    from backend.app.routers import auth as auth_router
+
+    from conftest import ROLE_EMAILS
+
+    email = ROLE_EMAILS["master"]
+    elsewhere = auth_router.throttle_key(email, "10.6.6.6")
+    for _ in range(auth_router.MAX_FAILURES + 2):
+        auth_router._register_failure(elsewhere)
+    with pytest.raises(ApiError) as locked:
+        auth_router._assert_not_locked(elsewhere)
+    assert locked.value.status == 429
+
+    here = client.post(
+        f"{API}/auth/login", json={"email": email, "password": settings.demo_password}
+    )
+    assert here.status_code == 200, here.text
+    assert auth_router.login_throttle_state(email)["locked"] is True
+
+
+def test_a_router_that_fails_to_import_stops_the_boot_outside_dev(monkeypatch) -> None:
+    from backend.app import main
+    from backend.app.config import settings
+    from fastapi import FastAPI
+
+    monkeypatch.setattr(main, "ROUTER_MODULES", (*main.ROUTER_MODULES, "nao_existe"))
+    monkeypatch.setattr(settings, "environment", "prod")
+    with pytest.raises(RuntimeError, match="nao_existe"):
+        main._mount_routers(FastAPI())
+
+    monkeypatch.setattr(settings, "environment", "dev")
+    mounted = main._mount_routers(FastAPI())
+    assert "nao_existe" not in mounted and "cards" in mounted
+
+
+def test_hours_of_a_missing_card_say_card_not_found(client, master) -> None:
+    missing = str(uuid.uuid4())
+    response = client.get(f"{API}/cards/{missing}/time", headers=master)
+    assert response.status_code == 404
+    error = response.json()["error"]
+    assert (error["code"], error["message"]) == ("card_not_found", "Card not found.")
+    assert error["details"] == {"resource": "Card", "id": missing}
+
+    gone = client.delete(f"{API}/time/{uuid.uuid4()}", headers=master)
+    assert gone.status_code == 404
+    assert gone.json()["error"]["code"] == "time_not_found"

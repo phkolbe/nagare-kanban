@@ -61,7 +61,7 @@ def _entry_out(row: dict[str, Any], card: dict[str, Any] | None = None) -> dict[
 async def _card(s: AsyncSession, card_id: str) -> dict[str, Any]:
     card = as_dict(await s.scalar(select(Card).where(Card.id == card_id, *in_product(Card))))
     if card is None:
-        raise NotFound("card_not_found", "Card not found.")
+        raise NotFound("Card", card_id, code="card_not_found")
     return card
 
 
@@ -125,7 +125,7 @@ async def delete_time(
 ) -> dict[str, Any]:
     entry = await s.scalar(select(TimeEntry).where(TimeEntry.id == id, *in_product(TimeEntry)))
     if entry is None:
-        raise NotFound("time_not_found", "Hour entry not found.")
+        raise NotFound("Hour entry", id, code="time_not_found")
     if entry.user_id != user.get("id") and user.get("role") not in {"master", "administrator"}:
         raise Forbidden(
             "Only who logged the hours (or an administrator) removes them.", code="not_yours"

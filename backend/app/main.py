@@ -85,16 +85,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def _mount_routers(app: FastAPI) -> list[str]:
-    """Include every router listed in SPEC §1, tolerating missing modules."""
+    """Include every router listed in SPEC §1.
+
+    Outside development a router that fails to import stops the boot: otherwise its
+    routes would quietly answer 404 through the catch-all (auditoria 09/11/2026). In
+    development and tests it is logged and skipped, so the rest stays usable.
+    """
     mounted: list[str] = []
+    broken: dict[str, str] = {}
     for name in ROUTER_MODULES:
         try:
             module = importlib.import_module(f"{__package__}.routers.{name}")
-        except ImportError as exc:
-            log.warning("Router '%s' is not available yet (%s)", name, exc)
-            continue
-        except Exception as exc:  # pragma: no cover - a broken router must not kill boot
+        except Exception as exc:
             log.error("Router '%s' failed to import: %r", name, exc)
+            broken[name] = repr(exc)
             continue
 
         router: APIRouter | None = getattr(module, "router", None)
@@ -109,6 +113,8 @@ def _mount_routers(app: FastAPI) -> list[str]:
         )
         app.include_router(router, prefix="" if already_prefixed else API_PREFIX)
         mounted.append(name)
+    if broken and not settings.is_dev:
+        raise RuntimeError(f"Routers failed to import: {broken}")
     return mounted
 
 
