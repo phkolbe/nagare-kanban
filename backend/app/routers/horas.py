@@ -18,8 +18,15 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import new_id, utcnow
-from ..deps import CurrentUser, get_session, require_capability
-from ..errors import Forbidden, NotFound
+from ..deps import (
+    CurrentUser,
+    assert_board_writable,
+    get_board_or_404,
+    get_session,
+    require_board_write,
+    require_capability,
+)
+from ..errors import Conflict, Forbidden, NotFound
 from ..flow.metrics import end_of_day
 from ..models import Card, Project, TimeEntry, User, as_dict
 from ..settings import zone
@@ -82,6 +89,17 @@ async def log_time(
     user: CurrentUser = Depends(require_capability("manage_cards")),
 ) -> dict[str, Any]:
     card = await _card(s, id)
+    # Hours are a write on the card: the same board rules as moving it (role, kind,
+    # read-only flow), and an archived card takes none.
+    board = await get_board_or_404(s, card["board_id"])
+    require_board_write(user, board)
+    assert_board_writable(board)
+    if card.get("archived"):
+        raise Conflict(
+            "card_archived",
+            f"{card['key']} is archived; restore it before logging hours on it.",
+            {"card_id": card["id"]},
+        )
     entry = TimeEntry(
         id=new_id(),
         product_id=product_for_new_rows(),

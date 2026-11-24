@@ -61,6 +61,8 @@ from ..models import (
     CardTask,
     ColumnGroup,
     Comment,
+    ProductLink,
+    ProductLinkHistory,
     Project,
     TimeEntry,
     User,
@@ -1510,6 +1512,36 @@ async def get_board(
     return await _board_out(s, await get_board_or_404(s, id))
 
 
+async def assert_not_product_board(s: AsyncSession, board: dict[str, Any], *, hard: bool) -> None:
+    """The board that receives a product's providências cannot be archived or deleted.
+
+    Its cards would keep arriving on an archived board (and the Pampufa would never hear
+    about the open ones); the product is moved to another flow first (NG14). A board
+    that ever received them keeps that history, so it can be archived but not deleted.
+    """
+    product = await s.scalar(
+        select(ProductLink.product_id).where(ProductLink.board_id == board["id"])
+    )
+    if product is not None:
+        raise Conflict(
+            "board_linked_to_product",
+            "This board receives the providências of its product. Link the product to "
+            "another flow first, then archive this one.",
+            {"board_id": board["id"], "product_id": product},
+        )
+    if hard:
+        linked_before = await s.scalar(
+            select(ProductLinkHistory.id).where(ProductLinkHistory.board_id == board["id"]).limit(1)
+        )
+        if linked_before is not None:
+            raise Conflict(
+                "board_has_link_history",
+                "This board once received a product's providências and keeps that history: "
+                "archive it instead of deleting it.",
+                {"board_id": board["id"]},
+            )
+
+
 @router.patch("/boards/{id}", response_model=BoardOut, summary="Update board policies")
 async def update_board(
     id: str,
@@ -1525,6 +1557,8 @@ async def update_board(
     fields = payload.model_dump(exclude_unset=True)
     if not fields:
         return await _board_out(s, board)
+    if fields.get("archived"):
+        await assert_not_product_board(s, board, hard=False)
     if (
         fields.get("wip_min") is not None
         and fields.get("wip_max") is not None
@@ -1562,9 +1596,11 @@ async def delete_board(
                 code="insufficient_role",
                 details={"role": user.get("role")},
             )
+        await assert_not_product_board(s, board, hard=True)
         await s.execute(delete(Board).where(Board.id == board["id"]))
         await s.commit()
         return {"ok": True, "id": board["id"], "message": "Board deleted with its history."}
+    await assert_not_product_board(s, board, hard=False)
     await s.execute(update(Board).where(Board.id == board["id"]).values(archived=True))
     await s.commit()
     return {"ok": True, "id": board["id"], "message": "Board archived."}

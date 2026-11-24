@@ -62,11 +62,10 @@ def make_card(client, headers, board_id: str, column_id: str | None = None, **kw
 
 
 def test_an_integrity_error_is_a_409_conflict_not_a_500() -> None:
+    from backend.app.errors import install_error_handlers
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from sqlalchemy.exc import IntegrityError
-
-    from backend.app.errors import install_error_handlers
 
     app = FastAPI()
     install_error_handlers(app)
@@ -93,7 +92,9 @@ def test_explicit_null_on_a_required_card_field_is_a_422(client, master, flow_bo
     assert response.json()["error"]["details"]["fields"][0]["field"] == field
 
 
-def test_explicit_null_on_an_optional_card_field_still_clears_it(client, master, flow_board) -> None:
+def test_explicit_null_on_an_optional_card_field_still_clears_it(
+    client, master, flow_board
+) -> None:
     card = make_card(client, master, flow_board["id"], requester="Sarah").json()
     response = client.patch(
         f"{API}/cards/{card['id']}",
@@ -156,3 +157,101 @@ def test_a_simulation_run_inside_the_limits_still_runs(
     )
     assert response.status_code == 201, response.text
     created_runs.append(response.json()["id"])
+
+
+# ---------------------------------------------------------------------------
+# 2. Demanda, envelope e horas respeitam as regras de escrita do quadro
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def scratch(client, master) -> Iterator[dict[str, Any]]:
+    """Quadros e projetos descartáveis; os quadros saem antes dos projetos."""
+    made: dict[str, list[str]] = {"boards": [], "projects": []}
+
+    def board(**kw: Any) -> dict[str, Any]:
+        row = _make_board(client, master, **kw)
+        made["boards"].append(row["id"])
+        return row
+
+    def project() -> dict[str, Any]:
+        body = {"name": f"Auditoria {uuid.uuid4().hex[:6]}", "key": f"A{uuid.uuid4().hex[:5]}"}
+        response = client.post(
+            f"{API}/projects", json=body | {"key": body["key"].upper()}, headers=master
+        )
+        assert response.status_code == 201, response.text
+        made["projects"].append(response.json()["id"])
+        return response.json()
+
+    yield {"board": board, "project": project}
+    for board_id in made["boards"]:
+        client.delete(f"{API}/boards/{board_id}?hard=true", headers=master)
+    for project_id in made["projects"]:
+        client.delete(f"{API}/projects/{project_id}", headers=master)
+
+
+def test_an_editor_cannot_capture_a_demand_on_a_simulator_board(client, auth, scratch) -> None:
+    board = scratch["board"](kind="simulator", template="upstream_downstream")
+    project = scratch["project"]()
+    response = client.post(
+        f"{API}/projects/{project['id']}/demands",
+        json={"title": "Demanda", "board_id": board["id"]},
+        headers=auth("editor"),
+    )
+    assert response.status_code == 403, response.text
+    assert response.json()["error"]["code"] == "board_write_forbidden"
+
+
+def test_an_editor_cannot_open_an_envelope_on_a_simulator_board(
+    client, auth, master, scratch
+) -> None:
+    board = scratch["board"](kind="simulator", template="upstream_downstream")
+    project = scratch["project"]()
+    demand = client.post(
+        f"{API}/projects/{project['id']}/demands",
+        json={"title": "Demanda", "board_id": board["id"]},
+        headers=master,
+    ).json()
+    response = client.post(f"{API}/cards/{demand['id']}/open-envelope", headers=auth("editor"))
+    assert response.status_code == 403, response.text
+    assert response.json()["error"]["code"] == "board_write_forbidden"
+
+
+def test_an_archived_demand_is_not_opened(client, master, scratch) -> None:
+    board = scratch["board"](template="upstream_downstream")
+    project = scratch["project"]()
+    demand = client.post(
+        f"{API}/projects/{project['id']}/demands",
+        json={"title": "Demanda", "board_id": board["id"]},
+        headers=master,
+    ).json()
+    archived = client.patch(f"{API}/cards/{demand['id']}", json={"archived": True}, headers=master)
+    assert archived.status_code == 200, archived.text
+    response = client.post(f"{API}/cards/{demand['id']}/open-envelope", headers=master)
+    assert response.status_code == 409, response.text
+    assert response.json()["error"]["code"] == "card_archived"
+
+
+HOURS = {"worked_on": "2026-11-20", "minutes": 30}
+
+
+def test_an_editor_cannot_log_hours_on_a_simulator_board(client, auth, master, scratch) -> None:
+    board = scratch["board"](kind="simulator")
+    card = make_card(client, master, board["id"]).json()
+    response = client.post(f"{API}/cards/{card['id']}/time", json=HOURS, headers=auth("editor"))
+    assert response.status_code == 403, response.text
+    assert response.json()["error"]["code"] == "board_write_forbidden"
+
+
+def test_hours_are_not_logged_on_an_archived_card(client, master, flow_board) -> None:
+    card = make_card(client, master, flow_board["id"]).json()
+    client.patch(f"{API}/cards/{card['id']}", json={"archived": True}, headers=master)
+    response = client.post(f"{API}/cards/{card['id']}/time", json=HOURS, headers=master)
+    assert response.status_code == 409, response.text
+    assert response.json()["error"]["code"] == "card_archived"
+
+
+def test_hours_on_a_live_card_are_still_logged(client, auth, flow_board, master) -> None:
+    card = make_card(client, master, flow_board["id"]).json()
+    response = client.post(f"{API}/cards/{card['id']}/time", json=HOURS, headers=auth("editor"))
+    assert response.status_code == 201, response.text

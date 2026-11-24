@@ -25,6 +25,7 @@ from ..db import new_id, seconds_between, utcnow
 from ..deps import (
     CurrentUser,
     assert_board_writable,
+    require_board_write,
     get_board_or_404,
     get_session,
     require_capability,
@@ -446,6 +447,7 @@ async def create_demand(
     """
     project = await _get_project_or_404(s, id)
     board = await _resolve_demand_board(s, payload.board_id)
+    require_board_write(user, board)
     assert_board_writable(board)
     columns = await canonical_columns(s, board["id"])
     if not columns:
@@ -579,6 +581,12 @@ async def open_envelope(
         )
     if card is None:
         raise NotFound("Card", id, code="card_not_found")
+    if card.get("archived"):
+        raise Conflict(
+            "card_archived",
+            f"{card['key']} is archived; restore it before opening it.",
+            {"card_id": card["id"]},
+        )
     if card["envelope_state"] != "sealed":
         raise Conflict(
             "envelope_already_opened",
@@ -587,6 +595,7 @@ async def open_envelope(
         )
 
     board = await get_board_or_404(s, card["board_id"])
+    require_board_write(user, board)
     assert_board_writable(board)
     columns = await canonical_columns(s, board["id"])
     source = next((c for c in columns if c["id"] == card["column_id"]), None)

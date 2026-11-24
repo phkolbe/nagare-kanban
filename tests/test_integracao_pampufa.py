@@ -1137,3 +1137,38 @@ def test_card_dates_from_the_screens_are_validated(client, auth, board_id: str) 
     assert bad.status_code == 422, bad.text
     assert client.get(f"{API}/cards?due_before=30/11/2026", headers=master).status_code == 422
     assert client.get(f"{API}/cards?due_before=2026-11-30", headers=master).status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Auditoria de 09/11/2026: achados médios e baixos
+# ---------------------------------------------------------------------------
+
+
+def test_the_product_board_is_neither_archived_nor_deleted(client, auth, pampufa) -> None:
+    service = pampufa.service()
+    created = client.post(
+        f"{API}/integration/providencias", json=providencia(), headers=headers(service)
+    )
+    assert created.status_code in (200, 201), created.text
+    link = client.get(f"{API}/integration/product", headers=headers(service)).json()["link"]
+    board_id = link["board"]["id"]
+    admin = pampufa.person({PRODUCT: ["nagare.admin"]})
+
+    archived = client.patch(
+        f"{API}/boards/{board_id}", json={"archived": True}, headers=headers(admin)
+    )
+    assert archived.status_code == 409, archived.text
+    assert archived.json()["error"]["code"] == "board_linked_to_product"
+
+    soft = client.delete(f"{API}/boards/{board_id}", headers=headers(admin))
+    assert soft.status_code == 409, soft.text
+
+    master = auth("master") | {"X-Produto": PRODUCT}
+    hard = client.delete(f"{API}/boards/{board_id}?hard=true", headers=master)
+    assert hard.status_code == 409, hard.text
+    assert hard.json()["error"]["code"] == "board_linked_to_product"
+
+    renamed = client.patch(
+        f"{API}/boards/{board_id}", json={"name": "Fluxo do SR Adv"}, headers=headers(admin)
+    )
+    assert renamed.status_code == 200, renamed.text
