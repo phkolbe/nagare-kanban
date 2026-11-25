@@ -1,10 +1,14 @@
 # Nagare Kanban — REST API Reference
 
+> **Documentation status:** checked against the code on 25/11/2026 (commit `26b2e6c`):
+> every route of `app.openapi()`, every router, the error codes raised in `backend/app`
+> and the capability and flag catalogues in `config.py`.
+
 This describes the API **as implemented**: it was written from the OpenAPI document the
 app generates (`app.openapi()`) and checked against every router in
-`backend/app/routers/` plus `deps.py`, `tenancy.py`, `pampufa.py`, `integration.py` and
-`errors.py`. The live server (`python run.py`, `nagare.master@grupo-sr.com.br` / `teste12345`) was used
-to capture the examples.
+`backend/app/routers/` plus `deps.py`, `tenancy.py`, `settings.py`, `pampufa.py`,
+`integration.py`, `reports/` and `errors.py`. The live server (`python run.py`,
+`nagare.master@grupo-sr.com.br` / `teste12345`) was used to capture the examples.
 
 - **Base path.** Every endpoint below is mounted under `/api/v1` (e.g.
   `POST /api/v1/auth/login`). Standalone: `http://127.0.0.1:8770/api/v1` (also
@@ -14,9 +18,15 @@ to capture the examples.
 - **Discovery.** Swagger UI at `/docs`, ReDoc at `/redoc`, the raw OpenAPI document at
   `/openapi.json` (none of these under `/api/v1`). The OpenAPI document is the ground
   truth for the route table: `curl -s :8770/openapi.json | jq '.paths | keys'`.
-- **Size.** 91 operations: 1 meta route (`GET /health`) and ten routers — `auth` (5),
-  `users` (6), `flags` (9), `boards` (17), `projects` (7), `cards` (16), `movements` (4),
-  `metrics` (11), `simulator` (8), `integration` (7). Every one is listed below.
+- **Size.** 114 operations: 1 meta route (`GET /health`) and the fourteen routers of
+  `ROUTER_MODULES` — `auth` (5), `users` (6), `flags` (9), `boards` (18), `projects` (7),
+  `cards` (16), `card_types` (5), `movements` (4), `metrics` (12), `simulator` (8),
+  `integration` (13), `horas` (4, tag `hours`), `notifications` (3), `reports` (3). Every
+  one is listed below. Outside the OpenAPI document there is also the Prometheus
+  `GET /metrics` (not under `/api/v1`, §17).
+- **Two modes, one API.** Most routes work in both modes. **Standalone only** (a Pampufa
+  token answers `403 standalone_only`): users (§5), flags, plans and workspace (§6), the
+  simulator (§12), Reports (§15) and the bell (§16).
 - **Lists** answer `{"items": [...], "total": n}` uniformly; ids are UUID v7 as dashed
   text, instants ISO-8601 `Z` strings.
 
@@ -43,7 +53,9 @@ document follows the code. The decisions behind that work are in the Obsidian va
 12. [Simulator (SIM)](#12-simulator-sim)
 13. [Integrating with Nagare (MCP)](#13-integrating-with-nagare-mcp)
 14. [Integration with the Pampufa platform](#14-integration-with-the-pampufa-platform)
-15. [Appendix: implementation notes](#15-appendix-implementation-notes)
+15. [Reports (standalone)](#15-reports-standalone)
+16. [Notifications: the standalone bell](#16-notifications-the-standalone-bell)
+17. [Appendix: implementation notes](#17-appendix-implementation-notes)
 
 ---
 
@@ -94,10 +106,14 @@ POST /api/v1/auth/login
   `403 interactive_login_denied` *after* verifying the password, so the check cannot be
   used to enumerate accounts. Account-state failures (`account_disabled`) are likewise
   reported only after the password matched.
-- **Brute-force throttle** (in memory, per email): 5 failures inside 15 minutes lock the
-  address for 30s, doubling per further failure up to 15 minutes →
-  `429 too_many_login_attempts` with `details.retry_after_seconds`. Unknown emails pay
-  for one real PBKDF2 comparison so timing does not leak which addresses exist.
+- **Brute-force throttle** (in memory, per email **and client address**, so someone
+  typing the master's e-mail elsewhere cannot lock the master out of their own machine;
+  behind a proxy that hides the client it degrades to per email): 5 failures inside 15
+  minutes lock that pair for 30s, doubling per further failure up to 15 minutes →
+  `429 too_many_login_attempts` with `details.retry_after_seconds`. Unknown emails, and
+  accounts that sign in only through the Pampufa (no password hash), pay for one real
+  PBKDF2 comparison and answer the same `401 invalid_credentials`, so timing does not
+  leak which addresses exist.
 
 ### 1.2 Pampufa login (the Tarefas module of each product)
 
@@ -133,8 +149,11 @@ follows (`backend/app/tenancy.py`):
 
 | Way in | No header | Header present |
 |---|---|---|
-| Local token | product `nagare` | allowed for `master` only, else `403 product_forbidden` |
+| Local token | product `nagare` | `master` works as `master`; `administrator` and `viewer` read the product as `viewer`; `editor` and `simulator` → `403 product_forbidden` (`tenancy.LOCAL_ROLES_IN_PRODUCTS`) |
 | Pampufa token | `400 product_required` | the role comes from the token's roles **in that product** |
+
+`GET /integration/products` (§14.2) lists the products the caller can open and the role
+held in each — the product picker of the standalone screens.
 
 **Pampufa roles → Nagare role in the product** (NG6, strongest first):
 
@@ -207,29 +226,39 @@ Found by searching every `code=` / `Conflict(...)` / `ApiError(...)` in `backend
 | 400 | `refresh_through_pampufa` | `auth.py` | `POST /auth/refresh` with a Pampufa token: the Pampufa renews it |
 | 400 | `not_a_simulator_board` | `simulator.py` | Write to a non-simulator board through `/simulator/*` |
 | 400 | `invalid_simulation_params` / `simulation_failed` / `compare_failed` | `simulator.py` | Missing/invalid run parameter; engine refused the input; comparison impossible |
+| 400 | `simulation_params_out_of_range` | `simulator.py` | A size parameter outside its range (`trials` 1–100,000, `backlog_size` 1–10,000, `days` 1–3,650, `weeks` 1–104, `sample_weeks` 1–520, …; `details.param`, `min`, `max`) |
+| 400 | `forecast_failed` | `metrics.py` | The board's history cannot feed `GET /boards/{id}/metrics/forecast` |
+| 400 | `invalid_card_type` / `card_type_name_required` / `card_type_order_mismatch` | `card_types.py` | Card type not active in the product; empty name; reorder without every key once (§9.1) |
+| 400 | `case_link_unavailable` | `cases.py` | A card linked to an SR Adv case in the standalone Nagare (§9.2) |
+| 400 | `report_unknown` / `report_bad_period` / `report_bad_date` / `report_board_required` / `report_project_required` | `reports.py`, `reports/modelos.py` | Reports: unknown template, bad period or date, missing scope (§15) |
 | 401 | `missing_token` | `deps.py` | No `Authorization: Bearer` |
 | 401 | `invalid_token` / `token_expired` | `security.py`, `deps.py` | Untrustworthy or expired token (local or Pampufa) |
 | 401 | `unknown_subject` | `deps.py`, `auth.py` | Token's `sub` no longer exists |
 | 401 | `invalid_credentials` | `auth.py` | Wrong email or password (same body for both) |
 | 401 | `pampufa_not_configured` / `pampufa_profile_unavailable` / `pampufa_link_conflict` | `deps.py`, `pampufa.py` | See §1.2 |
+| 401 / 403 | `metrics_token` / `metrics_local_only` | `observability.py` | Prometheus `GET /metrics`: wrong `NAGARE_METRICS_TOKEN`; no token configured and the caller is not the loopback (§17) |
 | 403 | `account_disabled` | `auth.py`, `deps.py` | Deactivated account |
 | 403 | `interactive_login_denied` | `auth.py` | `system` tried to sign in |
-| 403 | `product_forbidden` | `tenancy.py`, `deps.py` | No Nagare role in that product, or a non-master local login with `X-Produto` |
+| 403 | `product_forbidden` | `tenancy.py`, `deps.py` | No Nagare role in that product, or a local `editor`/`simulator` with `X-Produto` (§1.3) |
 | 403 | `insufficient_role` | `deps.py`, `boards.py`, `projects.py` | Role not allowed for this action |
 | 403 | `board_write_forbidden` | `deps.py` | Role cannot write this board's content |
 | 403 | `feature_disabled` / `plan_upgrade_required` | `deps.require_flag` | Flag off; active plan below the flag's `min_plan` |
 | 403 | `master_account_protected` / `master_role_forbidden` | `users.py` | Non-master touching a master / granting master |
 | 403 | `plan_change_forbidden` | `flags.py` | Non-master switching the active plan |
 | 403 | `comment_not_yours` | `cards.py` | Editing someone else's comment (non-admin) |
+| 403 | `not_yours` | `horas.py` | Removing someone else's hour entry (non-admin, §9.3) |
 | 403 | `system_has_no_preferences` | `auth.py` | `PATCH /auth/me` by a service identity |
-| 403 | `standalone_only` | `deps.require_standalone` | Users, flags, plans, workspace or simulator called with a Pampufa token (§5, §6, §12) |
-| 404 | `board_not_found`, `column_not_found`, `group_not_found`, `card_not_found`, `project_not_found`, `user_not_found`, `task_not_found`, `comment_not_found`, `flag_not_found`, `plan_not_found`, `run_not_found`, `providencia_not_found` | throughout | Lookups; boards, cards and projects also accept their human key (slug, `NGR-104`, `NGR`) |
+| 403 | `standalone_only` | `deps.require_standalone` | Users, flags, plans, workspace, simulator, Reports or the bell called with a Pampufa token (§5, §6, §12, §15, §16) |
+| 404 | `board_not_found`, `column_not_found`, `group_not_found`, `card_not_found`, `project_not_found`, `user_not_found`, `task_not_found`, `comment_not_found`, `flag_not_found`, `plan_not_found`, `run_not_found`, `providencia_not_found`, `card_type_not_found`, `time_not_found`, `notification_not_found` | throughout | Lookups; boards, cards and projects also accept their human key (slug, `NGR-104`, `NGR`) — except the hour routes, which take the card id only (§9.3) |
 | 404 | `not_found` | `main.py` catch-all | No API route for that method and path |
 | 405 | `method_not_allowed` | Starlette | Wrong verb on a real path |
 | 409 | `backward_move_blocked` | `movements.py` | Move against the flow without an allowed `force` |
-| 409 | `wip_limit_exceeded` | `movements.py`, `projects.py` | Column/group/flow maximum would break (`details.policy`) |
+| 409 | `wip_limit_exceeded` | `cards.assert_wip_room` (moves, new cards, demands, opened envelopes, unarchiving) | Column/group/flow maximum would break (`details.policy`) |
 | 409 | `envelope_sealed` / `envelope_already_opened` / `envelope_column_missing` | `movements.py`, `projects.py` | Envelope state conflicts |
-| 409 | `card_archived` / `card_moved_elsewhere` / `same_column_move` | `movements.py`, `boards.py` | Move preconditions |
+| 409 | `card_archived` / `card_moved_elsewhere` / `same_column_move` | `movements.py`, `boards.py`, `horas.py` | Move preconditions; hours on an archived card |
+| 409 | `card_type_name_taken` / `card_type_last_active` / `card_type_in_use` | `card_types.py` | Card type guardrails (§9.1) |
+| 409 | `board_linked_to_product` / `board_has_link_history` | `boards.py` | Archiving the board that receives a product's providências (link another flow first, §14.4); hard-deleting a board that ever received them (archive it instead) |
+| 409 | `project_managed_elsewhere` | `projects.py` | `PATCH /projects/{id}` touching name, status, dates or `archived` of a project kept by another service (§14.2, GJ-1); `details.url` opens it there |
 | 409 | `card_already_blocked` / `card_not_blocked` | `cards.py` | Blocker state |
 | 409 | `flow_locked` | `boards.py` | Structural change on a product board that holds work (§7.1) |
 | 409 | `board_read_only` | `deps.py` | Board swapped out of its product (§14.4): history only |
@@ -268,7 +297,7 @@ Shown without the three problem+json fields, which every body carries as in §2.
   "details": {"board_id": "01a14b6d-...", "product_id": "sr-adv", "change": "create_column"}}}
 
 403 {"error": {"code": "product_forbidden",
-  "message": "Only the master account can work in a Pampufa product with the local login.",
+  "message": "Your local role cannot work in a Pampufa product.",
   "details": {"product": "sr-adv"}}}
 
 403 {"error": {"code": "plan_upgrade_required",
@@ -301,6 +330,7 @@ consumed by the API guards, `GET /users/roles` and `GET /auth/me`:
 | `read_boards_metrics` | every role |
 | `simulator_boards` | master, administrator, simulator |
 | `api_tokens` | master, administrator, system |
+| `read_reports` | every role (whoever reads metrics; decision R21, 24/11/2026) |
 
 Guards come in three shapes:
 
@@ -323,9 +353,16 @@ matrix applies per product.
 **Feature flags.** A flag is *effective* when `feature_flags.is_enabled` **and**
 `tier(active_plan) ≥ tier(flag.min_plan)`. `require_flag(key)` answers
 `403 feature_disabled` (off) or `403 plan_upgrade_required` (plan too low); an unknown
-flag key never gates anything. Flags and the plan are **workspace-wide**, the same for
-every product (NG15: the Grupo SR runs on enterprise with everything on).
-`GET /flags/effective` returns exactly the map `require_flag` enforces.
+flag key never gates anything. `GET /flags/effective` returns exactly the map
+`require_flag` enforces.
+
+**Settings by product (D46, `ng_0005`, `backend/app/settings.py`).** The workspace row is
+the default and the standalone Nagare's own configuration. A Pampufa product may keep its
+own **active plan**, **time zone** and **flag switches** in `product_settings`; whatever it
+leaves empty falls back to the workspace. A flag's `min_plan` is global: per product a flag
+is only switched on or off. The effective map, `require_flag`, the time zone of the
+metrics and the period of the Reports all read the product of the request. The local
+master edits a product's settings through the admin routes of §6 with `X-Produto`.
 
 ---
 
@@ -335,8 +372,8 @@ every product (NG15: the Grupo SR runs on enterprise with everything on).
 |---|---|---|
 | `POST /auth/login` | public | `{email, password}` → `TokenResponse` (§1.1) |
 | `POST /auth/refresh` | local token | Re-mints a **local** token from the database row; refuses `system`; a Pampufa token answers `400 refresh_through_pampufa` (the platform renews its own) |
-| `GET /auth/me` | any valid token | Profile, capability matrix, effective flags, locale, way in, product |
-| `PATCH /auth/me` | any valid token except `system` | `{locale: "pt-BR" \| "en" \| null}` — the person's language |
+| `GET /auth/me` | any valid token | Profile, capability matrix, effective flags, locale, preferences, way in, product |
+| `PATCH /auth/me` | any valid token except `system` (`403 system_has_no_preferences`) | `{locale?: "pt-BR" \| "en" \| null, preferences?: {board_toolbar?: "bar" \| "panel" \| null}}` — only the fields sent change; `locale: null` goes back to the default of the way in, a preference set to `null` goes back to its default. Stored on the user, so it follows the person to every device |
 | `GET /auth/capabilities` | any valid token | `{capability: bool}` for the caller's role |
 
 `GET /auth/me` (and the `PATCH` answer):
@@ -349,17 +386,20 @@ every product (NG15: the Grupo SR runs on enterprise with everything on).
   "role_description": "Owns the workspace: billing plan, feature flags, users and every board.",
   "capabilities": {"manage_plans_flags": true, "manage_users": true, "...": true},
   "granted": ["manage_plans_flags", "manage_users", "..."],
-  "flags": {"api_access": true, "card_history": true, "...": "(19 keys)"},
+  "flags": {"api_access": true, "card_history": true, "...": "(21 keys)"},
   "expires_in": 43200,
   "locale": "pt-BR",
   "locale_chosen": "pt-BR",
+  "preferences": {"board_toolbar": "bar"},
   "via": "local",
   "product_id": "nagare"
 }
 ```
 
 Through the Pampufa, `role` is the role **in the product** of `X-Produto`, `via` is
-`pampufa` and `product_id` that product.
+`pampufa` and `product_id` that product. `preferences.board_toolbar` is where the board
+tools live: `bar` (a collapsible bar above the board, the default) or `panel` (a floating
+panel).
 
 ### 4.1 Language
 
@@ -412,16 +452,20 @@ the platform the shell reads the effective flags from `GET /auth/me`.
 | `GET /flags` | `?category=` | master | Switchboard grouped by category, with enabled/effective counts and the active plan |
 | `GET /flags/effective` | — | any | `{key: bool}` — what `require_flag` enforces |
 | `GET /flags/catalogue` | — | any | The static flag table from `config.py` (name, description, `min_plan`, category) |
-| `PATCH /flags/{key}` | `{is_enabled?, min_plan?}` | master | `404 flag_not_found` |
+| `PATCH /flags/{key}` | `{is_enabled?, min_plan?}` | master | `404 flag_not_found`. With `X-Produto` of a Pampufa product, `is_enabled` is that product's own switch (§3); `min_plan` is always global |
 | `GET /plans` | — | master | Cheapest tier first |
 | `POST /plans` | `{name, slug, price_month, price_year, currency, tier_order, description, flags[], is_active}` | master | `409 plan_slug_taken`, `400 unknown_flag` |
 | `PATCH /plans/{plan_id}` | any subset | master | Cannot deactivate the active plan (`409 active_plan_locked`) |
 | `GET /workspace` | — | any | Workspace, active plan, effective flags, plan list |
-| `PATCH /workspace` | `{name?, active_plan_id?, timezone?}` | `manage_users`; switching `active_plan_id` is master-only (`403 plan_change_forbidden`), a retired plan → `400 plan_inactive` | Re-gates every flag in the same response |
+| `PATCH /workspace` | `{name?, active_plan_id?, timezone?}` | `manage_users`; switching `active_plan_id` is master-only (`403 plan_change_forbidden`), a retired plan → `400 plan_inactive` | Re-gates every flag in the same response. With `X-Produto` of a Pampufa product, the plan and the time zone are stored as that product's own (§3); the name stays the workspace's |
 
-19 flags in 7 categories, 4 plans `free`(0) → `team`(1) → `business`(2) →
-`enterprise`(3), each cumulative with the tier below. The seeded workspace runs on
-Business with every flag on.
+`GET /workspace` (and the `PATCH` answer) reports the settings in force for the product of
+the request: its own plan and time zone over the workspace's.
+
+21 flags in 7 categories, 4 plans `free`(0) → `team`(1) → `business`(2) →
+`enterprise`(3), each cumulative with the tier below. Since 24/11/2026: `reports`
+(metrics, business) and `reports_portfolio` (metrics, enterprise), §15. The seeded
+workspace runs on **Enterprise** with every flag on (NG15).
 
 ---
 
@@ -434,7 +478,7 @@ Business with every flag on.
 | `POST /boards` | `{name, description?, kind, template?, count_envelope_in_metrics?, confirm_moves?, wip_min?, wip_max?, sle_days?, sle_percentile?}` | master/administrator; `kind=simulator` also `simulator` | `simulator` for `kind=simulator` |
 | `GET /boards/{id}` | — | any | — |
 | `PATCH /boards/{id}` | any subset of `{name, description, count_envelope_in_metrics, confirm_moves, wip_min, wip_max, sle_days, sle_percentile, archived}` | structure role | — |
-| `DELETE /boards/{id}` | `?hard=true` | archive: structure role; hard delete: master only | — |
+| `DELETE /boards/{id}` | `?hard=true` | archive: structure role; hard delete: master only. The board that receives a product's providências cannot be archived (here or by `PATCH archived: true`) → `409 board_linked_to_product`; one that ever received them cannot be hard-deleted → `409 board_has_link_history` | — |
 | `POST /boards/{id}/clone` | `{name, kind (default simulator), copy_cards}` | as `POST /boards` | `simulator` for `kind=simulator` |
 | `GET /boards/{id}/view` | `?segment=upstream\|downstream\|unified` + `project_id, service_class, assignee_id, column_id, tag, q, is_blocked, demand_type, value_area, size, due_before, envelope_state, case_id, archived` | any | `unified_flow` for `segment=unified` |
 | `GET /boards/{id}/wip` | — | any | — |
@@ -531,7 +575,15 @@ breakdown by `envelope_state` and by flow position, plus the project's `cards[]`
 (sealed first). `POST /projects/{id}/demands` without `board_id` uses the product's only
 operational board (`400 board_id_required` when there are several). Opening an envelope
 is a real move into the first upstream non-envelope column and returns the same
-`MoveResult` as `POST /cards/{id}/move` (§10).
+`MoveResult` as `POST /cards/{id}/move` (§10). A new demand and an opened envelope obey
+the WIP maxima like a move (`409 wip_limit_exceeded`).
+
+`ProjectOut` also carries `client_name`, `external_url` and `managed_elsewhere`: a project
+kept by another service (the SR GJ's Projeto, created through
+`PUT /integration/projects/{source}/{external_id}`, §14.2) keeps its name, status, dates
+and archiving there, and `PATCH /projects/{id}` touching them answers
+`409 project_managed_elsewhere` (`details.url` opens it); colour, description and owner
+still change here.
 
 ---
 
@@ -543,7 +595,7 @@ read-only board refuses them (`409 board_read_only`).
 | Method & path | Query / body | Notes |
 |---|---|---|
 | `GET /cards` | `?board_id=&project_id=&service_class=&assignee_id=&segment=&column_id=&tag=&q=&is_blocked=&demand_type=&value_area=&size=&case_id=&due_before=&archived=&envelope_state=&in_flight=&sort=&order=&limit=(≤1000, default 200)&offset=` | `project_id=none`, `assignee_id=unassigned`; `service_class`, `column_id`, `tag` take comma lists; `sort ∈ {created_at, aging, due_date, title, key, position}`, `order ∈ {asc, desc}`; `total` is the filtered count |
-| `POST /cards` | `{board_id, title, column_id?, project_id?, description?, service_class?, assignee_id?, requester?, size?, value_area?, demand_type?, due_date?, envelope_state?, tags?, custom_fields?, case_id?, case_label?, client_id?, client_name?}` | Writes the creation movement (`from_column_id: null`) and event; created at/after the commitment column → `committed_at` at once. Without a project the key is the product's (`SRADV-`, the key of the project that receives the providências; the product's initials before there is one); the standalone Nagare keeps the board's three letters. `value_area` empty → the product's first card type |
+| `POST /cards` | `{board_id, title, column_id?, project_id?, description?, service_class?, assignee_id?, requester?, size?, value_area?, demand_type?, due_date?, envelope_state?, tags?, custom_fields?, case_id?, case_label?, client_id?, client_name?}` | Writes the creation movement (`from_column_id: null`) and event; created at/after the commitment column → `committed_at` at once. Without a project the key is the product's (`SRADV-`, the key of the project that receives the providências; the product's initials before there is one); the standalone Nagare keeps the board's three letters. `value_area` empty → the product's first card type. The target column's WIP maxima apply as on a move (`409 wip_limit_exceeded`; `expedite` bypasses the column maximum only) |
 | `GET /cards/{card_id}` | — | Id or key (`NGR-104`). Card + `tasks[]`, `blockers[]`, `comments[]`, `movements[]`, `intervals[]`, `flow{}` (touch/wait/efficiency), `can_edit` |
 | `PATCH /cards/{card_id}` | subset of `title, description, project_id, service_class, assignee_id, requester, size, value_area, demand_type, due_date, position, tags, custom_fields, archived, case_id, case_label, client_id, client_name` | One `card_events` row per changed field (the case and its client: one `case` event; `case_id: null` unlinks); `column_id` → `400 field_not_editable` (use `/move`). `archived: true` on a providência card discards it (webhook, §14.3) |
 | `DELETE /cards/{card_id}` | — | Archives (soft, idempotent); same webhook rule |
@@ -556,9 +608,20 @@ read-only board refuses them (`409 board_read_only`).
 | `GET /cards/{card_id}/comments` / `POST /cards/{card_id}/comments` | `{body}` | |
 | `PATCH /comments/{comment_id}` / `DELETE /comments/{comment_id}` | `{body}` | Author or master/administrator (`403 comment_not_yours`) |
 
-Inside a product, assignees come from `GET /integration/people` (§14.2).
+Inside a product, assignees come from `GET /integration/people` (§14.2). Unarchiving a
+card (`PATCH archived: false`) checks the WIP maxima of its column again.
 
-**Card types (PPLAT-312).** `value_area` is a key of the product's list. A product without a
+**The card's own page (24/11/2026).** Every card has a page addressed by its key, which is
+born with the card and never changes: `/nagare/card/<KEY>` on the standalone Nagare
+(`/nagare/<product>/card/<KEY>` for a Pampufa product's card, which switches the product
+picker), and `/grupo-sr/<product>/tarefas/cartao/<KEY>` in the Tarefas module. The page
+reads `GET /cards/{key}` like the drawer does; the board's old drawer links
+(`/board/<board id>?cartao=<card id>`) still open. This is the `card_url` the API hands out
+(§14.3).
+
+### 9.1 Card types (PPLAT-312)
+
+`value_area` is a key of the product's list. A product without a
 list of its own uses the software one (`feature, defect, risk, debt, compliance`, labelled by
 the screens); SR Adv and SR GJ start with `prazo, peticao, audiencia, diligencia,
 administrativo` (`ng_0007`). A new card takes an active type (`400 invalid_card_type`
@@ -573,8 +636,12 @@ otherwise); a card keeps the type it has even after it is archived.
 | `DELETE /card-types/{key}` | — | `manage_boards`; a type some card has → `409 card_type_in_use` (archive it instead) |
 
 The first edit of a product on the default list copies it into the product's own rows.
+`can_edit` is `true` for the roles with `manage_boards`; an unknown key answers
+`404 card_type_not_found`, an empty name `400 card_type_name_required`.
 
-**The SR Adv case (PPLAT-310).** `case_id` is the case's id in the `sr-adv` service;
+### 9.2 The SR Adv case (PPLAT-310)
+
+`case_id` is the case's id in the `sr-adv` service;
 `case_label`, `client_id` and `client_name` are what the case picker showed (the client comes
 from the case); `case_url` is set by the server (`<NAGARE_URL_TELAS>/<product>/processos/<id>`).
 Only inside a Pampufa product (`400 case_link_unavailable` in the standalone Nagare). The
@@ -582,6 +649,23 @@ board's "Tarefas deste caso" link is `/grupo-sr/<product>/tarefas/quadro?caso=<c
 screen opens the product's board with `GET /boards/{id}/view?case_id=…`. The screens find the
 cases in the `sr-adv` API through the gateway with the person's own token
 (`GET /api/v1/p/<product>/sr-adv/casos?busca=&limite=20`, `GET …/casos/{id}`).
+
+### 9.3 Hours on a card (GJ-4)
+
+Router `backend/app/routers/horas.py` (tag `hours`), table `time_entries` (`ng_0006`). Both
+modes; no feature flag. Whoever moves cards logs **their own** hours; the entry keeps the
+card's project, so the hours of a project can be read without the card.
+
+| Method & path | Body / query | RBAC | Notes |
+|---|---|---|---|
+| `GET /cards/{id}/time` | — | `read_boards_metrics` | `{items: [{id, card_id, card_key, card_title, project_id, user_id, user_name, worked_on, minutes, description, created_at}], total_minutes}`, newest day first |
+| `POST /cards/{id}/time` | `{worked_on: "YYYY-MM-DD", minutes: 1–1440, description?: ≤2000 chars}` | `manage_cards` + the board-write rule (§3) | `201` with the entry. A read-only board → `409 board_read_only`; an archived card → `409 card_archived` |
+| `DELETE /time/{id}` | — | `manage_cards` | `{ok: true}`. Only the author, or a master/administrator (`403 not_yours`); `404 time_not_found` |
+
+`{id}` is the **card id** here: unlike the other card routes, these do not accept the key
+(`404 card_not_found`). The hours count in `GET /metrics/people` (§11.2), in the
+billing routes of the integration (`GET /integration/time`, `/time/by-external`, §14.2),
+in `GET /boards/{id}/version` (§7) and in the Hours and Project status reports (§15).
 
 ---
 
@@ -628,7 +712,8 @@ the `system` role). `MoveResult`:
 
 ## 11. Metrics & KMM (METRICS)
 
-Read-only for every role (`read_boards_metrics`). Every route takes the common filters
+Read-only for every role (`read_boards_metrics`), in both modes. Every route but the last
+two of the table takes the common filters
 `?from=&to=&project_id=&service_class=&segment=` (`segment` defaults to `unified`),
 resolved into one snapshot per request. Labels and interpretations come in the caller's
 language (§4.1).
@@ -646,6 +731,8 @@ language (§4.1).
 | `GET /boards/{id}/metrics/demand` | — | `metrics_advanced` |
 | `GET /boards/{id}/metrics/littles-law` | — | `metrics_advanced` |
 | `GET /boards/{id}/metrics/kmm` | — | `kmm_dashboard` |
+| `GET /boards/{id}/metrics/forecast` | `?question=when\|how_many&backlog_size=&days=&sample_weeks=` (does **not** take the common filters) | `monte_carlo` (§11.1) |
+| `GET /metrics/people` | `?from=&to=` only (§11.2) | — |
 
 `summary` returns `{board_id, from, to, metrics: {<kpi>: {value, unit, trend_pct,
 sample_size, previous_value, low_confidence, label, higher_is_better}}, percentiles:
@@ -663,6 +750,50 @@ and value area mixes, `failure_demand_pct`, `lead_time_by_class`, `flow_debt`,
 simulator — "WIP-experiment outcomes" and "capability comparison across boards" — point
 to **the Nagare simulator** instead of a screen of the Tarefas module, which has none
 (A9-d); they still count toward the level.
+
+### 11.1 The Monte Carlo panel (read only)
+
+`GET /boards/{id}/metrics/forecast` asks the simulator's two Monte Carlo questions on one
+board **without saving a run**, so every role that reads metrics can ask it (in both
+modes), not only the `simulator_boards` roles of §12. It samples the board's own
+delivered-per-week history (non-archived cards) with the same trials (10,000) and seed
+(`20260816`) as `POST /simulator/runs`, so the panel and the simulator give the same answer.
+
+| Query | Default | Range |
+|---|---|---|
+| `question` | `when` | `when` ("how long for `backlog_size` items?") or `how_many` ("how many items in `days` days?") |
+| `backlog_size` | `10` | 1–10,000 (`when`) |
+| `days` | `28` | 1–3,650 (`how_many`) |
+| `sample_weeks` | all history | 1–520 weeks to sample |
+
+The answer is the engine's own result: `{kind: monte_carlo_when | monte_carlo_how_many,
+question, trials, seed, unit (weeks | items), start_date, samples: {weeks, values, mean,
+stdev, cv, min, max, median, distinct}, percentiles, levels, histogram}`, plus
+`backlog_size` and `dates` for `when`, or `days`, `weeks`, `target_date` and
+`target_date_label` for `how_many`. A history the engine cannot use answers
+`400 forecast_failed`; a value out of range, `422 validation_error`.
+
+### 11.2 People, projects and clients (D45)
+
+`GET /metrics/people?from=&to=` (router `horas.py`; `read_boards_metrics`, both modes, no
+flag) reads the current product in a period — `from` and `to` inclusive, in the product's
+time zone; default the last 30 days ending today:
+
+```json
+{"from": "2026-10-27", "to": "2026-11-25",
+ "people":   [{"user_id", "name", "delivered", "on_time", "late", "wip", "arrivals", "minutes"}],
+ "projects": [{"project_id", "name", "key", "client_name", "delivered", "...": "same counters"}],
+ "clients":  [{"client_name", "projects", "delivered", "...": "same counters"}],
+ "total_minutes": 5400}
+```
+
+`delivered` and `arrivals` are cards delivered and created in the period; `on_time` /
+`late` split the delivered **fixed-date** cards by their due day (end of day in the
+product's zone); `wip` is committed and not delivered now; `minutes` are the hours logged
+in the period. Rows without any of these are left out; a card without assignee, project or
+client lands in a "Sem responsável" / "Sem projeto" / "Sem cliente" row (`user_id` or
+`project_id` `null`). Each list is sorted by `minutes`, most first. The gestor's
+cross-product version is `GET /integration/overview/metrics` (§14.2).
 
 ---
 
@@ -701,7 +832,10 @@ operational board's history is never touched.
 | `class_of_service_mix` | `weeks`, `arrival_rate`, `expedite_shares`, `class_mix`, `size_mix`, `wip_limits`, `flow_wip_max`, `target_utilization`, `variability`, `warmup_weeks`, `expedite_preemption` (true) |
 | `replay` | `policies`, `weeks`, `use_observed_service_times` (true), `target_utilization`, `baseline_flow_wip_max`, `class_mix`, `warmup_weeks` |
 
-A missing required parameter answers `400 invalid_simulation_params`; an input the
+A missing required parameter answers `400 invalid_simulation_params`; a size parameter out
+of range (`trials` 1–100,000, `backlog_size` 1–10,000, `days` 1–3,650, `weeks` 1–104,
+`warmup_weeks` 0–104, `sample_weeks` 1–520, `arrival_rate` 0.01–200, at most 520
+`throughput_samples`), `400 simulation_params_out_of_range` before any work; an input the
 engine refuses, `400 simulation_failed`. The WIP experiment's verdict compares against
 the "no WIP limits" row (or, without one, the row with the highest average WIP) and says
 so when no limit shortens lead time without costing throughput (A9-b).
@@ -730,7 +864,7 @@ no `X-Produto`, so it works in the standalone product (`nagare`).
 | `create_demand` | `POST /projects/{id}/demands` | |
 | `get_metrics_summary` | `GET /boards/{id}/metrics/summary` | |
 | `get_kmm_status` | `GET /boards/{id}/metrics/kmm` | |
-| `run_forecast` | `POST /simulator/runs` | Works: `kind = monte_carlo_when` with `items` (sent as `backlog_size`), or `monte_carlo_how_many` with `days`, `weeks` (× 7) or `target_date` (days from `start_date`, default today), all sent as `days`. Needs a role with `simulator_boards` (master, administrator, simulator) and the `simulator` + `monte_carlo` flags. See §15 for the `weeks` / `target_date` horizons |
+| `run_forecast` | `POST /simulator/runs` | Works: `kind = monte_carlo_when` with `items` (sent as `backlog_size`), or `monte_carlo_how_many` with `days`, `weeks` (× 7) or `target_date` (days from `start_date`, default today), all sent as `days`. Needs a role with `simulator_boards` (master, administrator, simulator) and the `simulator` + `monte_carlo` flags. See §17 for the `weeks` / `target_date` horizons |
 
 REST errors become tool errors prefixed with the code (`[wip_limit_exceeded] ...`) plus a
 canned `Hint:` for the common ones (`_HINTS` in the file). Card writes are attributed to
@@ -791,9 +925,13 @@ platform reaches **only by API** (NG1): **the Pampufa calls, the Nagare answers 
 
 | Routes | Caller |
 |---|---|
-| `POST /integration/providencias`, `GET /integration/providencias/{id}`, `POST /integration/providencias/{id}/resolved-at-origin` | `system` only: the Pampufa's **service token** (`sub: servico:pampufa`, role `system` in the product) with `X-Produto`. Anyone else → `403 insufficient_role` |
-| `GET /integration/overview`, `GET /integration/people`, `GET /integration/product` | any role in the product (`read_boards_metrics`) |
+| `POST /integration/providencias`, `GET /integration/providencias/{id}`, `POST /integration/providencias/{id}/resolved-at-origin`, `PUT /integration/projects/{source}/{external_id}`, `GET /integration/time`, `GET /integration/time/by-external` | `system` only: a platform **service token** (`sub: servico:<name>`, role `system` in the product) with `X-Produto`. Anyone else → `403 insufficient_role` |
+| `GET /integration/overview`, `GET /integration/overview/metrics`, `GET /integration/people`, `GET /integration/product` | any role in the product (`read_boards_metrics`) |
+| `GET /integration/products` | any valid token |
+| `POST /integration/product/board` | `manage_cards` (master, administrator, editor, system) |
 | `PUT /integration/product` | `master` / `administrator` (in practice `nagare.admin` of the product) |
+
+All of them work in both modes; the product is the one of the request (§1.3).
 
 ### 14.2 Routes
 
@@ -803,9 +941,15 @@ platform reaches **only by API** (NG1): **the Pampufa calls, the Nagare answers 
 | `GET /integration/providencias/{providencia_id}` | — | `{state, card}`; `state ∈ {open, resolved_at_origin, delivered, discarded}` |
 | `POST /integration/providencias/{providencia_id}/resolved-at-origin` | `{em?, origem?}` | `{changed, state, card}` |
 | `GET /integration/overview` | — | `{stages, delivered_window_days, products: [...]}` |
+| `GET /integration/overview/metrics` | `?from=&to=` (days, inclusive; default the last 30 days) | `{products: [{product_id, delivered, on_time, late, wip, minutes, from, to}]}` — one row per linked product the caller can read, each the sum of its `GET /metrics/people` (§11.2) |
+| `GET /integration/products` | — | `{items: [{id, role, project: {id, key, name} \| null, board: {id, name} \| null}]}` — the products the caller can open and the role held in each: on the local login `nagare` first, then every linked product the local role reaches (§1.3); through the Pampufa, the linked products where the token holds a role |
 | `GET /integration/people` | — | `{source, people: [{id, name, email, sub, roles}]}` |
-| `GET /integration/product` | — | `{product_id, link, history}` |
-| `PUT /integration/product` | `{project_id, board_id, motivo}` | `{product_id, link, history, moved_cards}` |
+| `GET /integration/product` | — | `{product_id, link, history, projects_new_url}` |
+| `POST /integration/product/board` | `{produto_nome?}` | Creates the product's project and `providencias` board now, without waiting for a providência (SR GJ 4.3: the team writes tasks first) — the same board the providências will land on. `201` with the `GET /integration/product` shape; `200` when it already existed (idempotent) |
+| `PUT /integration/product` | `{project_id, board_id, motivo}` | `{product_id, link, history, projects_new_url, moved_cards}` |
+| `PUT /integration/projects/{source}/{external_id}` | `{name, key (2–8 letters/digits), color?, status? (discovery\|active\|on_hold\|done\|cancelled), client_name?, description?, started_at?, target_date?, url?, novo_url?}` | GJ-1: creates or updates the project another service keeps (the SR GJ's Projeto), found by `(source, external_id)` in the product; `cancelled` archives it. `url` is where a person opens it (`external_url`); `novo_url` is where "Novo projeto" goes in this product (`projects_new_url`). `{project_id, key}`; a key used by another project → `409 project_key_taken`. Retries are serialised by an advisory lock |
+| `GET /integration/time` | `?from=&to=` (required) `&project_id=` (repeatable) | GJ-4 billing: the hour entries of those projects in the period, with the card (`{items: [entry as in §9.3], total_minutes}`) |
+| `GET /integration/time/by-external` | `?source=` (required) `&from=&to=` | GJ-6, for the Financeiro reports: `{items: [{external_id, minutes}]}` — minutes logged on each project kept by `source`, keyed by the source's id |
 
 `card` in the providência answers is a summary: `{id, key, title, board_id, column,
 column_kind, delivered_at, archived, tags, assignee: {id, name, email, sub} | null,
@@ -865,13 +1009,15 @@ backoff (5s, doubling, at most 10 minutes) until it is confirmed; `attempts` and
 `last_error` stay on the row. The loop runs only when `NAGARE_PAMPUFA_URL` is set.
 
 **`card_url`** — the link the Pampufa shows for a card (`card.url` above, and
-`cartao_url` in `cartao.movido`):
+`cartao_url` in `cartao.movido`): the card's own page, by its key (24/11/2026, §9):
 
 - a platform product's card, with `NAGARE_URL_TELAS` set:
-  `{NAGARE_URL_TELAS}/{product}/tarefas/quadro/{board_id}?cartao={card_id}` (the Tarefas
-  module);
-- otherwise: `{NAGARE_URL_PUBLICA}/board/{board_id}?cartao={card_id}` (the standalone
-  Nagare's board).
+  `{NAGARE_URL_TELAS}/{product}/tarefas/cartao/{key}` (the Tarefas module);
+- a platform product's card without it: `{NAGARE_URL_PUBLICA}/{product}/card/{key}`;
+- a standalone card: `{NAGARE_URL_PUBLICA}/card/{key}`.
+
+Links sent before in the old form (`.../quadro/{board_id}?cartao={card_id}`,
+`.../board/{board_id}?cartao={card_id}`) still open the card's drawer.
 
 ### 14.4 A new flow is a new project (NG14)
 
@@ -901,7 +1047,99 @@ its history and metrics stay. Each link and unlink is kept in `history`
 
 ---
 
-## 15. Appendix: implementation notes
+## 15. Reports (standalone)
+
+Router `backend/app/routers/reports.py`, templates in `backend/app/reports/modelos.py`, the
+Document in `reports/documento.py`, the spreadsheet in `reports/planilha.py` (wave 1 of the
+Reports plan, 24/11/2026). **Standalone Nagare only** (decision R4): a Pampufa token
+answers `403 standalone_only`. Every route needs the `reports` flag (Business) and the
+`read_reports` capability (every role, R21); the portfolio also needs `reports_portfolio`
+(Enterprise). A local master with `X-Produto` reads that product's reports. The screen is
+`/nagare/reports` (`/nagare/reports/<template>`).
+
+| Method & path | Query | Answer |
+|---|---|---|
+| `GET /reports/templates` | — | `{items: [{id, code, title, description, scope, flag, available}]}` — the catalogue in the caller's language; `available` is whether the template's flag is effective |
+| `GET /reports/{template}` | the common query below | The report, live, as a **Document** |
+| `GET /reports/{template}/export` | `format=xlsx\|csv` (default `xlsx`) + the common query | The same Document as a file, `Content-Disposition: attachment; filename="rep-01-<scope>-<first day>.xlsx"` |
+
+**Common query.** `period` = `week` (default), `month` or `custom`; `date` = a day inside
+the week or month (default: the last **complete** week or month); `from` / `to` for
+`custom` (default: the 30 days ending today; at most 400 days); and the scope:
+`board_id`, `project_id`, or `project_ids` (comma-separated). Weeks run Monday to Sunday
+and months are calendar months, in the product's time zone (R22). Every report compares
+with the **previous period**: the week or month before, or an interval of the same
+length.
+
+**Templates** (`TEMPLATES`):
+
+| `id` | Code | Scope | Flag | What it reads |
+|---|---|---|---|---|
+| `delivery_review` | REP-01 | `board_id` (required) | `reports` | A board's week or month against the previous one: deliveries and pace, due dates and aging, blockers, classes of service, Little's Law |
+| `project_status` | REP-02 | `project_id` (required, the id) | `reports` | Delivered and remaining, risks (blocked and aging cards), hours logged |
+| `hours` | REP-03 | `project_ids` (optional; none = every project) | `reports` | Hours by client and by project against the previous period — the basis for billing |
+| `portfolio` | REP-04 | none | `reports_portfolio` | Every product the caller opens (`GET /integration/products`), side by side: throughput and trend, lead time, WIP, aging, blocked |
+| `risks` | REP-05 | `board_id` (required) | `reports` | Blocker causes by weight, blocked time, cards blocked now, recurring causes |
+| `waiting` | REP-11 | `board_id` (required) | `reports` | Time in each column, flow efficiency, the column that holds the flow most |
+| `policy_exceptions` | REP-13 | `board_id` (required) | `reports` | Expedite cards that passed a WIP limit, WIP limit changes, class-of-service changes — only what happened after `ng_0008` (R14) |
+
+**The Document** (`FORMAT_VERSION` 1) is the one JSON the screen draws and the
+spreadsheet reads, so the numbers are the same in both:
+
+```json
+{"template": "delivery_review", "code": "REP-01", "title": "...", "subtitle": "...",
+ "format_version": 1, "product_id": "nagare",
+ "params": {"period": "week", "from": "2026-11-16", "to": "2026-11-22",
+            "board_id": "...", "project_id": null, "project_ids": null},
+ "period": {"kind": "week", "from": "2026-11-16", "to": "2026-11-22", "label": "...", "timezone": "UTC"},
+ "previous": {"from": "2026-11-09", "to": "2026-11-15", "label": "..."},
+ "generated_at": "2026-11-25T12:00:00Z",
+ "scope": {"board": {"id": "...", "name": "...", "sle_days": 14, "sle_percentile": 85}},
+ "sections": [{"id": "...", "title": "...", "description": null, "blocks": ["..."]}]}
+```
+
+Blocks: `kpis` (`items: [{key, label, value, unit, previous, trend_pct, higher_is_better,
+low_confidence, hint}]`), `table` (`title, columns: [{key, label, unit}], rows, empty`),
+`bars` (`title, unit, items: [{label, value, note?}], empty`) and `note` (`tone, text`).
+Units are machine keys: `days`, `percent`, `count`, `cards/week`, `hours`, `ratio`,
+`date`, `datetime`, `text`, `card` (a `card` cell is `{key, title}`). Labels and texts come
+in the caller's language (§4.1).
+
+**Export** (decision R17, `openpyxl`): `xlsx` has one sheet per section (the header —
+title, period, previous period, generation time — on top, numbers kept as numbers);
+`csv` is UTF-8 with BOM and follows the caller's language — in pt-BR `;` between fields
+and `,` decimals, as a Brazilian Excel expects. An unknown `format` is
+`422 validation_error`.
+
+**Errors.** Unknown template → `400 report_unknown`; bad `period` → `400 report_bad_period`
+(also an interval over 400 days); a date that is not `YYYY-MM-DD` → `400 report_bad_date`;
+a missing scope → `400 report_board_required` / `report_project_required`; a project of
+another product → `400 project_not_found` (a `400` here, not a `404`); a board of
+another product → `404 board_not_found`; `reports_portfolio` off for the portfolio →
+`403 feature_disabled` / `plan_upgrade_required`.
+
+---
+
+## 16. Notifications: the standalone bell
+
+Router `backend/app/routers/notifications.py`, table `notifications` (`ng_0008`; decision
+R23 of the Reports plan, 24/11/2026). **Standalone Nagare only**: inside the Pampufa the
+platform's own bell does the job, and a Pampufa token answers `403 standalone_only`. Any
+local identity reads and marks **its own** notices; no flag.
+
+| Method & path | Query | Answer |
+|---|---|---|
+| `GET /notifications` | `limit` (1–100, default 30) | `{items: [{id, product_id, kind, title, body, link, created_at, read_at}], unread}` — newest first; `unread` counts every unread notice, not only the page |
+| `POST /notifications/{id}/read` | — | The notice, with `read_at` set (idempotent); another person's or unknown id → `404 notification_not_found` |
+| `POST /notifications/read-all` | — | `{ok: true, marked}` |
+
+Notices are written in the caller's transaction by `create_notification()`. Nothing
+creates one yet: the first kind (a scheduled report was issued) arrives with wave 3 of the
+Reports, so today the list is empty.
+
+---
+
+## 17. Appendix: implementation notes
 
 Things an integrator should know, found while writing this document from the code.
 
@@ -918,4 +1156,17 @@ Things an integrator should know, found while writing this document from the cod
    `GET /cards/{id}/movements`, `GET /cards/{id}/events`, `PATCH`/`DELETE
    /comments/{id}`, `POST /columns/{id}/drain`, `DELETE /boards/{id}?hard=`, the
    `sort`/`order`/`in_flight`/`envelope_state` card filters, `baseline_run_id` on
-   compare, and the whole `/integration/*` router.
+   compare, `GET /boards/{id}/version`, `GET /boards/{id}/metrics/forecast`, and the
+   whole `/integration/*`, `/card-types`, hours (`/cards/{id}/time`, `/time/{id}`,
+   `/metrics/people`), `/reports/*` and `/notifications` routers.
+3. **Observability** (`backend/app/observability.py`, outside the OpenAPI document). With
+   `OTEL_EXPORTER_OTLP_ENDPOINT` set, traces (FastAPI, SQLAlchemy, httpx; the webhooks
+   carry `traceparent`) and logs go to the platform's collector as `service.name=nagare`.
+   `GET /metrics` (not under `/api/v1`) answers the Prometheus format — HTTP requests and
+   latency by route template and product, plus the webhook outbox backlog — to
+   `Authorization: Bearer $NAGARE_METRICS_TOKEN`, or, without that variable, only to the
+   loopback (`401 metrics_token` / `403 metrics_local_only`).
+4. **Found while checking on 25/11/2026** (left as they are, for the owner to decide):
+   the hour routes (`/cards/{id}/time`) take the card id only, while every other card
+   route also takes the key; the Reports answer a project of another product with
+   `400 project_not_found` where the rest of the API uses `404`.
