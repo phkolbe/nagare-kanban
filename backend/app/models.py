@@ -54,6 +54,7 @@ __all__ = [
     "Comment",
     "ExternalRef",
     "FeatureFlag",
+    "Notification",
     "Plan",
     "ProductLink",
     "ProductLinkHistory",
@@ -61,6 +62,7 @@ __all__ = [
     "SimulationRun",
     "User",
     "WebhookOutbox",
+    "WipLimitChange",
     "Workspace",
     "as_dict",
     "json_dumps",
@@ -394,6 +396,54 @@ class CardMovement(Base):
     note: Mapped[str | None] = mapped_column(Text)
     is_backward: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     source: Mapped[str] = mapped_column(String(20), nullable=False, default="ui")
+    #: passed over a full WIP limit (expedite); read by the Reports' REP-13 (ng_0008, 24/11/2026)
+    wip_override: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+
+
+class WipLimitChange(Base):
+    """One change of a WIP limit, at board, group or column scope (ng_0008, 24/11/2026).
+
+    The Reports' REP-13 (policy exceptions) lists them; only changes after the migration exist.
+    """
+
+    __tablename__ = "wip_limit_changes"
+    __table_args__ = (
+        CheckConstraint("scope IN ('board','group','column')", name="scope"),
+        CheckConstraint("field IN ('wip_min','wip_max')", name="field"),
+        Index("idx_wip_changes_board_time", "board_id", "changed_at"),
+    )
+
+    id: Mapped[str] = _id()
+    product_id: Mapped[str] = _product()
+    board_id: Mapped[str] = _fk("boards.id", "CASCADE", nullable=False)
+    scope: Mapped[str] = mapped_column(String(10), nullable=False)
+    target_id: Mapped[str] = mapped_column(Id, nullable=False)
+    target_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    field: Mapped[str] = mapped_column(String(10), nullable=False)
+    old_value: Mapped[int | None] = mapped_column(Integer)
+    new_value: Mapped[int | None] = mapped_column(Integer)
+    changed_by: Mapped[str | None] = _fk("users.id", "SET NULL")
+    changed_at: Mapped[str] = mapped_column(Instant, nullable=False)
+
+
+class Notification(Base):
+    """A notice in the standalone Nagare's bell (ng_0008, 24/11/2026): general, one row per
+    person; the first kind (a scheduled report was issued) arrives with the Reports' wave 3."""
+
+    __tablename__ = "notifications"
+    __table_args__ = (Index("idx_notifications_user", "user_id", "created_at"),)
+
+    id: Mapped[str] = _id()
+    product_id: Mapped[str] = _product()
+    user_id: Mapped[str] = _fk("users.id", "CASCADE", nullable=False)
+    kind: Mapped[str] = mapped_column(String(40), nullable=False)
+    title: Mapped[str] = mapped_column(String(300), nullable=False)
+    body: Mapped[str | None] = mapped_column(Text)
+    link: Mapped[str | None] = mapped_column(String(300))
+    created_at: Mapped[str] = mapped_column(Instant, nullable=False)
+    read_at: Mapped[str | None] = mapped_column(Instant)
 
 
 # ---------------------------------------------------------------------------

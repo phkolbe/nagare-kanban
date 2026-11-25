@@ -7,6 +7,7 @@
 import type { Idioma } from '../api/tipos'
 import { enN3, ptN3 } from './mensagens_n3'
 import { enR5, ptR5 } from './mensagens_r5'
+import { enRel, ptRel } from './mensagens_rel'
 
 const ptBase = {
   // ------------------------------------------------------------------ comum
@@ -468,7 +469,7 @@ const ptBase = {
   'erro.auth.sem_permissao': 'Você não tem permissão para esta ação.',
 } as const
 
-export const pt = { ...ptBase, ...ptN3, ...ptR5 } as const
+export const pt = { ...ptBase, ...ptN3, ...ptR5, ...ptRel } as const
 
 export type Chave = keyof typeof pt
 
@@ -922,6 +923,6 @@ const enBase: Record<keyof typeof ptBase, string> = {
   'erro.auth.sem_permissao': 'You are not allowed to perform this action.',
 }
 
-const en: Record<Chave, string> = { ...enBase, ...enN3, ...enR5 }
+const en: Record<Chave, string> = { ...enBase, ...enN3, ...enR5, ...enRel }
 
 export const CATALOGOS: Record<Idioma, Record<Chave, string>> = { 'pt-BR': pt, en }

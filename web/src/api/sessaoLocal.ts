@@ -95,3 +95,27 @@ export async function requisitarLocal<T>(caminho: string, opcoes: Opcoes = {}): 
   if (!resposta.ok) throw new ErroApi((await problemaDe(resposta)) as ConstructorParameters<typeof ErroApi>[0])
   return (resposta.status === 204 ? undefined : await resposta.json()) as T
 }
+
+/**
+ * Um arquivo da API (a planilha dos Reports, 24/11/2026), com o mesmo token e as mesmas regras
+ * de sessao de `requisitarLocal`. O nome vem do `Content-Disposition` do servidor.
+ */
+export async function baixarLocal(caminho: string, cabecalhos: Record<string, string> = {}): Promise<{ arquivo: Blob; nome: string }> {
+  const token = tokenLocal()
+  if (token && tokenVencido(token)) {
+    guardarToken(null)
+    aoPerderSessao?.()
+    throw new ErroApi({ title: 'Session expired.', status: 401, codigo: 'token_expired' } as ConstructorParameters<typeof ErroApi>[0])
+  }
+  const resposta = await fetch(`${API_LOCAL}${caminho}`, {
+    headers: { ...cabecalhos, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+  })
+  if (resposta.status === 401 && token) {
+    guardarToken(null)
+    aoPerderSessao?.()
+  }
+  if (!resposta.ok) throw new ErroApi((await problemaDe(resposta)) as ConstructorParameters<typeof ErroApi>[0])
+  const disposicao = resposta.headers.get('Content-Disposition') ?? ''
+  const nome = /filename="?([^";]+)"?/.exec(disposicao)?.[1] ?? 'report'
+  return { arquivo: await resposta.blob(), nome }
+}

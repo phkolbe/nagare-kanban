@@ -16,6 +16,7 @@ export const TRILHO: ItemDoTrilho[] = [
   { caminho: 'quadro', rotulo: 'menu.quadro', icone: 'quadro' },
   { caminho: 'projetos', rotulo: 'menu.projetos', icone: 'pasta', flag: 'multi_project' },
   { caminho: 'metricas', rotulo: 'menu.metricas', icone: 'grafico', flag: 'metrics_basic' },
+  { caminho: 'relatorios', rotulo: 'menu.relatorios', icone: 'relatorio', flag: 'reports', capacidade: 'read_reports' },
   { caminho: 'simulador', rotulo: 'menu.simulador', icone: 'painel', flag: 'simulator', capacidade: 'simulator_boards' },
   { caminho: 'admin', rotulo: 'menu.admin', icone: 'engrenagem', capacidade: 'manage_users' },
 ]

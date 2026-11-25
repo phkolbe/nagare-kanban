@@ -37,6 +37,9 @@ TRANSLATED_MODULES: tuple[str, ...] = (
     "flow/forecast.py",
     "routers/metrics.py",
     "routers/simulator.py",
+    "reports/documento.py",
+    "reports/modelos.py",
+    "reports/planilha.py",
 )
 MARKERS = {"_": 1, "N_": 1, "_n": 2}  # function -> how many leading args are catalog keys
 

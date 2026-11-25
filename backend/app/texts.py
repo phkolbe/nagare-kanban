@@ -1105,4 +1105,242 @@ PT: dict[str, str] = {
     ),
     "Simulated {service_class} demand #{number}": "Demanda {service_class} simulada nº {number}",
     "Simulator": "Simulador",
+    # ---- Reports (24/11/2026)
+    "{first} to {last}": "{first} a {last}",
+    "Month of {month}": "Mês de {month}",
+    "Week of {first} to {last}": "Semana de {first} a {last}",
+    "Nothing in this period.": "Nada neste período.",
+    "No client": "Sem cliente",
+    "No project": "Sem projeto",
+    "Deliveries and pace": "Entregas e ritmo",
+    "Due dates and aging": "Prazo e envelhecidos",
+    "Blockers and classes of service": "Bloqueios e classes de serviço",
+    "Little's Law": "Lei de Little",
+    "Delivery review": "Revisão de entrega",
+    "Project status": "Status de projeto",
+    "Every project": "Todos os projetos",
+    "Hours": "Horas",
+    "Product portfolio": "Portfólio dos produtos",
+    "Risks and blockers": "Riscos e bloqueios",
+    "queue": "fila",
+    "activity": "atividade",
+    "envelope": "envelope",
+    "done": "entregue",
+    "Where the work waits": "Onde o trabalho espera",
+    "whole flow": "fluxo inteiro",
+    "group": "grupo",
+    "column": "coluna",
+    "minimum": "mínimo",
+    "maximum": "máximo",
+    "Policy exceptions": "Exceções de política",
+    "Lead time (50th pct)": "Lead time (percentil 50)",
+    "Total": "Total",
+    "By client": "Por cliente",
+    "By project": "Por projeto",
+    "Product": "Produto",
+    "Previous period": "Período anterior",
+    "Change": "Variação",
+    "Past the 85th percentile": "Acima do percentil 85",
+    "Blocked now": "Bloqueados agora",
+    "Overview": "Visão geral",
+    "Causes, heaviest first": "Causas, das mais pesadas às mais leves",
+    "Most blocked cards": "Cartões mais bloqueados",
+    "Time in each column": "Tempo em cada coluna",
+    "Where the work waits most": "Onde o trabalho mais espera",
+    "Passed over a WIP limit": "Passagens por cima do limite de WIP",
+    "WIP limit changes": "Mudanças de limite de WIP",
+    "Class of service changes": "Trocas de classe de serviço",
+    "Half of the delivered work finished within this many days.": (
+        "Metade do que foi entregue ficou pronta em até tantos dias."
+    ),
+    "The project has no card yet.": "O projeto ainda não tem cartões.",
+    "Hours by card": "Horas por cartão",
+    "No hours logged on the project in this period.": (
+        "Nenhuma hora lançada no projeto neste período."
+    ),
+    "Delivered and remaining": "Entregue × restante",
+    "Risks": "Riscos",
+    "Project hours": "Horas do projeto",
+    "The client is the one of each card's project.": "O cliente é o do projeto de cada cartão.",
+    "Products side by side": "Produtos lado a lado",
+    (
+        "Time worked (activity columns) against time waiting (queue columns), for the cards "
+        "delivered in the period."
+    ): (
+        "Tempo trabalhado (colunas de atividade) contra tempo parado esperando (colunas de "
+        "fila), nos cartões entregues no período."
+    ),
+    "How long the cards that left each column in the period stayed in it.": (
+        "Quanto tempo ficaram em cada coluna os cartões que saíram dela no período."
+    ),
+    "Expedite cards that went into a column already at its WIP limit.": (
+        "Cartões urgentes que entraram numa coluna que já estava no limite de WIP."
+    ),
+    (
+        "A board's week or month against the previous one: deliveries and pace, due dates and "
+        "aging, blockers and classes of service, Little's Law."
+    ): (
+        "A semana ou o mês de um quadro contra o período anterior: entregas e ritmo, prazo e "
+        "envelhecidos, bloqueios e classes de serviço, Lei de Little."
+    ),
+    (
+        "A project: delivered and remaining, the risks (blocked and aging cards) and the hours "
+        "logged in the period."
+    ): (
+        "Um projeto: entregue × restante, os riscos (cartões bloqueados e envelhecidos) e as "
+        "horas lançadas no período."
+    ),
+    (
+        "Hours logged in the period by client and by project, against the previous period. The "
+        "basis for billing."
+    ): (
+        "Horas lançadas no período por cliente e por projeto, contra o período anterior. A base "
+        "do faturamento."
+    ),
+    (
+        "Every product your profile opens, side by side: throughput and its trend, lead time, "
+        "work in progress, aging and blocked cards."
+    ): (
+        "Todos os produtos que o seu perfil abre, lado a lado: vazão e tendência, lead time, "
+        "WIP, envelhecidos e bloqueados."
+    ),
+    (
+        "The causes of blockers by weight, blocked time, the cards blocked now and the causes "
+        "that come back."
+    ): (
+        "As causas de bloqueio por peso, o tempo bloqueado, os cartões bloqueados agora e as "
+        "causas que se repetem."
+    ),
+    (
+        "Time in each column, flow efficiency (worked against waiting) and the column that holds "
+        "the flow most."
+    ): (
+        "Tempo em cada coluna, eficiência de fluxo (trabalhado × esperando) e a coluna que mais "
+        "segura o fluxo."
+    ),
+    (
+        "Expedite cards that passed over a WIP limit, WIP limit changes and class of service "
+        "changes."
+    ): (
+        "Urgentes que passaram por cima do limite de WIP, mudanças de limite de WIP e trocas de "
+        "classe de serviço."
+    ),
+    "yes": "sim",
+    "no": "não",
+    "What was delivered": "O que foi entregue",
+    "Nothing was delivered in this period.": "Nada foi entregue neste período.",
+    "Service level expectation: {percentile}% of the work delivered within {days} days.": (
+        "Expectativa de nível de serviço (SLE): {percentile}% do trabalho entregue em até {days} "
+        "dias."
+    ),
+    "This board has no service level expectation (SLE) set.": (
+        "Este quadro não tem expectativa de nível de serviço (SLE) definida."
+    ),
+    "Cards in progress past the 85th percentile or the SLE at the end of the period": (
+        "Cartões em andamento acima do percentil 85 ou do SLE no fim do período"
+    ),
+    "No card in progress past the 85th percentile or the SLE.": (
+        "Nenhum cartão em andamento acima do percentil 85 ou do SLE."
+    ),
+    "Blocked days by cause": "Dias bloqueados por causa",
+    "No blocker in this period.": "Nenhum bloqueio neste período.",
+    "Classes of service delivered": "Classes de serviço entregues",
+    "Open cards by column": "Cartões abertos por coluna",
+    "The project has no open card.": "O projeto não tem cartão aberto.",
+    "Delivered in the period": "Entregues no período",
+    "Blocked or aging cards": "Cartões bloqueados ou envelhecidos",
+    "No card of the project is blocked or aging.": (
+        "Nenhum cartão do projeto está bloqueado ou envelhecido."
+    ),
+    "Hours in the period": "Horas no período",
+    "Card": "Cartão",
+    "Every product your profile opens. Open a product to read its delivery review.": (
+        "Todos os produtos que o seu perfil abre. Abra um produto para ler a revisão de entrega "
+        "dele."
+    ),
+    (
+        "Passes over a WIP limit and WIP limit changes are kept only from the update that "
+        "started recording them; earlier periods show none."
+    ): (
+        "As passagens por cima do limite de WIP e as mudanças de limite só existem a partir da "
+        "atualização que passou a gravá-las; períodos anteriores não mostram nenhuma."
+    ),
+    "Delivered on": "Entregue em",
+    "Project": "Projeto",
+    "Class of service": "Classe de serviço",
+    "Lead time (days)": "Lead time (dias)",
+    "Within the SLE": "Dentro do SLE",
+    "Age": "Idade",
+    "Past the": "Acima do",
+    "Blocked": "Bloqueado",
+    "Share": "Participação",
+    "Delivered so far": "Entregues até agora",
+    "In progress": "Em andamento",
+    "Not started": "A fazer",
+    "Why": "Por quê",
+    "No hours logged in this period.": "Nenhuma hora lançada neste período.",
+    "Causes that came back in the period: {causes}.": (
+        "Causas que se repetiram no período: {causes}."
+    ),
+    "No cause came back more than once in the period.": "Nenhuma causa se repetiu no período.",
+    "No card is blocked at the end of the period.": "Nenhum cartão bloqueado no fim do período.",
+    "No card left a column in this period.": "Nenhum cartão saiu de uma coluna neste período.",
+    "Waiting days by queue column": "Dias de espera por coluna de fila",
+    "No waiting in this period.": "Nenhuma espera neste período.",
+    "The column that holds the flow most is {column}: {share}% of the waiting.": (
+        "A coluna que mais segura o fluxo é {column}: {share}% da espera."
+    ),
+    "No card passed over a WIP limit in this period.": (
+        "Nenhum cartão passou por cima do limite de WIP neste período."
+    ),
+    "No WIP limit changed in this period.": "Nenhum limite de WIP mudou neste período.",
+    "No card changed its class of service in this period.": (
+        "Nenhum cartão trocou de classe de serviço neste período."
+    ),
+    "SLE": "SLE",
+    (
+        "Observed average WIP divided by throughput × lead time. Near 1.0 the flow is stable and "
+        "the other numbers can be trusted."
+    ): (
+        "WIP médio observado dividido por vazão × lead time. Perto de 1,0 o fluxo está estável e "
+        "os outros números são confiáveis."
+    ),
+    "Clients": "Clientes",
+    "Projects": "Projetos",
+    "Client": "Cliente",
+    "Key": "Chave",
+    "No product to show.": "Nenhum produto para mostrar.",
+    "Blockers": "Bloqueios",
+    "Cards affected": "Cartões afetados",
+    "Blocker duration (85th pct)": "Duração do bloqueio (percentil 85)",
+    "Cause": "Causa",
+    "Mean duration": "Duração média",
+    "Cumulative": "Acumulado",
+    "Reason": "Motivo",
+    "Since": "Desde",
+    "Still blocked": "Ainda bloqueado",
+    "Days worked": "Dias trabalhados",
+    "Days waiting": "Dias esperando",
+    "Median card efficiency": "Eficiência mediana por cartão",
+    "Kind": "Tipo",
+    "Cards that left it": "Cartões que saíram",
+    "Time in the column (50th pct)": "Tempo na coluna (percentil 50)",
+    "Time in the column (85th pct)": "Tempo na coluna (percentil 85)",
+    "Share of the lead time": "Parte do lead time",
+    "When": "Quando",
+    "Into the column": "Para a coluna",
+    "By": "Por",
+    "Where": "Onde",
+    "Limit": "Limite",
+    "Before → after": "Antes → depois",
+    "blocked": "bloqueado",
+    "past the SLE": "acima do SLE",
+    "past the 85th percentile": "acima do percentil 85",
+    "Indicator": "Indicador",
+    "Value": "Valor",
+    "Unit": "Unidade",
+    "Change (%)": "Variação (%)",
+    "Period": "Período",
+    "Generated at": "Gerado em",
+    "Week of {day}": "Semana de {day}",
 }

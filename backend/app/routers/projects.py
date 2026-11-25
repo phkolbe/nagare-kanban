@@ -639,6 +639,7 @@ async def open_envelope(
         note="Envelope opened",
         is_backward=False,
         source="api",
+        wip_override=bool(wip_override),
     )
     s.add(movement)
     s.add(

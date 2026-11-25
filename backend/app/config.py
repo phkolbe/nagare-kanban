@@ -378,6 +378,20 @@ FEATURE_FLAGS: list[dict[str, Any]] = [
         "min_plan": "free",
         "category": "work",
     },
+    {
+        "key": "reports",
+        "name": "Reports",
+        "description": "Period reports compared with the previous period: print, spreadsheet, issue and schedule.",
+        "min_plan": "business",
+        "category": "metrics",
+    },
+    {
+        "key": "reports_portfolio",
+        "name": "Portfolio report",
+        "description": "Every product the person opens, side by side, in one report.",
+        "min_plan": "enterprise",
+        "category": "metrics",
+    },
 ]
 
 FLAG_KEYS: tuple[str, ...] = tuple(f["key"] for f in FEATURE_FLAGS)
@@ -437,6 +451,15 @@ ROLE_CAPABILITIES: dict[str, tuple[str, ...]] = {
     ),
     "simulator_boards": ("master", "administrator", "simulator"),
     "api_tokens": ("master", "administrator", "system"),
+    #: the Reports area (24/11/2026, R21): seeing and exporting is for whoever reads metrics
+    "read_reports": (
+        "master",
+        "administrator",
+        "editor",
+        "viewer",
+        "simulator",
+        "system",
+    ),
 }
 
 ROLE_LABELS: dict[str, str] = {

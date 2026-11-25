@@ -66,6 +66,7 @@ from ..models import (
     Project,
     TimeEntry,
     User,
+    WipLimitChange,
     as_dict,
 )
 from ..schemas import (
@@ -514,6 +515,43 @@ def require_structure_write(user: dict[str, Any], board: dict[str, Any]) -> None
 #: a product board received its first card (NG13, decision of 15/10/2026).
 _COLUMN_POLICY_FIELDS = frozenset({"name", "color", "description", "wip_min", "wip_max"})
 _GROUP_POLICY_FIELDS = frozenset({"name", "color", "wip_min", "wip_max"})
+
+
+def record_wip_changes(
+    s: AsyncSession,
+    board: dict[str, Any],
+    scope: str,
+    target: dict[str, Any],
+    fields: dict[str, Any],
+    user: dict[str, Any],
+) -> int:
+    """Keep each WIP limit that actually changed (ng_0008, 24/11/2026), for the Reports'
+    REP-13; in the caller's transaction. Returns how many were kept."""
+    now = utcnow()
+    kept = 0
+    for field in ("wip_min", "wip_max"):
+        if field not in fields:
+            continue
+        old, new = target.get(field), fields[field]
+        if (None if old is None else int(old)) == (None if new is None else int(new)):
+            continue
+        s.add(
+            WipLimitChange(
+                id=new_id(),
+                product_id=board.get("product_id") or "nagare",
+                board_id=board["id"],
+                scope=scope,
+                target_id=target["id"],
+                target_name=str(target.get("name") or ""),
+                field=field,
+                old_value=None if old is None else int(old),
+                new_value=None if new is None else int(new),
+                changed_by=user.get("id"),
+                changed_at=now,
+            )
+        )
+        kept += 1
+    return kept
 
 
 async def flow_locked(s: AsyncSession, board: dict[str, Any]) -> bool:
@@ -1578,6 +1616,7 @@ async def update_board(
             code="invalid_wip_range",
             details=fields,
         )
+    record_wip_changes(s, board, "board", board, fields, user)
     await s.execute(update(Board).where(Board.id == board["id"]).values(**fields))
     await s.commit()
     return await _board_out(s, await get_board_or_404(s, board["id"]))
@@ -2094,6 +2133,7 @@ async def update_column(
     if "group_id" in fields:
         await _assert_group_on_board(s, board["id"], fields["group_id"])
     if fields:
+        record_wip_changes(s, board, "column", column, fields, user)
         await s.execute(update(BoardColumn).where(BoardColumn.id == column["id"]).values(**fields))
     existing = await canonical_columns(s, board["id"])
     _assert_position_in_range(target_position, max(len(existing) - 1, 0), action="moved to")
@@ -2513,6 +2553,7 @@ async def update_group(
         )
 
     if fields:
+        record_wip_changes(s, board, "group", group, fields, user)
         await s.execute(update(ColumnGroup).where(ColumnGroup.id == group["id"]).values(**fields))
     if column_ids is not None:
         await _assign_group_columns(s, board["id"], group["id"], column_ids)

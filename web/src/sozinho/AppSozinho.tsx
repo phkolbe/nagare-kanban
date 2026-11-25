@@ -9,7 +9,7 @@ import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-
 import { Carregando } from '@pampufa/ui'
 
 import { caminhoEmIngles, ProvedorNagare } from '../app/contexto'
-import { TelaAdmin, TelaMetricas, TelaSimulador } from '../app/telasSobDemanda'
+import { TelaAdmin, TelaMetricas, TelaRelatorios, TelaSimulador } from '../app/telasSobDemanda'
 import { ProvedorAvisos } from '../componentes/Avisos'
 import { DicaDeSiglas } from '../componentes/DicaDeSiglas'
 import { NaoEncontrada } from '../componentes/NaoEncontrada'
@@ -82,6 +82,8 @@ function Rotas() {
             <Route path="projects/:projetoId" element={<TelaProjeto />} />
             <Route path="metrics" element={<TelaMetricas />} />
             <Route path="metrics/:quadroId" element={<TelaMetricas />} />
+            <Route path="reports" element={<TelaRelatorios />} />
+            <Route path="reports/:modelo" element={<TelaRelatorios />} />
             <Route path="simulator" element={<TelaSimulador />} />
             <Route path="simulator/:quadroId" element={<TelaSimulador />} />
             <Route path="admin" element={<Navigate to="users" replace />} />
@@ -90,7 +92,7 @@ function Rotas() {
             <Route path="card/:chave" element={<PaginaCartao />} />
             <Route path=":produto/card/:chave" element={<CartaoDoProduto />} />
             {/* Os nomes em portugues de antes de 19/10/2026 levam ao nome novo. */}
-            {['quadro', 'projetos', 'metricas', 'simulador', 'entrar', 'cartao'].map((antigo) => (
+            {['quadro', 'projetos', 'metricas', 'relatorios', 'simulador', 'entrar', 'cartao'].map((antigo) => (
               <Route key={antigo} path={`${antigo}/*`} element={<RotaAntiga />} />
             ))}
             <Route path="*" element={<NaoEncontrada />} />

@@ -280,6 +280,7 @@ async def move_card(
             note=note,
             is_backward=bool(is_backward),
             source=source or ("api" if user.get("role") == "system" else "ui"),
+            wip_override=bool(wip_override),
         )
     )
 

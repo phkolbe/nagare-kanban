@@ -22,6 +22,17 @@ import { eixoRedondo, passoRedondo } from '../graficos/escalas'
 import { rotaDoLinkAntigo } from '../sozinho/linksAntigos'
 import { tokenVencido, vencimentoDoToken } from '../api/sessaoLocal'
 import { temaEfetivo } from '../sozinho/tema'
+import { relatoriosNaoLidos } from '../sozinho/Sino'
+import {
+  buscaDosParametros,
+  formatarValor,
+  parametrosDaBusca,
+  periodoVizinho,
+  prontoParaPedir,
+  proximoNoFuturo,
+  textoDaVariacao,
+  tomDaVariacao,
+} from '../features/relatorios/formato'
 import { TRILHO, bloqueioDoItem } from '../sozinho/trilho'
 import { faseDoCartao } from '../features/projetos/fase'
 import {
@@ -291,7 +302,7 @@ confere(
   ['plano', 'papel', null],
 )
 confere('simulador e admin so no Nagare sozinho', ['g s', 'g a', 'g m', 'g b', '/', 'Enter'].map(ehSoDoNagare), [true, true, false, false, false, false])
-confere('o trilho tem as cinco telas', TRILHO.map((i) => i.caminho), ['quadro', 'projetos', 'metricas', 'simulador', 'admin'])
+confere('o trilho tem as seis telas (Reports desde 24/11/2026)', TRILHO.map((i) => i.caminho), ['quadro', 'projetos', 'metricas', 'relatorios', 'simulador', 'admin'])
 
 // ----------------------------------------------------------------- N3: metricas
 confere('janela de 90 dias', janela('90d', '2026-10-17', null), { from: '2026-07-19', to: '2026-10-17' })
@@ -490,6 +501,83 @@ confere('segundos em passos de 5', [segundosDesde(0, 3_999), segundosDesde(0, 5_
     [tokenVencido(token(agora / 1000 - 1), agora), tokenVencido(token(agora / 1000 + 3600), agora), tokenVencido('a.e30.b', agora), tokenVencido('lixo', agora), tokenVencido(null, agora)],
     [true, false, false, false, false],
   )
+}
+
+{
+  // Reports, onda 1 (24/11/2026): parametros na URL, periodos vizinhos e valores por unidade.
+  const p = parametrosDaBusca(new URLSearchParams('period=month&board_id=b1&lixo=x'))
+  confere('parametros da busca', p, { period: 'month', board_id: 'b1' })
+  confere('periodo desconhecido vira semana', parametrosDaBusca(new URLSearchParams('period=ano')).period, 'week')
+  confere('busca em ordem fixa, sem vazios', buscaDosParametros({ board_id: 'b1', period: 'week', date: '' }), '?period=week&board_id=b1')
+  confere(
+    'pronto para pedir',
+    [
+      prontoParaPedir({ scope: 'board' }, { period: 'week' }),
+      prontoParaPedir({ scope: 'board' }, { period: 'week', board_id: 'b' }),
+      prontoParaPedir({ scope: 'project' }, { period: 'week' }),
+      prontoParaPedir({ scope: 'projects' }, { period: 'custom', from: '2026-11-01' }),
+      prontoParaPedir({ scope: 'none' }, { period: 'month' }),
+    ],
+    [false, true, false, false, true],
+  )
+  const semana = { period: { kind: 'week' as const, from: '2026-11-16', to: '2026-11-22', label: '', timezone: 'UTC' } }
+  const mes = { period: { kind: 'month' as const, from: '2026-01-01', to: '2026-01-31', label: '', timezone: 'UTC' } }
+  const livre = { period: { kind: 'custom' as const, from: '2026-11-01', to: '2026-11-10', label: '', timezone: 'UTC' } }
+  confere('semana anterior e seguinte', [periodoVizinho(semana, -1), periodoVizinho(semana, 1)], [{ date: '2026-11-09' }, { date: '2026-11-23' }])
+  confere('mes anterior atravessa o ano', periodoVizinho(mes, -1), { date: '2025-12-01' })
+  confere('intervalo livre do mesmo tamanho', periodoVizinho(livre, -1), { from: '2026-10-22', to: '2026-10-31' })
+  confere('proximo no futuro', [proximoNoFuturo(semana, '2026-11-22'), proximoNoFuturo(semana, '2026-11-25')], [true, false])
+  const f = {
+    numero: (v: number, casas = 0) => v.toFixed(casas).replace('.', ','),
+    data: (iso: string | null | undefined) => (iso ? iso.slice(8, 10) + '/' + iso.slice(5, 7) : '—'),
+    dataHora: (iso: string | null | undefined) => (iso ? 'dh' : '—'),
+    dias: 'd',
+    horas: 'h',
+    porSemana: '/sem',
+  }
+  confere(
+    'valores por unidade',
+    [
+      formatarValor(4.5, 'days', f),
+      formatarValor(36.3, 'days', f),
+      formatarValor(85, 'percent', f),
+      formatarValor(4.52, 'cards/week', f),
+      formatarValor(3.25, 'hours', f),
+      formatarValor(0.83, 'ratio', f),
+      formatarValor(null, 'count', f),
+      formatarValor({ key: 'NGR-1', title: 'Fazer' }, 'card', f),
+      formatarValor('2026-11-20', 'date', f),
+    ],
+    ['4,5 d', '36 d', '85%', '4,5/sem', '3,3 h', '0,83', '—', 'NGR-1 — Fazer', '20/11'],
+  )
+  confere('variacao em texto', [textoDaVariacao(12.4, f.numero), textoDaVariacao(-3.5, f.numero), textoDaVariacao(null, f.numero)], ['+12%', '−3,5%', ''])
+  confere(
+    'tom da variacao',
+    [
+      tomDaVariacao({ trend_pct: 10, higher_is_better: true }),
+      tomDaVariacao({ trend_pct: 10, higher_is_better: false }),
+      tomDaVariacao({ trend_pct: -5, higher_is_better: false }),
+      tomDaVariacao({ trend_pct: 10, higher_is_better: null }),
+      tomDaVariacao({ trend_pct: null, higher_is_better: true }),
+    ],
+    ['bom', 'ruim', 'bom', 'neutro', 'neutro'],
+  )
+  confere(
+    'contador do item Reports: so avisos de relatorio nao lidos',
+    relatoriosNaoLidos([
+      { kind: 'report_issued', read_at: null },
+      { kind: 'report_issued', read_at: '2026-11-24T10:00:00Z' },
+      { kind: 'card_blocked', read_at: null },
+    ]),
+    1,
+  )
+  const itemReports = TRILHO.find((i) => i.caminho === 'relatorios')
+  confere('item Reports no trilho, fechado sem plano ou sem papel', [
+    itemReports ? bloqueioDoItem(itemReports, { reports: false }, { read_reports: true }) : 'sem item',
+    itemReports ? bloqueioDoItem(itemReports, { reports: true }, { read_reports: false }) : 'sem item',
+    itemReports ? bloqueioDoItem(itemReports, { reports: true }, { read_reports: true }) : 'sem item',
+  ], ['plano', 'papel', null])
+  confere('rota dos Reports em ingles', montarRota('sozinho', 'nagare', 'relatorios/hours'), '/reports/hours')
 }
 
 if (falhas > 0) throw new Error(`${falhas} de ${total} verificacoes falharam.`)

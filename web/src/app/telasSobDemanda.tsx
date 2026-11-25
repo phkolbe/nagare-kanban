@@ -16,4 +16,5 @@ function sobDemanda(carregar: () => Promise<{ default: ComponentType }>) {
 
 export const TelaMetricas = sobDemanda(() => import('../features/metricas/TelaMetricas').then((m) => ({ default: m.TelaMetricas })))
 export const TelaSimulador = sobDemanda(() => import('../features/simulador/TelaSimulador').then((m) => ({ default: m.TelaSimulador })))
+export const TelaRelatorios = sobDemanda(() => import('../features/relatorios/TelaRelatorios').then((m) => ({ default: m.TelaRelatorios })))
 export const TelaAdmin = sobDemanda(() => import('../features/admin/TelaAdmin').then((m) => ({ default: m.TelaAdmin })))

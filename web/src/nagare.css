@@ -1438,3 +1438,194 @@ a.ng-indicador.clicavel:focus-visible {
 .ng-lista-tipos > li > form {
   flex: 1;
 }
+
+/* ------------------------------------------------------------------ Reports (onda 1, 24/11/2026) */
+.ng-relatorios-descricao {
+  max-width: 72ch;
+  color: var(--muted);
+}
+.ng-relatorios-catalogo {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+  gap: 12px;
+  margin: 16px 0;
+  padding: 0;
+  list-style: none;
+}
+.ng-relatorio-modelo {
+  padding: 14px 16px;
+}
+.ng-relatorio-modelo h3 {
+  margin: 2px 0 6px;
+  font-size: 16px;
+}
+.ng-relatorio-modelo h3 a {
+  color: var(--navy);
+  text-decoration: none;
+}
+.ng-relatorio-modelo h3 a:hover {
+  text-decoration: underline;
+}
+.ng-relatorio-modelo p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.ng-relatorio-modelo.fechado {
+  opacity: 0.7;
+}
+.ng-relatorio-voltar {
+  display: inline-block;
+  margin-bottom: 4px;
+  color: var(--navy);
+}
+.ng-relatorio-acoes {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.ng-relatorio-barra select {
+  max-width: 340px;
+}
+.ng-relatorio-barra {
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.ng-relatorio-navegar {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+.ng-relatorio-data {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+.ng-relatorio-ocupado {
+  opacity: 0.6;
+}
+.ng-relatorio {
+  max-width: 1200px;
+}
+.ng-relatorio-cabeca {
+  margin: 12px 0 8px;
+}
+.ng-relatorio-cabeca h2 {
+  margin: 2px 0;
+  font-size: 22px;
+}
+.ng-relatorio-sub {
+  font-weight: 500;
+  color: var(--muted);
+}
+.ng-relatorio-periodo {
+  margin: 4px 0 0;
+}
+.ng-relatorio-secao {
+  margin: 18px 0 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.ng-relatorio-secao h3 {
+  margin: 0 0 4px;
+  font-size: 17px;
+}
+.ng-relatorio-secao h4 {
+  margin: 14px 0 6px;
+  font-size: 14px;
+}
+.ng-relatorio-nota {
+  margin: 10px 0;
+  padding: 8px 12px;
+  border-left: 3px solid var(--navy);
+  background: var(--line-soft);
+  font-size: 13px;
+}
+.ng-relatorio-nota.alerta {
+  border-left-color: var(--amber);
+}
+.ng-relatorio-barras {
+  max-width: 760px;
+  margin: 10px 0;
+}
+.ng-relatorio-tabela {
+  margin: 10px 0;
+}
+.ng-rolagem-x {
+  overflow-x: auto;
+}
+.ng-relatorio .ng-tabela td:first-child {
+  min-width: 160px;
+}
+.ng-relatorio .ng-tabela th.num,
+.ng-relatorio .ng-tabela td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.ng-relatorio .ng-tabela td a {
+  color: var(--navy);
+  text-decoration: none;
+}
+.ng-relatorio .ng-tabela td a:hover {
+  text-decoration: underline;
+}
+.ng-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--navy);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ng-link:hover {
+  text-decoration: underline;
+}
+
+/* o sino do Nagare sozinho (mesmo jeito do sino da Pampufa) */
+.ng-sino {
+  position: relative;
+}
+.sino-lista li.lido {
+  opacity: 0.65;
+}
+
+@media print {
+  .ng-relatorio-controles,
+  .ng-sino {
+    display: none !important;
+  }
+  .shell,
+  .main,
+  .content {
+    display: block !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  .ng-relatorio {
+    max-width: none;
+  }
+  .ng-relatorio-secao {
+    break-inside: auto;
+  }
+  .ng-relatorio-secao h3,
+  .ng-relatorio-tabela h4 {
+    break-after: avoid;
+  }
+  .ng-relatorio .ng-indicadores,
+  .ng-relatorio-barras,
+  .ng-relatorio .ng-tabela tr {
+    break-inside: avoid;
+  }
+  .ng-relatorio .ng-tabela td a {
+    color: inherit;
+  }
+  .ng-relatorio-secao + .ng-relatorio-secao {
+    break-before: auto;
+  }
+}

@@ -19,6 +19,7 @@ import { useT, type Chave } from '../i18n'
 import { AjudaDeAtalhos, useAtalhos } from '../componentes/Atalhos'
 import { SeletorIdioma } from '../componentes/SeletorIdioma'
 import { useProdutoSozinho, type ProdutoDisponivel } from './produto'
+import { relatoriosNaoLidos, Sino, useAvisosDoSino } from './Sino'
 import { useSessao } from './sessao'
 import { aplicarTema, temaGuardado, type Tema } from './tema'
 import { TRILHO, bloqueioDoItem } from './trilho'
@@ -57,6 +58,8 @@ export function ShellSozinho() {
     staleTime: 60_000,
   })
   useAtalhos({ abrirAjuda: () => setAjuda(true) })
+  const avisos = useAvisosDoSino()
+  const relatoriosNovos = relatoriosNaoLidos(avisos.data?.items ?? [])
 
   const flags = eu?.flags ?? {}
   const capacidades = eu?.capabilities ?? {}
@@ -76,6 +79,7 @@ export function ShellSozinho() {
               <>
                 <Icone nome={item.icone} />
                 <span className="rotulo">{t(item.rotulo)}</span>
+                {item.caminho === 'relatorios' && !bloqueio && relatoriosNovos > 0 && <span className="contador">{relatoriosNovos}</span>}
                 {bloqueio && (
                   <span className="rotulo ng-cadeado" aria-hidden="true">
                     🔒
@@ -117,6 +121,7 @@ export function ShellSozinho() {
         <header className="topbar">
           <BuscaDeQuadros />
           <div className="direita ng-topo-acoes">
+            <Sino />
             <label className="ng-idioma">
               <span className="visualmente-oculto">{t('tema.rotulo')}</span>
               <select value={tema} aria-label={t('tema.rotulo')} onChange={(e) => trocarTema(e.target.value as Tema)}>
