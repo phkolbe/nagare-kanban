@@ -279,8 +279,13 @@ def test_sealed_envelope_demands_exist_and_are_untouched(db: Database) -> None:
     assert len(sealed) >= 20
     assert all(card["opened_at"] is None for card in sealed)
     assert all(card["committed_at"] is None for card in sealed)
-    envelope_column = db.q1("SELECT id FROM columns WHERE kind = 'envelope' LIMIT 1")
-    assert all(card["column_id"] == envelope_column["id"] for card in sealed)
+    # Each sealed card sits in the envelope column of its own board. (An unordered
+    # `LIMIT 1` picked another board's envelope on PostgreSQL once a test updated a column.)
+    envelope_of = {
+        row["board_id"]: row["id"]
+        for row in db.q("SELECT id, board_id FROM columns WHERE kind = 'envelope'")
+    }
+    assert all(card["column_id"] == envelope_of.get(card["board_id"]) for card in sealed)
 
 
 def test_flow_efficiency_lands_between_25_and_40_percent(db: Database) -> None:
