@@ -1451,9 +1451,17 @@ a.ng-indicador.clicavel:focus-visible {
   margin: 16px 0;
   padding: 0;
   list-style: none;
+  /* todas as caixas com a mesma altura, em todas as linhas (25/11/2026) */
+  grid-auto-rows: 1fr;
 }
 .ng-relatorio-modelo {
+  display: flex;
+  flex-direction: column;
   padding: 14px 16px;
+}
+/* o `.card + .card` do SDK empurra cada caixa depois da primeira; na grade, nao */
+.ng-relatorios-catalogo > .card + .card {
+  margin-top: 0;
 }
 .ng-relatorio-modelo h3 {
   margin: 2px 0 6px;
