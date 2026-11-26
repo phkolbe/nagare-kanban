@@ -1343,4 +1343,63 @@ PT: dict[str, str] = {
     "Period": "Período",
     "Generated at": "Gerado em",
     "Week of {day}": "Semana de {day}",
+    # ---- Reports, onda 2: REP-09 previsto × realizado (25/11/2026)
+    "Forecast against actual": "Previsto × realizado",
+    "Each forecast registered from the Monte Carlo panel of the Metrics and whether "
+    "it came true: how far to trust the dates given to clients.": (
+        "Cada previsão registrada no painel de Monte Carlo das Métricas e se ela se cumpriu: "
+        "o quanto confiar nas datas dadas aos clientes."
+    ),
+    "When will {count} items be done?": "Quando os {count} itens ficam prontos?",
+    "How many items by {date}?": "Quantos itens até {date}?",
+    "{count} or more": "{count} ou mais",
+    "{done} of {total} delivered": "{done} de {total} entregues",
+    "{count} so far": "{count} até agora",
+    "{count} delivered": "{count} entregues",
+    "Open": "Em aberto",
+    "Met (within the {level}% forecast)": "Cumprida (dentro da previsão de {level}%)",
+    "Missed, within the {level}% forecast": "Não cumprida; dentro da previsão de {level}%",
+    "Missed, beyond every level": "Não cumprida, além de todos os níveis",
+    "Missed": "Não cumprida",
+    "Forecasts registered": "Previsões registradas",
+    "Forecasts decided": "Previsões decididas",
+    "Met or missed at the {level}% level within the period.": (
+        "Cumpridas ou não no nível de {level}% dentro do período."
+    ),
+    "Met at {level}%": "Cumpridas a {level}%",
+    "Hit rate at {level}%": "Acerto a {level}%",
+    "Well calibrated, it stays close to {level}%.": "Bem calibrado, fica perto de {level}%.",
+    "Still open": "Ainda em aberto",
+    "Registered on": "Registrada em",
+    "Question": "Pergunta",
+    "Forecast at {level}%": "Previsão a {level}%",
+    "50% to 95%": "De 50% a 95%",
+    "Actual": "Realizado",
+    "Result": "Resultado",
+    "No forecast was open in this period. Register one with the button in the "
+    "Monte Carlo panel of the Metrics.": (
+        "Nenhuma previsão em aberto neste período. Registre uma pelo botão do painel de "
+        "Monte Carlo das Métricas."
+    ),
+    "Confidence": "Confiança",
+    "Met": "Cumpridas",
+    "Decided": "Decididas",
+    "Hit rate": "Acerto",
+    "No forecast decided yet.": "Nenhuma previsão decidida ainda.",
+    "The {level}% level is read as the promise: the date or the quantity given to the client.": (
+        "O nível de {level}% vale como a promessa: a data ou a quantidade dada ao cliente."
+    ),
+    "Forecasts": "Previsões",
+    "Forecasts registered in the period or still open in it, checked against "
+    "the deliveries made after each one (only the project's, when it names one).": (
+        "Previsões registradas no período ou ainda em aberto nele, conferidas com as entregas "
+        "feitas depois de cada uma (só as do projeto, quando ela tem um)."
+    ),
+    "Calibration": "Calibração",
+    "Every forecast registered up to the end of the period. Well "
+    "calibrated forecasts are met about as often as their confidence: "
+    "the 85% ones about 85 times in 100.": (
+        "Todas as previsões registradas até o fim do período. Previsões bem calibradas se "
+        "cumprem mais ou menos na proporção da confiança: as de 85%, umas 85 vezes em 100."
+    ),
 }

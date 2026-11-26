@@ -16,6 +16,7 @@ import { useNagare } from '../../app/contexto'
 import { chaves } from '../../api/nagare'
 import type { Cartao, CartaoDetalhe, Coluna, Quadro, SituacaoWip } from '../../api/tipos'
 import { useAvisos } from '../../componentes/Avisos'
+import { copiar } from '../../componentes/copiar'
 import { Gaveta, Janela } from '../../componentes/Sobreposicao'
 import { useT } from '../../i18n'
 import { destinosAFrente, providenciaDo, validarDestino } from '../quadro/regras'
@@ -243,32 +244,6 @@ export function ConteudoDoCartao({
       {arquivar && <ConfirmarArquivar cartao={c} comProvidencia={Boolean(providencia)} fechar={() => setArquivar(false)} feito={arquivado} />}
     </>
   )
-}
-
-/** Copia um texto: a API da area de transferencia e, sem ela (pagina sem HTTPS), o jeito antigo. */
-async function copiar(texto: string): Promise<boolean> {
-  try {
-    if (navigator.clipboard && window.isSecureContext) {
-      await navigator.clipboard.writeText(texto)
-      return true
-    }
-  } catch {
-    /* tenta o jeito antigo */
-  }
-  const campo = document.createElement('textarea')
-  campo.value = texto
-  campo.setAttribute('readonly', '')
-  campo.style.position = 'fixed'
-  campo.style.opacity = '0'
-  document.body.appendChild(campo)
-  campo.select()
-  try {
-    return document.execCommand('copy')
-  } catch {
-    return false
-  } finally {
-    campo.remove()
-  }
 }
 
 /** O endereco do cartao: o caminho do roteador e o completo (com o servidor), para colar num chat. */

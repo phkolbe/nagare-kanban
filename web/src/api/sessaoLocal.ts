@@ -97,6 +97,20 @@ export async function requisitarLocal<T>(caminho: string, opcoes: Opcoes = {}): 
 }
 
 /**
+ * Um pedido sem login (a pagina do cliente de um relatorio emitido, Reports onda 2, 25/11/2026):
+ * nunca leva o token de quem estiver logado neste navegador e nao mexe na sessao.
+ */
+export async function requisitarPublico<T>(caminho: string): Promise<T> {
+  const resposta = await fetch(`${API_LOCAL}${caminho}`, {
+    headers: { Accept: 'application/json' },
+    referrerPolicy: 'no-referrer',
+    cache: 'no-store',
+  })
+  if (!resposta.ok) throw new ErroApi((await problemaDe(resposta)) as ConstructorParameters<typeof ErroApi>[0])
+  return (await resposta.json()) as T
+}
+
+/**
  * Um arquivo da API (a planilha dos Reports, 24/11/2026), com o mesmo token e as mesmas regras
  * de sessao de `requisitarLocal`. O nome vem do `Content-Disposition` do servidor.
  */

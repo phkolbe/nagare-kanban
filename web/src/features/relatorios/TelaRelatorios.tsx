@@ -5,22 +5,26 @@
  * - `/nagare/reports`: o catalogo dos relatorios que a pessoa pode abrir.
  * - `/nagare/reports/<modelo>?period=...`: o relatorio ao vivo, com o periodo e o escopo na URL
  *   (o link pode ser copiado), imprimir e baixar a planilha (Excel ou CSV).
+ * - Onda 2 (25/11/2026): o botao Emitir guarda o relatorio congelado e abre o emitido
+ *   (`/nagare/reports/issued/<id>`, em `TelaEmitidos.tsx`); o catalogo mostra os ultimos.
  *
  * As Metricas servem para explorar; os Reports, para prestar contas de um periodo fechado.
  */
 
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Aviso, Cabecalho, Carregando, ErroDeApi, Icone, hojeISO } from '@pampufa/ui'
 
 import { useNagare } from '../../app/contexto'
 import { consulta, nagare } from '../../api/nagare'
 import { baixarLocal } from '../../api/sessaoLocal'
 import { useProdutoSozinho } from '../../sozinho/produto'
-import { useT } from '../../i18n'
+import { mensagemDeErro, useT } from '../../i18n'
 import { useProjetos, useQuadros, useVinculo } from '../quadro/consultas'
 import { Documento } from './Documento'
+import { corpoDaEmissao, type Emitido } from './emitidos'
+import { UltimosEmitidos } from './TelaEmitidos'
 import {
   buscaDosParametros,
   parametrosDaBusca,
@@ -71,6 +75,7 @@ function Catalogo() {
           ))}
         </ul>
       )}
+      <UltimosEmitidos />
     </div>
   )
 }
@@ -232,10 +237,21 @@ function TelaDoRelatorio({ modeloId }: { modeloId: string }) {
 }
 
 function AcoesDoRelatorio({ modeloId, p, habilitado }: { modeloId: string; p: Parametros; habilitado: boolean }) {
-  const { t } = useT()
-  const { produto } = useNagare()
+  const { t, eu } = useT()
+  const { produto, rota } = useNagare()
+  const navegar = useNavigate()
+  const queryClient = useQueryClient()
   const [baixando, setBaixando] = useState(false)
   const [erro, setErro] = useState(false)
+  const podeEmitir = Boolean(eu?.capabilities.issue_reports)
+  const emitir = useMutation({
+    mutationFn: () => nagare<Emitido>(produto, '/reports/issued', { metodo: 'POST', corpo: corpoDaEmissao(modeloId, p) }),
+    onSuccess: (emitido) => {
+      void queryClient.invalidateQueries({ queryKey: ['nagare', produto, 'emitidos'] })
+      queryClient.setQueryData(['nagare', produto, 'emitidos', emitido.id], emitido)
+      navegar(rota(`relatorios/emitidos/${emitido.id}`))
+    },
+  })
 
   const baixar = async (formato: 'xlsx' | 'csv') => {
     setBaixando(true)
@@ -270,6 +286,16 @@ function AcoesDoRelatorio({ modeloId, p, habilitado }: { modeloId: string; p: Pa
       <button type="button" className="btn sm ghost" disabled={!habilitado || baixando} onClick={() => baixar('csv')}>
         {t('relatorios.csv')}
       </button>
+      {podeEmitir && (
+        <button type="button" className="btn sm" disabled={!habilitado || emitir.isPending} title={t('relatorios.dica_emitir')} onClick={() => emitir.mutate()}>
+          {emitir.isPending ? t('relatorios.emitindo') : t('relatorios.emitir')}
+        </button>
+      )}
+      {emitir.isError && (
+        <span className="ng-ruim mini" role="alert">
+          {mensagemDeErro(emitir.error, t)}
+        </span>
+      )}
       {erro && (
         <span className="ng-ruim mini" role="alert">
           {t('relatorios.erro_planilha')}

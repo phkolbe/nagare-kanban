@@ -536,7 +536,7 @@ function MetricasDoQuadro({ quadroId }: { quadroId: string }) {
           }}
         </PainelDe>
 
-        <PainelPrevisao quadroId={quadroId} />
+        <PainelPrevisao quadroId={quadroId} projetoId={filtros.projeto} />
       </div>
 
       <PainelPessoas />

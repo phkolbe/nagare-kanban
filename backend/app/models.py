@@ -54,11 +54,14 @@ __all__ = [
     "Comment",
     "ExternalRef",
     "FeatureFlag",
+    "ForecastRecord",
     "Notification",
     "Plan",
     "ProductLink",
     "ProductLinkHistory",
     "Project",
+    "ReportIssue",
+    "ReportLink",
     "SimulationRun",
     "User",
     "WebhookOutbox",
@@ -444,6 +447,98 @@ class Notification(Base):
     link: Mapped[str | None] = mapped_column(String(300))
     created_at: Mapped[str] = mapped_column(Instant, nullable=False)
     read_at: Mapped[str | None] = mapped_column(Instant)
+
+
+class ReportIssue(Base):
+    """An issued report (ng_0009, 25/11/2026): the whole Document, frozen.
+
+    Reopening it shows exactly what was issued, even after the board changed: the row keeps
+    the Document (not the query), the parameters, the period, who issued it, when, the
+    Document's format version and the language its texts were written in.
+    """
+
+    __tablename__ = "report_issues"
+    __table_args__ = (
+        CheckConstraint("period_kind IN ('week','month','custom')", name="period_kind"),
+        Index("idx_report_issues_product_time", "product_id", "issued_at"),
+    )
+
+    id: Mapped[str] = _id()
+    product_id: Mapped[str] = _product()
+    template: Mapped[str] = mapped_column(String(40), nullable=False)
+    code: Mapped[str] = mapped_column(String(10), nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    subtitle: Mapped[str | None] = mapped_column(String(300))
+    params: Mapped[dict[str, Any]] = mapped_column(Json, nullable=False, default=dict)
+    period_kind: Mapped[str] = mapped_column(String(10), nullable=False)
+    period_from: Mapped[str] = mapped_column(Day, nullable=False)
+    period_to: Mapped[str] = mapped_column(Day, nullable=False)
+    format_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    locale: Mapped[str] = mapped_column(String(10), nullable=False, default="en")
+    document: Mapped[dict[str, Any]] = mapped_column(Json, nullable=False)
+    issued_by: Mapped[str | None] = _fk("users.id", "SET NULL")
+    issued_at: Mapped[str] = mapped_column(Instant, nullable=False)
+
+
+class ReportLink(Base):
+    """A client link to an issued report (ng_0009, 25/11/2026; decisions R5, R18, R19).
+
+    Only the SHA-256 of the token is kept: the token itself is shown once, when the link is
+    created. Always tied to projects (REP-02's one, REP-03's chosen ones), valid until
+    ``expires_at`` unless revoked, with a count of accesses and the last one.
+    """
+
+    __tablename__ = "report_links"
+    __table_args__ = (
+        UniqueConstraint("token_hash"),
+        Index("idx_report_links_issue", "issue_id"),
+    )
+
+    id: Mapped[str] = _id()
+    product_id: Mapped[str] = _product()
+    issue_id: Mapped[str] = _fk("report_issues.id", "CASCADE", nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    project_ids: Mapped[list[Any]] = mapped_column(Json, nullable=False, default=list)
+    expires_at: Mapped[str] = mapped_column(Instant, nullable=False)
+    created_by: Mapped[str | None] = _fk("users.id", "SET NULL")
+    created_at: Mapped[str] = mapped_column(Instant, nullable=False)
+    revoked_at: Mapped[str | None] = mapped_column(Instant)
+    revoked_by: Mapped[str | None] = _fk("users.id", "SET NULL")
+    access_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    last_access_at: Mapped[str | None] = mapped_column(Instant)
+
+
+class ForecastRecord(Base):
+    """A Monte Carlo forecast someone registered (ng_0009, 25/11/2026; decision R15).
+
+    The REP-09 report (forecast against actual) checks it later against the real deliveries:
+    the question (``when``: how long for N items; ``how_many``: how many by a date), its
+    parameters, the percentiles given and, for ``when``, the date of each percentile.
+    """
+
+    __tablename__ = "forecast_records"
+    __table_args__ = (
+        CheckConstraint("question IN ('when','how_many')", name="question"),
+        Index("idx_forecast_records_board_time", "board_id", "created_at"),
+    )
+
+    id: Mapped[str] = _id()
+    product_id: Mapped[str] = _product()
+    board_id: Mapped[str] = _fk("boards.id", "CASCADE", nullable=False)
+    project_id: Mapped[str | None] = _fk("projects.id", "SET NULL")
+    question: Mapped[str] = mapped_column(String(10), nullable=False)
+    params: Mapped[dict[str, Any]] = mapped_column(Json, nullable=False, default=dict)
+    percentiles: Mapped[dict[str, Any]] = mapped_column(Json, nullable=False, default=dict)
+    dates: Mapped[dict[str, Any]] = mapped_column(Json, nullable=False, default=dict)
+    start_date: Mapped[str] = mapped_column(Day, nullable=False)
+    target_date: Mapped[str | None] = mapped_column(Day)
+    low_confidence: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+    created_by: Mapped[str | None] = _fk("users.id", "SET NULL")
+    created_at: Mapped[str] = mapped_column(Instant, nullable=False)
 
 
 # ---------------------------------------------------------------------------

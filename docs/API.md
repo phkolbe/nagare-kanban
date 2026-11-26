@@ -331,6 +331,8 @@ consumed by the API guards, `GET /users/roles` and `GET /auth/me`:
 | `simulator_boards` | master, administrator, simulator |
 | `api_tokens` | master, administrator, system |
 | `read_reports` | every role (whoever reads metrics; decision R21, 24/11/2026) |
+| `issue_reports` | master, administrator (issue reports, register forecasts; R21, 25/11/2026) |
+| `share_reports` | master, administrator (client links to issued reports; R21, 25/11/2026) |
 
 Guards come in three shapes:
 
@@ -1081,6 +1083,7 @@ length.
 | `portfolio` | REP-04 | none | `reports_portfolio` | Every product the caller opens (`GET /integration/products`), side by side: throughput and trend, lead time, WIP, aging, blocked |
 | `risks` | REP-05 | `board_id` (required) | `reports` | Blocker causes by weight, blocked time, cards blocked now, recurring causes |
 | `waiting` | REP-11 | `board_id` (required) | `reports` | Time in each column, flow efficiency, the column that holds the flow most |
+| `forecast_review` | REP-09 | `board_id` (required) | `reports` | Registered forecasts against the real deliveries: hit rate at 85%, the forecasts open in the period, calibration per level (§15.2) |
 | `policy_exceptions` | REP-13 | `board_id` (required) | `reports` | Expedite cards that passed a WIP limit, WIP limit changes, class-of-service changes — only what happened after `ng_0008` (R14) |
 
 **The Document** (`FORMAT_VERSION` 1) is the one JSON the screen draws and the
@@ -1117,6 +1120,68 @@ a missing scope → `400 report_board_required` / `report_project_required`; a p
 another product → `404 project_not_found` (also when none of the `project_ids` is
 known); a board of another product → `404 board_not_found`; `reports_portfolio` off for the portfolio →
 `403 feature_disabled` / `plan_upgrade_required`.
+
+### 15.1 Issued reports and client links (wave 2, 25/11/2026)
+
+Rules in `backend/app/reports/emitidos.py`, tables `report_issues` and `report_links`
+(`ng_0009`). Same router, same guards (standalone only, `reports` flag), plus two
+capabilities: `issue_reports` (issue; also registers forecasts, §15.2) and `share_reports`
+(client links), both for master and administrator (R21). Screens: `/nagare/reports/issued`
+and `/nagare/reports/issued/<id>`; the client page is `/nagare/r/<token>`.
+
+| Method & path | Body / query | Answer |
+|---|---|---|
+| `POST /reports/issued` | `{template, period, date?, from?, to?, board_id?, project_id?, project_ids?}` (`project_ids` a list or comma-separated) — the live report's parameters | `201` the issued report **with** its frozen `document`; `issue_reports` |
+| `GET /reports/issued` | `template?`, `limit` (1–200, default 50), `offset` | `{items: [...], total}` newest first, without the Document |
+| `GET /reports/issued/{id}` | — | The issued report with `document` and `links` (`links` only for `share_reports`; empty otherwise) |
+| `GET /reports/issued/{id}/export` | `format=xlsx\|csv` | The frozen Document as a spreadsheet, labelled in the language it was issued in |
+| `POST /reports/issued/{id}/links` | `{days?}` (1–90, default **7**, R19) | `201` the link with `token` and `path` (`/r/<token>`) — **the only time the token is shown**; `share_reports` |
+| `DELETE /reports/issued/{id}/links/{link_id}` | — | The link with `revoked_at` set (idempotent); `share_reports` |
+
+An issued report: `{id, product_id, template, code, title, subtitle, params, period: {kind,
+from, to, label}, format_version, locale, issued_at, issued_by: {id, name}, shareable,
+active_links, document?, links?}`. It keeps the whole Document (not the query): reopened
+any day later it shows the same numbers. A link: `{id, issue_id, projects: [{id, name}],
+expires_at, created_at, created_by, revoked_at, revoked_by, access_count, last_access_at,
+state}` with `state` = `active`, `expired` or `revoked`.
+
+**Who can be shared (R6, R18).** Only issued `project_status` (REP-02, tied to its project)
+and `hours` (REP-03) **filtered by projects** (tied to those projects). Otherwise
+`409 report_link_not_allowed` / `409 report_link_needs_projects`. The token is 32 random
+bytes (URL-safe); the database keeps only its SHA-256.
+
+**The public page** — `GET /public/reports/{token}`, **no sign-in, no `X-Produto`** (the
+product comes from the link; the product's plan must still include `reports`):
+`{document, issued_at, issued_by_name, expires_at, locale}`. Each call counts one access.
+Unknown token → `404 report_link_not_found`; revoked → `410 report_link_revoked`; expired →
+`410 report_link_expired`; more than 60 calls a minute from one IP → `429 too_many_requests`
+(in memory, per process; behind a proxy that hides the client, as the home staging on
+Docker Desktop, the limit is shared by everyone). Answers carry `X-Robots-Tag: noindex,
+nofollow`, `Cache-Control: no-store` and `Referrer-Policy: no-referrer`; so does the SPA
+page at `/nagare/r/<token>`.
+
+Other errors: an issued report of another product or unknown → `404 report_issue_not_found`;
+a link of another issued report → `404 report_link_not_found`; `days` out of range →
+`422 validation_error`.
+
+### 15.2 Registered forecasts and REP-09 (wave 2, 25/11/2026)
+
+Router `backend/app/routers/forecasts.py`, table `forecast_records` (`ng_0009`), the check in
+`backend/app/reports/previsoes.py`. Standalone only, `reports` flag.
+
+| Method & path | Body / query | Answer |
+|---|---|---|
+| `POST /forecasts/records` | `{board_id, project_id?, question: when\|how_many, backlog_size?, days?, sample_weeks?}` — the Monte Carlo panel's question | `201 {id, board_id, project_id, question, params, percentiles, dates, start_date, target_date, low_confidence, created_by, created_at, sentence}`; `issue_reports` and the `monte_carlo` flag. The server recomputes the forecast with the panel's own function and seed, so what is kept is what the panel showed |
+| `GET /forecasts/records` | `board_id?`, `project_id?`, `limit` | `{items, total}` newest first; `read_reports` |
+
+**REP-09 `forecast_review`** (scope `board_id`, flag `reports`) checks each record against the
+deliveries made after it (the project's only, when the record names one), at every
+confidence level it gave: `when` is met at a level when the N-th delivery came on or before
+that level's date, missed once the date passed (product time zone); `how_many` is met when
+the deliveries reach that level's quantity by the end of the target day, missed when the day
+ends short. The 85% level is the promise. Sections: hit rate (registered, decided, met, hit
+rate at 85% and still open, against the previous period), the forecasts open in the period,
+and the calibration table (hit rate per level, every forecast up to the end of the period).
 
 ---
 

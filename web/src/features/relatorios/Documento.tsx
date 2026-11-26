@@ -27,7 +27,19 @@ function useFormatos(): Formatos {
   return { numero, data, dataHora, dias: t('relatorios.dias'), horas: t('relatorios.horas'), porSemana: t('relatorios.por_semana') }
 }
 
-export function Documento({ doc, abrirProduto }: { doc: Doc; abrirProduto?: (produto: string, quadroId: string) => void }) {
+/**
+ * `publico`: a pagina do cliente de um emitido (onda 2, 25/11/2026), sem login, sem links para
+ * os cartoes (o cliente nao entra no quadro).
+ */
+export function Documento({
+  doc,
+  abrirProduto,
+  publico = false,
+}: {
+  doc: Doc
+  abrirProduto?: (produto: string, quadroId: string) => void
+  publico?: boolean
+}) {
   const { t, dataHora } = useT()
   return (
     <article className="ng-relatorio" aria-label={doc.title}>
@@ -47,7 +59,7 @@ export function Documento({ doc, abrirProduto }: { doc: Doc; abrirProduto?: (pro
           <h3>{secao.title}</h3>
           {secao.description && <p className="mini">{secao.description}</p>}
           {secao.blocks.map((bloco, i) => (
-            <BlocoDoRelatorio key={i} bloco={bloco} abrirProduto={abrirProduto} />
+            <BlocoDoRelatorio key={i} bloco={bloco} abrirProduto={abrirProduto} publico={publico} />
           ))}
         </section>
       ))}
@@ -55,7 +67,15 @@ export function Documento({ doc, abrirProduto }: { doc: Doc; abrirProduto?: (pro
   )
 }
 
-function BlocoDoRelatorio({ bloco, abrirProduto }: { bloco: Bloco; abrirProduto?: (produto: string, quadroId: string) => void }) {
+function BlocoDoRelatorio({
+  bloco,
+  abrirProduto,
+  publico,
+}: {
+  bloco: Bloco
+  abrirProduto?: (produto: string, quadroId: string) => void
+  publico: boolean
+}) {
   const f = useFormatos()
   if (bloco.type === 'kpis') {
     return (
@@ -88,7 +108,7 @@ function BlocoDoRelatorio({ bloco, abrirProduto }: { bloco: Bloco; abrirProduto?
       </div>
     )
   }
-  return <Tabela bloco={bloco} abrirProduto={abrirProduto} />
+  return <Tabela bloco={bloco} abrirProduto={abrirProduto} publico={publico} />
 }
 
 function Cifra({ item }: { item: Indicador }) {
@@ -116,9 +136,11 @@ function Cifra({ item }: { item: Indicador }) {
 function Tabela({
   bloco,
   abrirProduto,
+  publico,
 }: {
   bloco: Extract<Bloco, { type: 'table' }>
   abrirProduto?: (produto: string, quadroId: string) => void
+  publico: boolean
 }) {
   const { t } = useT()
   const f = useFormatos()
@@ -149,7 +171,7 @@ function Tabela({
                     {bloco.columns.map((c, j) => {
                       const valor = linha[c.key]
                       let conteudo: ReactNode = formatarValor(valor, c.unit, f)
-                      if (c.unit === 'card' && valor && (valor as CartaoNaCelula).key) {
+                      if (c.unit === 'card' && valor && (valor as CartaoNaCelula).key && !publico) {
                         const cartao = valor as CartaoNaCelula
                         conteudo = (
                           <Link to={rotaDoCartao(String(cartao.key))}>

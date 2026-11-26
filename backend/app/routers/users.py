@@ -71,6 +71,8 @@ CAPABILITY_LABELS: dict[str, str] = {
     "simulator_boards": "Simulator boards (CRUD + run)",
     "api_tokens": "Integration/API token use",
     "read_reports": "Read and export reports",
+    "issue_reports": "Issue reports and register forecasts",
+    "share_reports": "Create client links to issued reports",
 }
 
 #: Order the matrix is rendered in — identical to the table in SPEC §4.
@@ -83,6 +85,8 @@ CAPABILITY_ORDER: tuple[str, ...] = (
     "simulator_boards",
     "api_tokens",
     "read_reports",
+    "issue_reports",
+    "share_reports",
 )
 
 #: Roles a caller must be a ``master`` to grant, revoke or edit.

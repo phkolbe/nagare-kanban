@@ -64,6 +64,15 @@ export function ProvedorIdioma({ children }: { children: ReactNode }) {
   return <Contexto.Provider value={valor}>{children}</Contexto.Provider>
 }
 
+/**
+ * Uma língua fixa, sem pessoa logada: a página do cliente de um relatório emitido (Reports,
+ * onda 2, 25/11/2026) fala a língua em que o relatório foi emitido.
+ */
+export function ProvedorIdiomaFixo({ idioma, children }: { idioma: Idioma; children: ReactNode }) {
+  const valor = useMemo(() => ({ ...traducao(idioma), eu: null, escolher: () => undefined }), [idioma])
+  return <Contexto.Provider value={valor}>{children}</Contexto.Provider>
+}
+
 export function useT(): ContextoIdioma {
   const contexto = useContext(Contexto)
   if (!contexto) throw new Error('useT fora do ProvedorIdioma')

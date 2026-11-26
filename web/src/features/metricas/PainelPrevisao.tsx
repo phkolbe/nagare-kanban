@@ -4,15 +4,22 @@
  * (`GET /boards/{id}/metrics/forecast`). So leitura: nao grava execucao, vale para quem le as
  * metricas e respeita a flag `monte_carlo`. Os mesmos padroes do simulador (40 itens, daqui a 60
  * dias), para as duas telas darem a mesma resposta.
+ *
+ * Reports, onda 2 (25/11/2026, decisao R15): no Nagare sozinho, quem emite relatorios
+ * (`issue_reports`) tem o botao **Registrar previsao**, que guarda a previsao mostrada para o
+ * REP-09 (previsto x realizado) conferir depois contra as entregas.
  */
 
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import { Carregando, ErroDeApi, hojeISO } from '@pampufa/ui'
 
 import { useNagare } from '../../app/contexto'
 import { consulta, nagare } from '../../api/nagare'
-import { useT } from '../../i18n'
+import { mensagemDeErro, useT } from '../../i18n'
+import { parametrosDoRep09 } from '../relatorios/emitidos'
+import { buscaDosParametros } from '../relatorios/formato'
 import { MonteCarlo } from '../simulador/ResultadoDoRun'
 import { emDias, type ResultadoMonteCarlo } from '../simulador/tipos'
 import { Bloqueado } from './TelaMetricas'
@@ -25,9 +32,9 @@ interface Pedido {
   dataAlvo: string
 }
 
-export function PainelPrevisao({ quadroId }: { quadroId: string }) {
+export function PainelPrevisao({ quadroId, projetoId }: { quadroId: string; projetoId?: string }) {
   const { t, eu } = useT()
-  const { produto } = useNagare()
+  const { produto, modo, rota } = useNagare()
   const hoje = hojeISO()
   const daqui60 = new Date(`${hoje}T00:00:00Z`)
   daqui60.setUTCDate(daqui60.getUTCDate() + 60)
@@ -48,6 +55,20 @@ export function PainelPrevisao({ quadroId }: { quadroId: string }) {
     enabled: ligado,
     staleTime: 60_000,
   })
+  // Registrar previsao (REP-09): so no Nagare sozinho, com os Reports no plano e para quem emite.
+  const podeRegistrar = modo === 'sozinho' && eu?.flags.reports !== false && Boolean(eu?.capabilities.issue_reports)
+  const registrar = useMutation({
+    mutationFn: () =>
+      nagare(produto, '/forecasts/records', {
+        metodo: 'POST',
+        corpo: {
+          board_id: quadroId,
+          project_id: projetoId || null,
+          question: pedido.pergunta,
+          ...(pedido.pergunta === 'when' ? { backlog_size: pedido.backlog } : { days: emDias(pedido.dataAlvo, hoje) }),
+        },
+      }),
+  })
 
   return (
     <section className={`card ng-painel largo ng-previsao${previsao.isFetching ? ' ocupado' : ''}`} aria-label={t('previsao.titulo')}>
@@ -64,6 +85,7 @@ export function PainelPrevisao({ quadroId }: { quadroId: string }) {
             onSubmit={(e) => {
               e.preventDefault()
               setPedido(rascunho)
+              registrar.reset()
             }}
           >
             <div className="abas" role="radiogroup" aria-label={t('previsao.pergunta')}>
@@ -105,7 +127,33 @@ export function PainelPrevisao({ quadroId }: { quadroId: string }) {
           ) : previsao.isError ? (
             <ErroDeApi erro={previsao.error} />
           ) : (
-            <MonteCarlo r={previsao.data} />
+            <>
+              <MonteCarlo r={previsao.data} />
+              {podeRegistrar && (
+                <div className="ng-previsao-registrar">
+                  <button
+                    type="button"
+                    className="btn sm"
+                    title={t('previsao.dica_registrar')}
+                    disabled={registrar.isPending || registrar.isSuccess}
+                    onClick={() => registrar.mutate()}
+                  >
+                    {registrar.isPending ? t('previsao.registrando') : t('previsao.registrar')}
+                  </button>
+                  {registrar.isSuccess && (
+                    <span className="mini" role="status">
+                      {t('previsao.registrada')}{' '}
+                      <Link to={`${rota('relatorios/forecast_review')}${buscaDosParametros(parametrosDoRep09(quadroId, hoje))}`}>{t('previsao.ver_rep09')}</Link>
+                    </span>
+                  )}
+                  {registrar.isError && (
+                    <span className="ng-ruim mini" role="alert">
+                      {mensagemDeErro(registrar.error, t)}
+                    </span>
+                  )}
+                </div>
+              )}
+            </>
           )}
         </>
       )}

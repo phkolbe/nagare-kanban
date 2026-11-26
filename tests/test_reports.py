@@ -26,6 +26,7 @@ TEMPLATES = (
     "risks",
     "waiting",
     "policy_exceptions",
+    "forecast_review",
 )
 
 
@@ -99,6 +100,7 @@ def test_every_reader_of_metrics_sees_the_catalogue(client, auth) -> None:
             "REP-05",
             "REP-11",
             "REP-13",
+            "REP-09",
         }
 
 

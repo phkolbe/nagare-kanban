@@ -33,6 +33,17 @@ import {
   textoDaVariacao,
   tomDaVariacao,
 } from '../features/relatorios/formato'
+import {
+  corpoDaEmissao,
+  enderecoDoLink,
+  idiomaDoNavegador,
+  linksAtivos,
+  MODELOS_COM_LINK,
+  OPCOES_DE_VALIDADE,
+  parametrosDoRep09,
+  situacaoDoErroPublico,
+  VALIDADE_PADRAO,
+} from '../features/relatorios/emitidos'
 import { TRILHO, bloqueioDoItem } from '../sozinho/trilho'
 import { faseDoCartao } from '../features/projetos/fase'
 import {
@@ -578,6 +589,52 @@ confere('segundos em passos de 5', [segundosDesde(0, 3_999), segundosDesde(0, 5_
     itemReports ? bloqueioDoItem(itemReports, { reports: true }, { read_reports: true }) : 'sem item',
   ], ['plano', 'papel', null])
   confere('rota dos Reports em ingles', montarRota('sozinho', 'nagare', 'relatorios/hours'), '/reports/hours')
+}
+
+{
+  // Reports, onda 2 (25/11/2026): emitir, link de cliente, pagina do cliente e o atalho do REP-09.
+  confere(
+    'corpo da emissao: o modelo e os parametros da tela, sem os vazios',
+    corpoDaEmissao('hours', { period: 'month', date: '2026-10-01', project_ids: 'p1,p2', board_id: '' }),
+    { template: 'hours', period: 'month', date: '2026-10-01', project_ids: 'p1,p2' },
+  )
+  confere('rotas dos emitidos em ingles', [montarRota('sozinho', 'nagare', 'relatorios/emitidos'), montarRota('sozinho', 'nagare', 'relatorios/emitidos/abc')], [
+    '/reports/issued',
+    '/reports/issued/abc',
+  ])
+  confere(
+    'endereco do link de cliente, com e sem a base /nagare',
+    [enderecoDoLink('https://sr03:8443', '/nagare', 'a-b_c'), enderecoDoLink('http://localhost:8770/', '', 'x y')],
+    ['https://sr03:8443/nagare/r/a-b_c', 'http://localhost:8770/r/x%20y'],
+  )
+  confere(
+    'o que dizer ao cliente quando o link nao abre',
+    [
+      situacaoDoErroPublico(410, 'report_link_expired'),
+      situacaoDoErroPublico(410, 'report_link_revoked'),
+      situacaoDoErroPublico(404, 'report_link_not_found'),
+      situacaoDoErroPublico(429, 'too_many_requests'),
+      situacaoDoErroPublico(403, 'feature_disabled'),
+    ],
+    ['vencido', 'revogado', 'inexistente', 'limite', 'erro'],
+  )
+  confere('REP-09 da previsao recem-registrada: os 30 dias ate hoje', parametrosDoRep09('q1', '2026-11-25'), {
+    period: 'custom',
+    from: '2026-10-27',
+    to: '2026-11-25',
+    board_id: 'q1',
+  })
+  confere(
+    'lingua da pagina do cliente antes do relatorio chegar',
+    [idiomaDoNavegador('en', 'pt-BR'), idiomaDoNavegador(null, 'pt-PT'), idiomaDoNavegador('xx', 'de-DE'), idiomaDoNavegador(null, undefined)],
+    ['en', 'pt-BR', 'en', 'en'],
+  )
+  confere('links ativos', linksAtivos([{ state: 'active' }, { state: 'expired' }, { state: 'revoked' }, { state: 'active' }]), 2)
+  confere('so REP-02 e REP-03 vao para o cliente; 7 dias por padrao', [MODELOS_COM_LINK, OPCOES_DE_VALIDADE.includes(VALIDADE_PADRAO), VALIDADE_PADRAO], [
+    ['project_status', 'hours'],
+    true,
+    7,
+  ])
 }
 
 if (falhas > 0) throw new Error(`${falhas} de ${total} verificacoes falharam.`)

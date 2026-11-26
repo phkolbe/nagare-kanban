@@ -23,6 +23,8 @@ ROUTER_MODULES: tuple[str, ...] = (
     "horas",
     "notifications",
     "reports",
+    "forecasts",
+    "public",
 )
 
 __all__ = ["ROUTER_MODULES"]

@@ -1595,6 +1595,97 @@ a.ng-indicador.clicavel:focus-visible {
   text-decoration: underline;
 }
 
+/* Reports, onda 2 (25/11/2026): emitidos, links de cliente, pagina do cliente, registrar previsao */
+.ng-emitidos-ultimos {
+  margin: 8px 0 16px;
+}
+.ng-emitidos-ultimos ul {
+  margin: 6px 0 8px;
+  padding-left: 18px;
+}
+.ng-emitidos-ultimos li {
+  margin: 3px 0;
+}
+.ng-emitidos-ultimos a,
+.ng-emitidos td a {
+  color: var(--navy);
+  text-decoration: none;
+}
+.ng-emitidos-ultimos a:hover,
+.ng-emitidos td a:hover {
+  text-decoration: underline;
+}
+.ng-emitido-faixa {
+  display: inline-block;
+  margin: 10px 0 4px;
+  padding: 6px 12px;
+  border-left: 3px solid var(--amber);
+  background: var(--line-soft);
+  font-size: 13px;
+  font-weight: 600;
+}
+.ng-links-cliente {
+  max-width: 1200px;
+  margin: 12px 0;
+  padding: 14px 16px;
+}
+.ng-links-cliente h3 {
+  margin: 0 0 6px;
+  font-size: 16px;
+}
+.ng-link-novo {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--navy);
+  background: var(--line-soft);
+}
+.ng-link-novo p {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.ng-link-novo-linha {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.ng-link-novo-linha input {
+  flex: 1;
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+}
+.ng-cliente {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px 16px 40px;
+}
+.ng-cliente-topo {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.ng-cliente-validade {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.ng-previsao-registrar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+.ng-previsao-registrar a {
+  color: var(--navy);
+}
+
 /* o sino do Nagare sozinho (mesmo jeito do sino da Pampufa) */
 .ng-sino {
   position: relative;
@@ -1635,5 +1726,13 @@ a.ng-indicador.clicavel:focus-visible {
   }
   .ng-relatorio-secao + .ng-relatorio-secao {
     break-before: auto;
+  }
+  .ng-cliente {
+    max-width: none;
+    padding: 0;
+  }
+  .ng-emitido-faixa {
+    border-left-color: #999;
+    background: none;
   }
 }

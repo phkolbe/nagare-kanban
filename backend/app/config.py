@@ -460,6 +460,10 @@ ROLE_CAPABILITIES: dict[str, tuple[str, ...]] = {
         "simulator",
         "system",
     ),
+    #: wave 2 of the Reports (25/11/2026, R21): issuing a frozen copy (and registering a
+    #: forecast for REP-09) and creating a client link are for whoever manages boards
+    "issue_reports": ("master", "administrator"),
+    "share_reports": ("master", "administrator"),
 }
 
 ROLE_LABELS: dict[str, str] = {

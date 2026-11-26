@@ -16,6 +16,7 @@ REP-04     ``portfolio``           every product the person opens (``products_fo
 REP-05     ``risks``               blockers
 REP-11     ``waiting``             flow efficiency and time per column (movements)
 REP-13     ``policy_exceptions``   WIP overrides, WIP limit changes, class changes
+REP-09     ``forecast_review``     registered forecasts against the deliveries (wave 2)
 =========  ======================  =========================================================
 """
 
@@ -24,13 +25,13 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..db import utcnow
+from ..db import parse_iso, utcnow
 from ..deps import get_board_or_404
 from ..errors import BadRequest, NotFound
 from ..flow.intervals import DAY
@@ -53,6 +54,7 @@ from ..models import (
     Card,
     CardEvent,
     CardMovement,
+    ForecastRecord,
     Project,
     TimeEntry,
     User,
@@ -72,6 +74,7 @@ from .documento import (
     section,
     table,
 )
+from .previsoes import PROMISE_LEVEL, Outcome, evaluate
 
 __all__ = ["TEMPLATES", "ReportRequest", "Template", "template_or_400"]
 
@@ -1372,6 +1375,271 @@ async def policy_exceptions(s: AsyncSession, request: ReportRequest) -> dict[str
 
 
 # ---------------------------------------------------------------------------
+# REP-09 forecast against actual (wave 2, 25/11/2026)
+# ---------------------------------------------------------------------------
+
+
+def _forecast_question(record: dict[str, Any]) -> str:
+    if record["question"] == "when":
+        count = int((record.get("params") or {}).get("backlog_size") or 0)
+        return _("When will {count} items be done?", count=count)
+    return _(
+        "How many items by {date}?", date=date_label(date.fromisoformat(record["target_date"]))
+    )
+
+
+def _forecast_given(record: dict[str, Any], level: int) -> str:
+    """What the forecast said at ``level``: a date (``when``) or a quantity (``how_many``)."""
+    if record["question"] == "when":
+        day = (record.get("dates") or {}).get(f"p{level}")
+        return date_label(date.fromisoformat(day)) if day else "—"
+    quantity = (record.get("percentiles") or {}).get(f"p{level}")
+    return "—" if quantity is None else _("{count} or more", count=quantity)
+
+
+def _forecast_range(record: dict[str, Any], levels: list[int]) -> str:
+    if len(levels) < 2:
+        return "—"
+    low, high = levels[0], levels[-1]
+    if record["question"] == "when":
+        return f"{_forecast_given(record, low)} – {_forecast_given(record, high)}"
+    percentiles = record.get("percentiles") or {}
+    return f"{percentiles.get(f'p{low}')} – {percentiles.get(f'p{high}')}"
+
+
+def _forecast_actual(record: dict[str, Any], outcome: Outcome) -> str:
+    if record["question"] == "when":
+        if outcome.realized_on:
+            return date_label(outcome.realized_on)
+        total = int((record.get("params") or {}).get("backlog_size") or 0)
+        return _("{done} of {total} delivered", done=outcome.delivered, total=total)
+    if outcome.status == "open":
+        return _("{count} so far", count=outcome.delivered)
+    return _("{count} delivered", count=outcome.delivered)
+
+
+def _forecast_result(outcome: Outcome) -> str:
+    if outcome.status == "open":
+        return _("Open")
+    band = outcome.band
+    if outcome.status == "met":
+        return _("Met (within the {level}% forecast)", level=band)
+    if band is not None:
+        return _("Missed, within the {level}% forecast", level=band)
+    if all(state == "missed" for state in outcome.levels.values()):
+        return _("Missed, beyond every level")
+    return _("Missed")
+
+
+async def forecast_review(s: AsyncSession, request: ReportRequest) -> dict[str, Any]:
+    board = await _board(s, request)
+    zone = request.period.zone
+    now = parse_iso(utcnow()) or datetime.now(UTC)
+    records = [
+        as_dict(r) or {}
+        for r in await s.scalars(
+            select(ForecastRecord)
+            .where(ForecastRecord.board_id == board["id"], *in_product(ForecastRecord))
+            .order_by(ForecastRecord.created_at, ForecastRecord.id)
+        )
+    ]
+    deliveries: dict[str | None, list[datetime]] = defaultdict(list)
+    for project_id, delivered_at in (
+        await s.execute(
+            select(Card.project_id, Card.delivered_at).where(
+                Card.board_id == board["id"],
+                Card.delivered_at.is_not(None),
+                Card.archived.is_(False),
+                *in_product(Card),
+            )
+        )
+    ).all():
+        moment = parse_iso(delivered_at)
+        if moment is None:
+            continue
+        deliveries[None].append(moment)
+        if project_id:
+            deliveries[str(project_id)].append(moment)
+    projects = {p.id: p.name for p in await s.scalars(select(Project).where(*in_product(Project)))}
+    names = await _names(s)
+    for record in records:
+        record["created_at"] = parse_iso(record["created_at"])
+
+    def outcomes(window_end: datetime) -> list[tuple[dict[str, Any], Outcome]]:
+        as_of = min(now, window_end)
+        return [
+            (r, evaluate(r, deliveries[r.get("project_id")], as_of, zone))
+            for r in records
+            if r["created_at"] <= window_end
+        ]
+
+    def figures(first: datetime, last: datetime) -> dict[str, Any]:
+        rows = outcomes(last)
+        decided = [o for _r, o in rows if o.decided is not None and first <= o.decided <= last]
+        met = sum(1 for o in decided if o.status == "met")
+        return {
+            "registered": sum(1 for r, _o in rows if first <= r["created_at"] <= last),
+            "decided": len(decided),
+            "met": met,
+            "hit_rate": round(met / len(decided) * 100, 1) if decided else None,
+            "open": sum(1 for _r, o in rows if o.status == "open"),
+            "rows": rows,
+        }
+
+    start, end = request.period.window
+    current = figures(start, end)
+    previous = figures(*request.period.previous_window)
+    level = PROMISE_LEVEL
+    kpi_block = kpis(
+        [
+            kpi(
+                "registered",
+                _("Forecasts registered"),
+                current["registered"],
+                "count",
+                previous=previous["registered"],
+            ),
+            kpi(
+                "decided",
+                _("Forecasts decided"),
+                current["decided"],
+                "count",
+                previous=previous["decided"],
+                hint=_("Met or missed at the {level}% level within the period.", level=level),
+            ),
+            kpi(
+                "met",
+                _("Met at {level}%", level=level),
+                current["met"],
+                "count",
+                previous=previous["met"],
+                higher_is_better=True,
+            ),
+            kpi(
+                "hit_rate",
+                _("Hit rate at {level}%", level=level),
+                current["hit_rate"],
+                "percent",
+                previous=previous["hit_rate"],
+                higher_is_better=True,
+                low_confidence=0 < current["decided"] < 5,
+                hint=_("Well calibrated, it stays close to {level}%.", level=level),
+            ),
+            kpi("open", _("Still open"), current["open"], "count", compare=False),
+        ]
+    )
+
+    shown = [
+        (r, o)
+        for r, o in current["rows"]
+        if r["created_at"] >= start or o.decided is None or o.decided >= start
+    ]
+    shown.sort(key=lambda pair: pair[0]["created_at"], reverse=True)
+    table_rows = []
+    for record, outcome in shown:
+        levels = sorted(outcome.levels)
+        table_rows.append(
+            {
+                "registered": record["created_at"].astimezone(zone).date().isoformat(),
+                "question": _forecast_question(record),
+                "project": projects.get(record.get("project_id")) or "—",
+                "given": _forecast_given(record, level),
+                "range": _forecast_range(record, levels),
+                "actual": _forecast_actual(record, outcome),
+                "result": _forecast_result(outcome),
+                "by": names.get(record.get("created_by") or "", "—"),
+            }
+        )
+    forecasts_table = table(
+        [
+            ("registered", _("Registered on"), "date"),
+            ("question", _("Question"), "text"),
+            ("project", _("Project"), "text"),
+            ("given", _("Forecast at {level}%", level=level), "text"),
+            ("range", _("50% to 95%"), "text"),
+            ("actual", _("Actual"), "text"),
+            ("result", _("Result"), "text"),
+            ("by", _("By"), "text"),
+        ],
+        table_rows,
+        empty=_(
+            "No forecast was open in this period. Register one with the button in the "
+            "Monte Carlo panel of the Metrics."
+        ),
+    )
+
+    # Calibration: every forecast registered up to the end of the period, level by level.
+    calibration: dict[int, list[int]] = defaultdict(lambda: [0, 0])
+    for _record, outcome in current["rows"]:
+        for confidence, state in outcome.levels.items():
+            if state != "open":
+                calibration[confidence][1] += 1
+                calibration[confidence][0] += 1 if state == "met" else 0
+    calibration_rows = [
+        {
+            "level": f"{confidence}%",
+            "met": met,
+            "decided": decided,
+            "rate": round(met / decided * 100, 1) if decided else None,
+        }
+        for confidence, (met, decided) in sorted(calibration.items())
+    ]
+    calibration_table = table(
+        [
+            ("level", _("Confidence"), "text"),
+            ("met", _("Met"), "count"),
+            ("decided", _("Decided"), "count"),
+            ("rate", _("Hit rate"), "percent"),
+        ],
+        calibration_rows,
+        empty=_("No forecast decided yet."),
+    )
+    return _document(
+        "forecast_review",
+        "REP-09",
+        _("Forecast against actual"),
+        board.get("name"),
+        request,
+        _board_scope(board),
+        [
+            section(
+                "hit_rate",
+                _("Hit rate"),
+                [kpi_block],
+                description=_(
+                    "The {level}% level is read as the promise: the date or the quantity given "
+                    "to the client.",
+                    level=level,
+                ),
+            ),
+            section(
+                "forecasts",
+                _("Forecasts"),
+                [forecasts_table],
+                description=_(
+                    "Forecasts registered in the period or still open in it, checked against "
+                    "the deliveries made after each one (only the project's, when it names one)."
+                ),
+            ),
+            section(
+                "calibration",
+                _("Calibration"),
+                [
+                    calibration_table,
+                    note(
+                        _(
+                            "Every forecast registered up to the end of the period. Well "
+                            "calibrated forecasts are met about as often as their confidence: "
+                            "the 85% ones about 85 times in 100."
+                        )
+                    ),
+                ],
+            ),
+        ],
+    )
+
+
+# ---------------------------------------------------------------------------
 # the catalogue
 # ---------------------------------------------------------------------------
 
@@ -1461,6 +1729,18 @@ TEMPLATES: dict[str, Template] = {
             "board",
             "reports",
             policy_exceptions,
+        ),
+        Template(
+            "forecast_review",
+            "REP-09",
+            N_("Forecast against actual"),
+            N_(
+                "Each forecast registered from the Monte Carlo panel of the Metrics and whether "
+                "it came true: how far to trust the dates given to clients."
+            ),
+            "board",
+            "reports",
+            forecast_review,
         ),
     )
 }

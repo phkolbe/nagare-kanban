@@ -237,7 +237,12 @@ def create_app(
             }
         ):
             raise ApiError("not_found", f"No API route for {request.method} /{full_path}.", 404)
-        return _index_response()
+        response = _index_response()
+        if full_path.startswith(CLIENT_PAGE):
+            # The client page of an issued report (/nagare/r/<token>, Reports wave 2): the
+            # token is in the address, so it is never indexed, cached or sent as a referrer.
+            response.headers.update(CLIENT_PAGE_HEADERS)
+        return response
 
     return app
 
@@ -246,6 +251,13 @@ _SCREEN_ROUTE = re.compile(r"^[a-z0-9-]+/tarefas(/.*)?$")
 
 #: Where the standalone Nagare lives, directly on :8770 and behind the gateway (19/10/2026).
 STANDALONE_PREFIX = "/nagare"
+#: The client page of an issued report, under the standalone prefix (25/11/2026).
+CLIENT_PAGE = "r/"
+CLIENT_PAGE_HEADERS = {
+    "X-Robots-Tag": "noindex, nofollow",
+    "Cache-Control": "no-store",
+    "Referrer-Policy": "no-referrer",
+}
 #: Paths that are not screens: never redirected to /nagare.
 _NOT_SCREENS = ("/api", "/docs", "/redoc", "/openapi.json", "/grupo-sr", "/metrics", "/health")
 #: The Portuguese route names used before 19/10/2026, and their English names in the URL.

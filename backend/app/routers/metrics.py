@@ -338,6 +338,18 @@ async def get_forecast(
     the same sample pool (the board's delivered-per-week history), trials and seed, so
     both screens give the same answer. Every role that reads metrics can ask."""
     board = await get_board_or_404(s, id)
+    return await board_forecast(s, board, question, backlog_size, days, sample_weeks)
+
+
+async def board_forecast(
+    s: AsyncSession,
+    board: dict[str, Any],
+    question: str,
+    backlog_size: int,
+    days: int,
+    sample_weeks: int | None,
+) -> dict[str, Any]:
+    """The forecast panel's answer; also what ``POST /forecasts/records`` keeps (REP-09)."""
     delivered = (
         await s.scalars(
             select(Card.delivered_at).where(

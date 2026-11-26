@@ -60,6 +60,7 @@ export const SEGMENTOS_SOZINHO: Record<string, string> = {
   metricas: 'metrics',
   simulador: 'simulator',
   relatorios: 'reports',
+  emitidos: 'issued',
   admin: 'admin',
   usuarios: 'users',
   papeis: 'roles',

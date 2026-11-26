@@ -74,6 +74,8 @@ SPEC_MATRIX: dict[str, set[str]] = {
         "simulator",
         "system",
     },
+    "issue_reports": {"master", "administrator"},
+    "share_reports": {"master", "administrator"},
 }
 
 #: Flag keys that the Business plan unlocks but Free does not (SPEC §3).
