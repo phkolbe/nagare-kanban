@@ -249,7 +249,7 @@ Found by searching every `code=` / `Conflict(...)` / `ApiError(...)` in `backend
 | 403 | `not_yours` | `horas.py` | Removing someone else's hour entry (non-admin, §9.3) |
 | 403 | `system_has_no_preferences` | `auth.py` | `PATCH /auth/me` by a service identity |
 | 403 | `standalone_only` | `deps.require_standalone` | Users, flags, plans, workspace, simulator, Reports or the bell called with a Pampufa token (§5, §6, §12, §15, §16) |
-| 404 | `board_not_found`, `column_not_found`, `group_not_found`, `card_not_found`, `project_not_found`, `user_not_found`, `task_not_found`, `comment_not_found`, `flag_not_found`, `plan_not_found`, `run_not_found`, `providencia_not_found`, `card_type_not_found`, `time_not_found`, `notification_not_found` | throughout | Lookups; boards, cards and projects also accept their human key (slug, `NGR-104`, `NGR`) — except the hour routes, which take the card id only (§9.3) |
+| 404 | `board_not_found`, `column_not_found`, `group_not_found`, `card_not_found`, `project_not_found`, `user_not_found`, `task_not_found`, `comment_not_found`, `flag_not_found`, `plan_not_found`, `run_not_found`, `providencia_not_found`, `card_type_not_found`, `time_not_found`, `notification_not_found` | throughout | Lookups; boards, cards and projects also accept their human key (slug, `NGR-104`, `NGR`) |
 | 404 | `not_found` | `main.py` catch-all | No API route for that method and path |
 | 405 | `method_not_allowed` | Starlette | Wrong verb on a real path |
 | 409 | `backward_move_blocked` | `movements.py` | Move against the flow without an allowed `force` |
@@ -662,8 +662,8 @@ card's project, so the hours of a project can be read without the card.
 | `POST /cards/{id}/time` | `{worked_on: "YYYY-MM-DD", minutes: 1–1440, description?: ≤2000 chars}` | `manage_cards` + the board-write rule (§3) | `201` with the entry. A read-only board → `409 board_read_only`; an archived card → `409 card_archived` |
 | `DELETE /time/{id}` | — | `manage_cards` | `{ok: true}`. Only the author, or a master/administrator (`403 not_yours`); `404 time_not_found` |
 
-`{id}` is the **card id** here: unlike the other card routes, these do not accept the key
-(`404 card_not_found`). The hours count in `GET /metrics/people` (§11.2), in the
+`{id}` is the card id or its key (`NGR-104`), like the other card routes; neither
+found → `404 card_not_found`. The hours count in `GET /metrics/people` (§11.2), in the
 billing routes of the integration (`GET /integration/time`, `/time/by-external`, §14.2),
 in `GET /boards/{id}/version` (§7) and in the Hours and Project status reports (§15).
 
@@ -1114,8 +1114,8 @@ and `,` decimals, as a Brazilian Excel expects. An unknown `format` is
 **Errors.** Unknown template → `400 report_unknown`; bad `period` → `400 report_bad_period`
 (also an interval over 400 days); a date that is not `YYYY-MM-DD` → `400 report_bad_date`;
 a missing scope → `400 report_board_required` / `report_project_required`; a project of
-another product → `400 project_not_found` (a `400` here, not a `404`); a board of
-another product → `404 board_not_found`; `reports_portfolio` off for the portfolio →
+another product → `404 project_not_found` (also when none of the `project_ids` is
+known); a board of another product → `404 board_not_found`; `reports_portfolio` off for the portfolio →
 `403 feature_disabled` / `plan_upgrade_required`.
 
 ---
@@ -1166,7 +1166,6 @@ Things an integrator should know, found while writing this document from the cod
    latency by route template and product, plus the webhook outbox backlog — to
    `Authorization: Bearer $NAGARE_METRICS_TOKEN`, or, without that variable, only to the
    loopback (`401 metrics_token` / `403 metrics_local_only`).
-4. **Found while checking on 25/11/2026** (left as they are, for the owner to decide):
-   the hour routes (`/cards/{id}/time`) take the card id only, while every other card
-   route also takes the key; the Reports answer a project of another product with
-   `400 project_not_found` where the rest of the API uses `404`.
+4. **Found while checking on 25/11/2026, fixed the same day** (RM-12 and RM-13): the hour
+   routes now take the card key as well as the id, and the Reports answer a project of
+   another product with `404 project_not_found`, like the rest of the API.

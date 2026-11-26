@@ -257,6 +257,18 @@ def test_hours_on_a_live_card_are_still_logged(client, auth, flow_board, master)
     assert response.status_code == 201, response.text
 
 
+def test_hours_accept_the_card_key_like_the_other_card_routes(client, master, flow_board) -> None:
+    # RM-12 / NGK-116 (25/11/2026): /cards/{id}/time só aceitava o id.
+    card = make_card(client, master, flow_board["id"]).json()
+    logged = client.post(f"{API}/cards/{card['key']}/time", json=HOURS, headers=master)
+    assert logged.status_code == 201, logged.text
+    assert logged.json()["card_id"] == card["id"]
+    listed = client.get(f"{API}/cards/{card['key'].lower()}/time", headers=master)
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["total_minutes"] == HOURS["minutes"]
+    assert [i["card_key"] for i in listed.json()["items"]] == [card["key"]]
+
+
 # ---------------------------------------------------------------------------
 # 3. O WIP vale para todo jeito de um cartão entrar numa coluna
 # ---------------------------------------------------------------------------

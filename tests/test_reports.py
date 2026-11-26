@@ -154,6 +154,18 @@ def test_reports_need_a_scope_and_a_known_period(client, master, board) -> None:
     assert client.get(f"{API}/reports/nothing", headers=master).status_code == 400
 
 
+def test_an_unknown_project_is_a_404_like_the_rest_of_the_api(client, master) -> None:
+    # RM-13 / NGK-117 (25/11/2026): os Reports respondiam 400 project_not_found.
+    missing = str(uuid.uuid4())
+    for template, params in (
+        ("project_status", {"period": "month", "project_id": missing}),
+        ("hours", {"period": "month", "project_ids": missing}),
+    ):
+        response = client.get(f"{API}/reports/{template}", params=params, headers=master)
+        assert response.status_code == 404, (template, response.text)
+        assert response.json()["error"]["code"] == "project_not_found"
+
+
 def test_hours_can_be_limited_to_chosen_projects(client, master, projects) -> None:
     ngr = projects["NGR"]["id"]
     doc = client.get(

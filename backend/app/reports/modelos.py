@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import utcnow
 from ..deps import get_board_or_404
-from ..errors import BadRequest
+from ..errors import BadRequest, NotFound
 from ..flow.intervals import DAY
 from ..flow.metrics import (
     MetricsContext,
@@ -465,7 +465,8 @@ async def project_status(s: AsyncSession, request: ReportRequest) -> dict[str, A
         )
     )
     if not project:
-        raise BadRequest("Project not found in this product.", code="project_not_found")
+        # 404 like the rest of the API (RM-13 / NGK-117, 25/11/2026); it was a 400.
+        raise NotFound("Project", request.project_id, code="project_not_found")
     cards = [
         as_dict(c) or {}
         for c in await s.scalars(
@@ -649,7 +650,7 @@ async def hours(s: AsyncSession, request: ReportRequest) -> dict[str, Any]:
     projects = {p.id: p for p in await s.scalars(select(Project).where(*in_product(Project)))}
     wanted = [pid for pid in request.project_ids if pid in projects]
     if request.project_ids and not wanted:
-        raise BadRequest("Project not found in this product.", code="project_not_found")
+        raise NotFound("Project", ",".join(request.project_ids), code="project_not_found")
 
     async def minutes_by_project(first: date, last: date) -> dict[str | None, int]:
         query = (

@@ -61,6 +61,14 @@ def _entry_out(row: dict[str, Any], card: dict[str, Any] | None = None) -> dict[
 async def _card(s: AsyncSession, card_id: str) -> dict[str, Any]:
     card = as_dict(await s.scalar(select(Card).where(Card.id == card_id, *in_product(Card))))
     if card is None:
+        # The key (NGK-116) is accepted too, like the other card routes and the
+        # ``card_url`` promise in docs/API.md.
+        card = as_dict(
+            await s.scalar(
+                select(Card).where(Card.key == card_id.upper(), *in_product(Card)).limit(1)
+            )
+        )
+    if card is None:
         raise NotFound("Card", card_id, code="card_not_found")
     return card
 
